@@ -17,7 +17,7 @@
         "width": 440,
         "height": 600,
         "resizable": false,
-        "visible": false,
+        "visible": true,
         "center": true,
         "theme": "Dark"
       }

@@ -126,12 +126,12 @@ pub fn compute(
 
     let tooltip = if is_workday {
         format!(
-            "今天已赚 ¥{:.2} ｜ 已工作 {:.1}h ｜ 距下班 {:.1}h ｜ ¥{:.2}/分 ｜ 距发薪 {}天",
+            "今天已赚 ¥{:.2}\n已工作 {:.1}h\n距下班 {:.1}h\n¥{:.2}/分\n距发薪 {}天",
             earned, worked_h, to_off_h, rate_per_min, days_to_pay
         )
     } else {
         format!(
-            "今天休息 ｜ ¥{:.2}/分 ｜ 距发薪 {}天",
+            "今天休息\n¥{:.2}/分\n距发薪 {}天",
             rate_per_min, days_to_pay
         )
     };
