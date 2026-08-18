@@ -13,6 +13,7 @@
       {
         "label": "main",
         "title": "牛马计时器 · 设置",
+        "url": "index.html",
         "width": 440,
         "height": 600,
         "resizable": false,
