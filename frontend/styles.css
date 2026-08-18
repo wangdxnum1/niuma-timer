@@ -9,15 +9,19 @@ body {
   background: #14161c;
   color: #e6e8ef;
   -webkit-font-smoothing: antialiased;
+  /* 禁用横向滚动条 */
+  overflow-x: hidden;
 }
 
 .app {
-  width: 440px;
+  width: 100%;
+  max-width: 440px;
   min-height: 600px;
   padding: 22px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
 }
 
 h1 {

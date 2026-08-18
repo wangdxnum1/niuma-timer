@@ -164,6 +164,14 @@ if (!window.__TAURI__) {
 
 fn main() {
     tauri::Builder::default()
+        // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
+        // 并在回调里把已存在的设置窗口显示并置前，自己退出。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .append_invoke_initialization_script(INVOKE_SHIM)
         .manage(AppState::default())
         .setup(|app| {
