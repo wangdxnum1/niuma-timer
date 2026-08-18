@@ -1,0 +1,21 @@
+[package]
+name = "niuma-timer"
+version = "0.1.0"
+description = "牛马计时器 - 实时显示今天赚了多少钱、上了多少小时班"
+authors = ["Tim"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json"] }
+dirs = "5"
+
+[features]
+# Tauri 2 默认 feature 已包含所需能力；此处留空。

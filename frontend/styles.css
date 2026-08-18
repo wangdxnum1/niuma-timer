@@ -1,0 +1,143 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: #14161c;
+  color: #e6e8ef;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  width: 440px;
+  min-height: 600px;
+  padding: 22px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.sub {
+  color: #8a90a2;
+  font-size: 13px;
+  margin-top: -8px;
+}
+
+.card {
+  background: #1d2029;
+  border: 1px solid #2a2e3a;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card h2 {
+  font-size: 14px;
+  color: #b9c0d4;
+  font-weight: 600;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: #9aa1b4;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+}
+.row label {
+  flex: 1;
+}
+
+input {
+  background: #14161c;
+  border: 1px solid #333845;
+  color: #e6e8ef;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  outline: none;
+}
+input:focus {
+  border-color: #ffd650;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: opacity 0.15s;
+}
+button:hover {
+  opacity: 0.88;
+}
+
+.primary {
+  background: #ffd650;
+  color: #1a1a1a;
+}
+.ghost {
+  background: #2a2e3a;
+  color: #cfd4e2;
+}
+
+.live .big {
+  font-size: 38px;
+  font-weight: 800;
+  color: #ffd650;
+  text-align: center;
+  margin: 4px 0 10px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.grid div {
+  background: #14161c;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+}
+.grid span {
+  font-size: 11px;
+  color: #8a90a2;
+}
+.grid b {
+  font-size: 15px;
+  color: #e6e8ef;
+}
+
+.hint {
+  font-size: 12px;
+  color: #7fd99a;
+  min-height: 16px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+.actions button {
+  flex: 1;
+}

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>牛马计时器 · 设置</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <h1>🐎 牛马计时器</h1>
+      <p class="sub">实时计算你今天赚了多少钱</p>
+
+      <section class="card">
+        <h2>基础设置</h2>
+        <label>
+          <span>月薪（元）</span>
+          <input id="monthly_salary" type="number" min="0" step="100" />
+        </label>
+        <div class="row">
+          <label>
+            <span>上午上班</span>
+            <input id="am_start" type="time" />
+          </label>
+          <label>
+            <span>上午下班</span>
+            <input id="am_end" type="time" />
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <span>下午上班</span>
+            <input id="pm_start" type="time" />
+          </label>
+          <label>
+            <span>下午下班</span>
+            <input id="pm_end" type="time" />
+          </label>
+        </div>
+        <label>
+          <span>发薪日（每月几号）</span>
+          <input id="payday" type="number" min="1" max="31" />
+        </label>
+        <label>
+          <span>当月实际上班天数（留空=自动）</span>
+          <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
+        </label>
+        <button id="refreshBtn" class="ghost">刷新工作日数据</button>
+        <div id="workdaysInfo" class="hint"></div>
+      </section>
+
+      <section class="card live">
+        <h2>今日实时</h2>
+        <div class="big" id="earned">¥0.00</div>
+        <div class="grid">
+          <div><span>已工作</span><b id="worked">0.0h</b></div>
+          <div><span>距下班</span><b id="toff">—</b></div>
+          <div><span>速率</span><b id="rate">¥0.00/分</b></div>
+          <div><span>距发薪</span><b id="pay">—</b></div>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="saveBtn" class="primary">保存</button>
+        <button id="closeBtn" class="ghost">关闭</button>
+      </div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
