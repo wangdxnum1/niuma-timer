@@ -28,7 +28,7 @@ fn glyph(ch: char) -> Option<[&'static str; 7]> {
 }
 
 /// 将文字渲染为 64x64 RGBA 图标
-pub fn render_icon(text: &str) -> Image {
+pub fn render_icon(text: &str) -> Image<'_> {
     let mut buf = vec![0u8; (W * H * 4) as usize];
     for i in 0..(W * H) as usize {
         let o = i * 4;
@@ -41,7 +41,7 @@ pub fn render_icon(text: &str) -> Image {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len() as u32;
     if len == 0 {
-        return Image::from_rgba(buf, W, H).expect("render icon");
+        return Image::new_owned(buf, W, H);
     }
     let scale = if len <= 4 { 2 } else { 1 };
     let gx = 5 * scale;
@@ -77,5 +77,5 @@ pub fn render_icon(text: &str) -> Image {
         }
     }
 
-    Image::from_rgba(buf, W, H).expect("render icon")
+    Image::new_owned(buf, W, H)
 }

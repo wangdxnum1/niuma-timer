@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-focus-window"
+description = "Enables the focus_window command without any pre-configured scope."
+commands.allow = ["focus_window"]
+
+[[permission]]
+identifier = "deny-focus-window"
+description = "Denies the focus_window command without any pre-configured scope."
+commands.deny = ["focus_window"]

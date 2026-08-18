@@ -112,9 +112,59 @@ fn get_status_cmd(state: State<AppState>) -> calc::DayStatus {
     get_status(state.inner())
 }
 
+/// 隐藏设置窗口（点关闭按钮时调用）
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+}
+
+/// 显示并设置焦点到设置窗口
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// 仅把设置窗口提到前台
+#[tauri::command]
+fn focus_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_focus();
+    }
+}
+
+/// 注入到 webview 的轻量 Tauri API 垫片。
+/// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
+/// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
+/// 省去前端打包 @tauri-apps/api 的步骤。
+const INVOKE_SHIM: &str = r#"
+if (!window.__TAURI__) {
+  window.__TAURI__ = {
+    core: {
+      invoke: function (cmd, args) {
+        return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
+      }
+    },
+    window: {
+      getCurrentWindow: function () {
+        return {
+          hide: function () { return window.__TAURI_INTERNALS__.invoke('hide_window'); },
+          show: function () { return window.__TAURI_INTERNALS__.invoke('show_window'); },
+          setFocus: function () { return window.__TAURI_INTERNALS__.invoke('focus_window'); }
+        };
+      }
+    }
+  };
+}
+"#;
+
 fn main() {
     tauri::Builder::default()
-        .enable_global_tauri()
+        .append_invoke_initialization_script(INVOKE_SHIM)
         .manage(AppState::default())
         .setup(|app| {
             // 载入本地节假日缓存
@@ -129,7 +179,7 @@ fn main() {
 
             // 窗口关闭仅隐藏，不退出程序
             if let Some(w) = app.get_webview_window("main") {
-                w.on_window_event(move |event| {
+                w.clone().on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = w.hide();
@@ -164,7 +214,10 @@ fn main() {
             load_config,
             save_config,
             refresh_holidays,
-            get_status_cmd
+            get_status_cmd,
+            hide_window,
+            show_window,
+            focus_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

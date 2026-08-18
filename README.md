@@ -29,12 +29,13 @@ build.bat release   # 仅 release
 - debug 产物：`bin/debug/niuma-timer.exe`
 - release 产物：`bin/release/niuma-timer.exe`
 
-手动编译（产物在 `src-tauri/target/...`）：
+手动编译（cargo 默认按 host triple 输出到 `target/<triple>/<flavor>/`）：
 
 ```bash
 cd src-tauri
 cargo build --release
-# 产物：src-tauri/target/release/niuma-timer.exe
+# 产物：src-tauri/target/x86_64-pc-windows-msvc/release/niuma-timer.exe
+#       （不同机器 triple 可能不同，用 build.bat 会自动定位）
 ```
 
 如需打包成安装包（.msi）：

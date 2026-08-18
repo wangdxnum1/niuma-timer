@@ -1,8 +1,7 @@
 // 牛马计时器 设置页前端逻辑
-// 依赖 enable_global_tauri() 暴露的 window.__TAURI__
+// window.__TAURI__ 由 Rust 端 append_invoke_initialization_script 注入的垫片暴露
 const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
-const getCurrentWindow = TAURI.window.getCurrentWindow;
 
 const $ = (id) => document.getElementById(id);
 
@@ -54,7 +53,7 @@ async function refresh() {
 
 async function tick() {
   try {
-    const s = await invoke("get_status");
+    const s = await invoke("get_status_cmd");
     $("earned").textContent = "¥" + s.earned.toFixed(2);
     $("worked").textContent = s.worked_h.toFixed(1) + "h";
     $("toff").textContent = s.off_work
@@ -71,7 +70,9 @@ async function tick() {
 
 $("saveBtn").addEventListener("click", save);
 $("refreshBtn").addEventListener("click", refresh);
-$("closeBtn").addEventListener("click", () => getCurrentWindow().hide());
+$("closeBtn").addEventListener("click", () =>
+  TAURI.window.getCurrentWindow().hide(),
+);
 
 load();
 refresh();

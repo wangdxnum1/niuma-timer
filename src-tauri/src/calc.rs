@@ -63,7 +63,8 @@ fn days_in_month(y: i32, m: u32) -> u32 {
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
     NaiveDate::from_ymd_opt(ny, nm, 1)
         .unwrap()
-        .pred()
+        .pred_opt()
+        .expect("valid date")
         .day()
 }
 

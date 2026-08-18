@@ -8,6 +8,13 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "allow-load-config",
+    "allow-save-config",
+    "allow-refresh-holidays",
+    "allow-get-status-cmd",
+    "allow-hide-window",
+    "allow-show-window",
+    "allow-focus-window"
   ]
 }
