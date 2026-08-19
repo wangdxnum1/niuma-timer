@@ -1,17 +1,43 @@
 use tauri::Manager;
 use tauri::menu::{Menu, MenuId, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, App};
+use tauri::{AppHandle, App, Emitter, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
 use crate::calc::DayStatus;
 use crate::icon_render::static_icon;
 
-/// 创建托盘图标与菜单
+/// 彩色悬停卡片尺寸（逻辑像素）
+const HOVER_CARD_W: f64 = 320.0;
+const HOVER_CARD_H: f64 = 210.0;
+
+/// 创建托盘图标、菜单与彩色悬停卡片窗口
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新工作日", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&settings, &refresh, &quit])?;
+
+    // 彩色悬停卡片窗口（初始隐藏；仅当配置开启时才会被托盘事件唤起）
+    // 页面：frontend/hover_card.html，数据由 Rust 端 emit "hover_data" 推送
+    let _ = WebviewWindowBuilder::new(
+        app,
+        "hover_card",
+        WebviewUrl::App("hover_card.html".into()),
+    )
+    .title("牛马计时器 · 悬停卡片")
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .shadow(false)
+    .inner_size(HOVER_CARD_W, HOVER_CARD_H)
+    .resizable(false)
+    .visible(false)
+    .build();
+    if let Some(w) = app.get_webview_window("hover_card") {
+        // 鼠标穿透：卡片不拦截任何点击，悬停托盘区域不受影响
+        let _ = w.set_ignore_cursor_events(true);
+    }
 
     let icon = static_icon();
     let tray = TrayIconBuilder::with_id("main")
@@ -30,22 +56,96 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 app.exit(0);
             }
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::DoubleClick { .. } = event {
-                let app = tray.app_handle();
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Enter { position, .. } | TrayIconEvent::Move { position, .. } => {
+                position_hover_card(tray.app_handle(), position);
             }
+            TrayIconEvent::Leave { .. } => {
+                hide_hover_card(tray.app_handle());
+            }
+            _ => {}
         })
         .build(app)?;
     Ok(tray)
 }
 
-/// 更新托盘的 tooltip（图标为静态沙漏，无需每次重绘）
+/// 托盘悬停：显示/移动彩色卡片到鼠标旁
+fn position_hover_card(app: &AppHandle, pos: PhysicalPosition<f64>) {
+    let on = app
+        .state::<crate::AppState>()
+        .config
+        .lock()
+        .unwrap()
+        .tray_hover_card;
+    if !on {
+        return;
+    }
+    let Some(w) = app.get_webview_window("hover_card") else {
+        return;
+    };
+
+    // 默认放到鼠标左上方（托盘通常在屏幕底部）
+    let mut x = pos.x - HOVER_CARD_W + 24.0;
+    let mut y = pos.y - HOVER_CARD_H - 14.0;
+
+    // 防溢出屏幕（按主屏粗略钳制；任务栏在顶部时改为鼠标下方）
+    if let Ok(Some(m)) = app.primary_monitor() {
+        let size = m.size();
+        let sw = size.width as f64;
+        let sh = size.height as f64;
+        if y < 8.0 {
+            y = pos.y + 18.0;
+        }
+        if x < 8.0 {
+            x = 8.0;
+        }
+        if x + HOVER_CARD_W > sw - 8.0 {
+            x = sw - HOVER_CARD_W - 8.0;
+        }
+        if y + HOVER_CARD_H > sh - 8.0 {
+            y = sh - HOVER_CARD_H - 8.0;
+        }
+        if y < 8.0 {
+            y = 8.0;
+        }
+    }
+
+    let _ = w.set_position(PhysicalPosition::new(x, y));
+    if !w.is_visible().unwrap_or(false) {
+        // show() 不抢焦点（Windows SW_SHOW），避免干扰用户操作
+        let _ = w.show();
+    }
+    // 立即推送一帧数据（此后由 update_tray 每秒续推）
+    let st = crate::get_status(app.state::<crate::AppState>().inner());
+    let _ = w.emit("hover_data", st);
+}
+
+/// 鼠标离开托盘：隐藏彩色卡片
+fn hide_hover_card(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("hover_card") {
+        let _ = w.hide();
+    }
+}
+
+/// 更新托盘的 tooltip / 悬停卡片
+/// - 彩色卡片开启：清空系统 tooltip（避免双显），卡片可见时每秒推送实时数据
+/// - 彩色卡片关闭：恢复系统原生 tooltip
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
+    let cfg = app.state::<crate::AppState>().config.lock().unwrap().clone();
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(&status.tooltip));
+        if cfg.tray_hover_card {
+            let _ = tray.set_tooltip::<&str>(None);
+        } else {
+            let _ = tray.set_tooltip(Some(&status.tooltip));
+        }
+    }
+    if let Some(w) = app.get_webview_window("hover_card") {
+        let visible = w.is_visible().unwrap_or(false);
+        if visible && cfg.tray_hover_card {
+            let _ = w.emit("hover_data", status.clone());
+        } else if visible && !cfg.tray_hover_card {
+            // 关闭开关时立即收回卡片
+            let _ = w.hide();
+        }
     }
 }

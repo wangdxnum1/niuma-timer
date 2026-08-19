@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        background: transparent;
+        overflow: hidden;
+      }
+      body {
+        font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        color: #e6e8ef;
+        width: 320px;
+        height: 210px;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+      .card {
+        width: 100%;
+        height: 100%;
+        border-radius: 16px;
+        padding: 14px 16px 12px;
+        background: linear-gradient(160deg, rgba(29, 32, 41, 0.96) 0%, rgba(16, 18, 24, 0.96) 100%);
+        border: 1px solid rgba(255, 214, 80, 0.3);
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #ffd650;
+        letter-spacing: 0.5px;
+      }
+      .date {
+        font-size: 11px;
+        color: #8a90a2;
+      }
+      .earned {
+        text-align: center;
+        line-height: 1;
+        margin: 2px 0 4px;
+      }
+      .amount {
+        font-size: 36px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        background: linear-gradient(180deg, #ffe9a8 0%, #ffd650 55%, #e0a93a 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .elabel {
+        font-size: 11px;
+        color: #8a90a2;
+        margin-top: 3px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+      }
+      .grid div {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 8px 2px 7px;
+        text-align: center;
+      }
+      .grid span {
+        display: block;
+        font-size: 10px;
+        color: #8a90a2;
+        margin-bottom: 3px;
+      }
+      .grid b {
+        font-size: 13px;
+        color: #e6e8ef;
+        font-variant-numeric: tabular-nums;
+      }
+      .foot {
+        text-align: center;
+        font-size: 11px;
+        color: #7fd99a;
+        margin-top: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="head">
+        <span class="title">🐎 牛马计时器</span>
+        <span class="date" id="date">—</span>
+      </div>
+      <div class="earned">
+        <div class="amount" id="earned">¥0.00</div>
+        <div class="elabel">今日已赚</div>
+      </div>
+      <div class="grid">
+        <div><span>已工作</span><b id="worked">—</b></div>
+        <div><span>距下班</span><b id="toff">—</b></div>
+        <div><span>赚钱速率</span><b id="rate">—</b></div>
+        <div><span>距发薪</span><b id="pay">—</b></div>
+      </div>
+      <div class="foot" id="foot">—</div>
+    </div>
+    <script>
+      // 数据由 Rust 端每秒 emit "hover_data" 推送
+      function render(s) {
+        document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
+        document.getElementById("worked").textContent = s.worked_str || s.worked_h.toFixed(1) + "h";
+        document.getElementById("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
+        document.getElementById("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
+        document.getElementById("pay").textContent = s.days_to_pay + " 天";
+        var now = new Date();
+        var wd = ["日", "一", "二", "三", "四", "五", "六"][now.getDay()];
+        document.getElementById("date").textContent =
+          now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd;
+        document.getElementById("foot").textContent = s.is_workday
+          ? "搬砖中，冲鸭 🐂"
+          : "今天休息 🛌";
+      }
+      window.__TAURI_INTERNALS__.invoke("plugin:event|listen", {
+        event: "hover_data",
+        target: { kind: "Any" },
+        handler: window.__TAURI_INTERNALS__.transformCallback(function (e) {
+          render(e.payload);
+        }),
+      });
+    </script>
+  </body>
+</html>

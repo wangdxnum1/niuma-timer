@@ -40,7 +40,7 @@ fn current_monthly_workdays(cfg: &config::Config, hol: &holiday::HolidayCache) -
 }
 
 /// 计算当天状态快照
-fn get_status(state: &AppState) -> calc::DayStatus {
+pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
     let cfg = state.config.lock().unwrap().clone();
     let hol = state.holiday.lock().unwrap().clone();
     let now = Local::now();

@@ -22,6 +22,9 @@ pub struct Config {
     /// 时长显示格式：hms=几小时几分几秒（默认） hm=几小时几分 h=小数小时
     #[serde(default = "default_duration_format")]
     pub duration_format: String,
+    /// 托盘悬停显示彩色卡片（true=自绘 HTML 卡片，false=系统原生 tooltip）
+    #[serde(default)]
+    pub tray_hover_card: bool,
     /// 缓存年份标记（保留字段，便于迁移）
     pub last_holiday_year: i32,
 }
@@ -41,6 +44,7 @@ impl Default for Config {
             workdays_override: None,
             payday: 10,
             duration_format: "hms".into(),
+            tray_hover_card: false,
             last_holiday_year: 0,
         }
     }

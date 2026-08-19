@@ -15,6 +15,7 @@ async function load() {
     $("pm_end").value = cfg.pm_end;
     $("payday").value = cfg.payday;
     $("duration_format").value = cfg.duration_format || "hms";
+    $("tray_hover_card").checked = !!cfg.tray_hover_card;
     $("workdays_override").value = cfg.workdays_override ?? "";
   } catch (e) {
     console.error(e);
@@ -30,6 +31,7 @@ async function save() {
     pm_end: $("pm_end").value,
     payday: parseInt($("payday").value) || 1,
     duration_format: $("duration_format").value || "hms",
+    tray_hover_card: $("tray_hover_card").checked,
     workdays_override: $("workdays_override").value
       ? parseInt($("workdays_override").value)
       : null,
