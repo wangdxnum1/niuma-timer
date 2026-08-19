@@ -1,6 +1,6 @@
 use tauri::Manager;
 use tauri::menu::{Menu, MenuId, MenuItem};
-use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, App};
 
 use crate::calc::DayStatus;
@@ -28,6 +28,15 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 crate::spawn_holiday_refresh(app.clone());
             } else if event.id == MenuId::new("quit") {
                 app.exit(0);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { .. } = event {
+                let app = tray.app_handle();
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
             }
         })
         .build(app)?;

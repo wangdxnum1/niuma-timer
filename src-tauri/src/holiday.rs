@@ -86,46 +86,95 @@ pub fn weekday_count(year: i32, month: u32) -> u32 {
     count
 }
 
-/// 拉取某年节假日数据（timor.tech）
+/// 拉取某年节假日数据。
+/// 数据源：NateScarlet/holiday-cn（国务院放假安排），经 jsDelivr CDN 分发（国内可达）。
+/// 返回全年每天的类型映射：0=工作日 1=周末 2=补班 3=法定节假日。
 pub async fn fetch_year(year: i32) -> Result<HashMap<NaiveDate, u8>, String> {
-    let url = format!("https://timor.tech/api/holiday/year/{}", year);
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析失败: {}", e))?;
+    // 主源 + 备用 CDN（同份数据，不同边缘节点）
+    let urls = [
+        format!("https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
+        format!("https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
+        format!("https://gcore.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
+    ];
 
-    let mut map = HashMap::new();
-    if let Some(obj) = json.get("holiday").and_then(|v| v.as_object()) {
-        for (k, v) in obj {
-            let parts: Vec<&str> = k.split('-').collect();
-            if parts.len() == 3 {
-                if let (Ok(y), Ok(mo), Ok(d)) = (
-                    parts[0].parse::<i32>(),
-                    parts[1].parse::<u32>(),
-                    parts[2].parse::<u32>(),
-                ) {
-                    if let Some(dt) = NaiveDate::from_ymd_opt(y, mo, d) {
-                        let t = v
-                            .get("type")
-                            .and_then(|x| x.as_i64())
-                            .unwrap_or(1) as u8;
-                        map.insert(dt, t);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) niuma-timer")
+        .build()
+        .map_err(|e| format!("客户端初始化失败: {}", e))?;
+
+    let mut last_err = String::new();
+    for url in &urls {
+        match client.get(url).send().await {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    last_err = format!("HTTP {}", resp.status());
+                    continue;
+                }
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => {
+                        last_err = format!("数据解析失败: {}", e);
+                        continue;
                     }
+                };
+                match parse_holiday_cn(&json, year) {
+                    Ok(map) => return Ok(map),
+                    Err(e) => last_err = e,
+                }
+            }
+            Err(e) => {
+                last_err = format!("网络请求失败: {}", e);
+                continue;
+            }
+        }
+    }
+    Err(format!("节假日数据获取失败（已尝试多个数据源）: {}", last_err))
+}
+
+/// 解析 NateScarlet/holiday-cn 格式：
+/// days 为数组，每项 { name, date:"YYYY-MM-DD", isOffDay:bool }
+/// isOffDay=true → 法定节假日(休息)；isOffDay=false → 补班(上班)
+/// 仅列出"特殊日"，需结合星期推算出全年每天类型。
+fn parse_holiday_cn(json: &serde_json::Value, year: i32) -> Result<HashMap<NaiveDate, u8>, String> {
+    let data_year = json
+        .get("year")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(year as i64) as i32;
+
+    // 收集特殊日覆盖：date -> isOffDay
+    let mut overrides: HashMap<NaiveDate, bool> = HashMap::new();
+    if let Some(arr) = json.get("days").and_then(|v| v.as_array()) {
+        for item in arr {
+            let date_str = item.get("date").and_then(|v| v.as_str());
+            let is_off = item.get("isOffDay").and_then(|v| v.as_bool()).unwrap_or(false);
+            if let Some(s) = date_str {
+                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    overrides.insert(d, is_off);
                 }
             }
         }
     }
+
+    let mut map = HashMap::new();
+    for month in 1..=12u32 {
+        let dim = days_in_month(data_year, month);
+        for day in 1..=dim {
+            if let Some(dt) = NaiveDate::from_ymd_opt(data_year, month, day) {
+                let wd = dt.weekday().num_days_from_monday(); // 0=Mon
+                // 基础：周一到周五=工作日(0)，周六日=周末(1)
+                let mut t: u8 = if wd < 5 { 0 } else { 1 };
+                // 覆盖：法定节假日(3) 或 补班(2)
+                if let Some(is_off) = overrides.get(&dt) {
+                    t = if *is_off { 3 } else { 2 };
+                }
+                map.insert(dt, t);
+            }
+        }
+    }
+
     if map.is_empty() {
-        return Err("节假日数据为空".into());
+        return Err("未解析到任何日期".into());
     }
     Ok(map)
 }

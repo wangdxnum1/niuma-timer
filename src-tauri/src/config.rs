@@ -19,8 +19,15 @@ pub struct Config {
     pub workdays_override: Option<u32>,
     /// 发薪日（每月几号），用于距发薪日倒计时
     pub payday: u32,
+    /// 时长显示格式：hms=几小时几分几秒（默认） hm=几小时几分 h=小数小时
+    #[serde(default = "default_duration_format")]
+    pub duration_format: String,
     /// 缓存年份标记（保留字段，便于迁移）
     pub last_holiday_year: i32,
+}
+
+fn default_duration_format() -> String {
+    "hms".into()
 }
 
 impl Default for Config {
@@ -33,6 +40,7 @@ impl Default for Config {
             pm_end: "18:00".into(),
             workdays_override: None,
             payday: 10,
+            duration_format: "hms".into(),
             last_holiday_year: 0,
         }
     }

@@ -22,10 +22,42 @@ pub struct DayStatus {
     pub earned: f64,
     /// 距发薪日天数
     pub days_to_pay: i64,
+    /// 已工作时长（格式化字符串，如 "5小时10分30秒"）
+    pub worked_str: String,
+    /// 距下班时长（格式化字符串；已下班="已下班"，休息日="今天休息"）
+    pub to_off_str: String,
     /// 托盘悬停文本
     pub tooltip: String,
     /// 托盘图标文字（如 ¥328）
     pub icon_text: String,
+}
+
+/// 时长格式化（分钟 → 人可读文本）
+/// hms=几小时几分几秒  hm=几小时几分  h=小数小时
+pub fn format_duration(minutes: f64, fmt: &str) -> String {
+    let total_secs = (minutes.max(0.0) * 60.0).round() as i64;
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    match fmt {
+        "hms" => {
+            if h > 0 {
+                format!("{}小时{}分{}秒", h, m, s)
+            } else if m > 0 {
+                format!("{}分{}秒", m, s)
+            } else {
+                format!("{}秒", s)
+            }
+        }
+        "hm" => {
+            if h > 0 {
+                format!("{}小时{}分", h, m)
+            } else {
+                format!("{}分", m)
+            }
+        }
+        _ => format!("{:.1}h", minutes / 60.0),
+    }
 }
 
 fn to_min(s: &str) -> f64 {
@@ -124,14 +156,26 @@ pub fn compute(
     let earned = worked_h * hourly_rate;
     let days_to_pay = days_to_payday(now.date_naive(), cfg.payday);
 
+    let fmt = &cfg.duration_format;
+    let worked_str = format_duration(worked_min, fmt);
+    let to_off_str = if !is_workday {
+        "今天休息".into()
+    } else if now_min >= pm_e {
+        "已下班".into()
+    } else {
+        format_duration(pm_e - now_min, fmt)
+    };
+
     let tooltip = if is_workday {
+        // 标签列用全角空格对齐：全角空格宽度严格=1个汉字（半角空格在微软雅黑下≠0.5汉字，会错位）
+        // 标签统一 4 字宽 + 1 全角空格，数值起点严格在第 6 列
         format!(
-            "今天已赚 ¥{:.2}\n已工作 {:.1}h\n距下班 {:.1}h\n¥{:.2}/分\n距发薪 {}天",
-            earned, worked_h, to_off_h, rate_per_min, days_to_pay
+            "今日已赚　¥{:.2}\n已工作　　{}\n距下班　　{}\n────────\n赚钱速率　¥{:.2}/分\n距发薪　　{}天",
+            earned, worked_str, to_off_str, rate_per_min, days_to_pay
         )
     } else {
         format!(
-            "今天休息\n¥{:.2}/分\n距发薪 {}天",
+            "今天休息\n赚钱速率　¥{:.2}/分\n距发薪　　{}天",
             rate_per_min, days_to_pay
         )
     };
@@ -148,6 +192,8 @@ pub fn compute(
         daily_hours: daily_h,
         earned,
         days_to_pay,
+        worked_str,
+        to_off_str,
         tooltip,
         icon_text,
     }

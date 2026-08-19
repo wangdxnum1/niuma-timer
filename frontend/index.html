@@ -42,6 +42,14 @@
           <input id="payday" type="number" min="1" max="31" />
         </label>
         <label>
+          <span>时长显示格式</span>
+          <select id="duration_format">
+            <option value="hms">几小时几分几秒（如 5小时10分30秒）</option>
+            <option value="hm">几小时几分（如 5小时10分）</option>
+            <option value="h">小数小时（如 5.2h）</option>
+          </select>
+        </label>
+        <label>
           <span>当月实际上班天数（留空=自动）</span>
           <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
         </label>

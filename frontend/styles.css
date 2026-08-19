@@ -67,7 +67,8 @@ label {
   flex: 1;
 }
 
-input {
+input,
+select {
   background: #14161c;
   border: 1px solid #333845;
   color: #e6e8ef;
@@ -76,7 +77,21 @@ input {
   font-size: 14px;
   outline: none;
 }
-input:focus {
+select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa1b4' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+select option {
+  background: #1d2029;
+  color: #e6e8ef;
+}
+input:focus,
+select:focus {
   border-color: #ffd650;
 }
 

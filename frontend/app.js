@@ -14,6 +14,7 @@ async function load() {
     $("pm_start").value = cfg.pm_start;
     $("pm_end").value = cfg.pm_end;
     $("payday").value = cfg.payday;
+    $("duration_format").value = cfg.duration_format || "hms";
     $("workdays_override").value = cfg.workdays_override ?? "";
   } catch (e) {
     console.error(e);
@@ -28,6 +29,7 @@ async function save() {
     pm_start: $("pm_start").value,
     pm_end: $("pm_end").value,
     payday: parseInt($("payday").value) || 1,
+    duration_format: $("duration_format").value || "hms",
     workdays_override: $("workdays_override").value
       ? parseInt($("workdays_override").value)
       : null,
@@ -55,12 +57,8 @@ async function tick() {
   try {
     const s = await invoke("get_status_cmd");
     $("earned").textContent = "¥" + s.earned.toFixed(2);
-    $("worked").textContent = s.worked_h.toFixed(1) + "h";
-    $("toff").textContent = s.off_work
-      ? "已下班"
-      : s.is_workday
-        ? s.to_off_h.toFixed(1) + "h"
-        : "今天休息";
+    $("worked").textContent = s.worked_str || s.worked_h.toFixed(1) + "h";
+    $("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
     $("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
     $("pay").textContent = s.days_to_pay + " 天";
   } catch (e) {
