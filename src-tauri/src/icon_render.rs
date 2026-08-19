@@ -83,11 +83,15 @@ pub fn static_icon() -> Image<'static> {
 
             // 深色圆底裁剪
             let a_out = cov(sd_circle(px, py, CX, CY, R));
+            // 输出预乘 alpha（premultiplied）：Windows 托盘 HICON 按预乘混合，
+            // straight alpha 会让 0-alpha 像素残留深色 RGB、半透明边缘偏亮，
+            // 在部分机器/主题下表现为白色底或亮边。
             let o = (y * W + x) as usize * 4;
-            buf[o] = (c.0 * 255.0) as u8;
-            buf[o + 1] = (c.1 * 255.0) as u8;
-            buf[o + 2] = (c.2 * 255.0) as u8;
-            buf[o + 3] = (a_out * 255.0) as u8;
+            let a = a_out;
+            buf[o] = (c.0 * a * 255.0) as u8;
+            buf[o + 1] = (c.1 * a * 255.0) as u8;
+            buf[o + 2] = (c.2 * a * 255.0) as u8;
+            buf[o + 3] = (a * 255.0) as u8;
         }
     }
     Image::new_owned(buf, W, H)
