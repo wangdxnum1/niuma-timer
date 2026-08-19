@@ -1,92 +1,124 @@
 #!/usr/bin/env python3
-"""生成牛马计时器图标 icon.png（64x64，含 ¥ 字样）。
-仅依赖 Python 标准库（zlib / struct / datetime）。
+"""生成牛马计时器程序图标（金砖工牌）：icon.png (512x512) + icon.ico (16~256 多尺寸)。
+与 src-tauri/src/icon_render.rs 的 SDF 算法一致，仅依赖 Python 标准库。
 """
 import os
 import zlib
 import struct
+import math
 
-W = H = 64
-SCALE = 4  # 每个点阵像素放大倍数
-
-# 5x7 点阵字体（仅 ¥ 与数字 / 小数点，用于图标）
-FONT = {
-    "Y": [  # 用 Y 形近似 ¥
-        "01010",
-        "01010",
-        "11111",
-        "01010",
-        "01010",
-        "10001",
-        "10001",
-    ],
-    "0": ["01110","10001","10011","10101","11001","10001","01110"],
-    "1": ["00100","01100","00100","00100","00100","00100","01110"],
-    "2": ["01110","10001","00001","00010","00100","01000","11111"],
-    "3": ["11111","00010","00100","00010","00001","10001","01110"],
-    "4": ["00010","00110","01010","10010","11111","00010","00010"],
-    "5": ["11111","10000","11110","00001","00001","10001","01110"],
-    "6": ["00110","01000","10000","11110","10001","10001","01110"],
-    "7": ["11111","00001","00010","00100","01000","01000","01000"],
-    "8": ["01110","10001","10001","01110","10001","10001","01110"],
-    "9": ["01110","10001","10001","01111","00001","00010","01100"],
-    ".": ["00000","00000","00000","00000","00000","00100","00100"],
-}
-
-BG = (28, 30, 38, 255)
-FG = (255, 214, 80, 255)  # 金黄
+GOLD = (1.0, 214.0 / 255.0, 80.0 / 255.0)
+BG = (21.0 / 255.0, 24.0 / 255.0, 31.0 / 255.0)
 
 
-def draw_text(grid, text, scale, color):
-    gx = 5 * scale
-    gy = 7 * scale
-    total_w = gx * len(text)
-    start_x = (W - total_w) // 2
-    start_y = (H - gy) // 2
-    for i, ch in enumerate(text):
-        glyph = FONT.get(ch)
-        if glyph is None:
-            continue
-        ox = start_x + i * gx
-        for r in range(7):
-            row = glyph[r]
-            for c in range(5):
-                if row[c] == "1":
-                    for dy in range(scale):
-                        for dx in range(scale):
-                            x = ox + c * scale + dx
-                            y = start_y + r * scale + dy
-                            if 0 <= x < W and 0 <= y < H:
-                                grid[y][x] = color
-    return grid
+def sd_circle(x, y, cx, cy, r):
+    return math.hypot(x - cx, y - cy) - r
 
 
-def to_png(path):
-    grid = [[BG for _ in range(W)] for _ in range(H)]
-    grid = draw_text(grid, "Y", SCALE, FG)
-    raw = bytearray()
-    for y in range(H):
-        raw.append(0)  # filter type 0
-        for x in range(W):
-            r, g, b, a = grid[y][x]
-            raw += bytes((r, g, b, a))
-    compressed = zlib.compress(bytes(raw), 9)
+def sd_round_box(x, y, cx, cy, hw, hh, r):
+    dx = abs(x - cx) - (hw - r)
+    dy = abs(y - cy) - (hh - r)
+    ox, oy = max(dx, 0.0), max(dy, 0.0)
+    return math.hypot(ox, oy) + min(max(dx, dy), 0.0) - r
 
+
+def sd_ring(x, y, cx, cy, ro, ri):
+    d = math.hypot(x - cx, y - cy)
+    return abs(d - (ro + ri) * 0.5) - (ro - ri) * 0.5
+
+
+def sd_capsule(x, y, ax, ay, bx, by, r):
+    pax, pay = x - ax, y - ay
+    bax, bay = bx - ax, by - ay
+    denom = bax * bax + bay * bay
+    h = 0.0 if denom == 0 else max(0.0, min(1.0, (pax * bax + pay * bay) / denom))
+    dx, dy = pax - bax * h, pay - bay * h
+    return math.hypot(dx, dy) - r
+
+
+def cov(d):
+    return max(0.0, min(1.0, 0.5 - d))
+
+
+def render_px(px, py):
+    c = BG
+
+    def blend(over, a):
+        nonlocal c
+        if a > 0:
+            c = (over[0] * a + c[0] * (1 - a), over[1] * a + c[1] * (1 - a), over[2] * a + c[2] * (1 - a))
+
+    blend(GOLD, cov(sd_round_box(px, py, 32.0, 12.5, 10.0, 2.5, 2.0)))    # 夹子横条
+    blend(GOLD, cov(sd_circle(px, py, 32.0, 15.5, 3.5)))                  # 夹子扣
+    blend(GOLD, cov(sd_round_box(px, py, 32.0, 38.5, 17.0, 17.5, 8.0)))   # 金砖卡片
+    blend(BG,   cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4)))               # 表盘深色环
+    blend(GOLD, cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4)) * cov(sd_circle(px, py, 32.0, 31.6, 1.4)))
+    blend(GOLD, cov(sd_capsule(px, py, 32.0, 33.2, 32.0, 37.8, 0.9)))     # 指针
+    blend(GOLD, cov(sd_circle(px, py, 32.0, 38.0, 1.7)))                  # 中心轴点
+    a_out = cov(sd_circle(px, py, 32.0, 32.0, 30.0))                      # 圆底
+    return c + (a_out,)
+
+
+def render_rgba(size, ss=2):
+    """渲染 size×size RGBA，超采样 ss×ss 抗锯齿，返回展平字节"""
+    flat = bytearray()
+    for py_ in range(size):
+        for px_ in range(size):
+            rs = gs = bs = as_ = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    lx = (px_ + (sx + 0.5) / ss) * 64.0 / size
+                    ly = (py_ + (sy + 0.5) / ss) * 64.0 / size
+                    r, g, b, a = render_px(lx, ly)
+                    rs += r; gs += g; bs += b; as_ += a
+            n = ss * ss
+            flat += bytes((int(rs / n * 255), int(gs / n * 255), int(bs / n * 255), int(as_ / n * 255)))
+    return bytes(flat)
+
+
+def write_png(path, size, rgba):
     def chunk(tag, data):
         out = struct.pack(">I", len(data)) + tag + data
-        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
-        out += struct.pack(">I", crc)
-        return out
+        return out + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
+    raw = bytearray()
+    for y in range(size):
+        raw.append(0)
+        raw += rgba[y * size * 4:(y + 1) * size * 4]
     png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0))
-    png += chunk(b"IDAT", compressed)
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
     png += chunk(b"IEND", b"")
     with open(path, "wb") as f:
         f.write(png)
-    print("wrote", path, os.path.getsize(path), "bytes")
+    return png
+
+
+def write_ico(path, pngs):
+    """pngs: list[(size, png_bytes)]，打包成 Windows ICO（PNG 压缩格式，Win Vista+）"""
+    header = struct.pack("<HHH", 0, 1, len(pngs))
+    offset = 6 + 16 * len(pngs)
+    entries = bytearray()
+    blob = bytearray()
+    for size, png in pngs:
+        b = 0 if size >= 256 else size
+        entries += struct.pack("<BBBBHHII", b, b, 0, 0, 1, 32, len(png), offset)
+        offset += len(png)
+        blob += png
+    with open(path, "wb") as f:
+        f.write(header + bytes(entries) + bytes(blob))
 
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
-    to_png(os.path.join(here, "icon.png"))
+    # icon.png：512x512 大图（超采样 1 即可，SDF 连续）
+    png_512 = write_png(os.path.join(here, "icon.png"), 512, render_rgba(512, ss=1))
+    # icon.ico：16/24/32/48/64/128/256 多尺寸
+    ico_pngs = []
+    for s in (16, 24, 32, 48, 64, 128, 256):
+        ico_pngs.append((s, write_png(os.path.join(here, f"_tmp_{s}.png"), s, render_rgba(s, ss=2))))
+    write_ico(os.path.join(here, "icon.ico"), ico_pngs)
+    for s, _ in ico_pngs:
+        os.remove(os.path.join(here, f"_tmp_{s}.png"))
+    print("icon.png:", os.path.getsize(os.path.join(here, "icon.png")), "bytes")
+    print("icon.ico:", os.path.getsize(os.path.join(here, "icon.ico")), "bytes")
