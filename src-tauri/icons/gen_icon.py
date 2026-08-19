@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""生成牛马计时器程序图标（金砖工牌）：icon.png (512x512) + icon.ico (16~256 多尺寸)。
+"""生成牛马计时器程序图标（金币指针）：icon.png (512x512) + icon.ico (16~256 多尺寸)。
 与 src-tauri/src/icon_render.rs 的 SDF 算法一致，仅依赖 Python 标准库。
+设计：金色硬币外盘 + 深色内盘 + 12 点刻度 + 粗指针 + 中心轴点 —— 时间=金钱双关。
 """
 import os
 import zlib
@@ -48,14 +49,12 @@ def render_px(px, py):
         if a > 0:
             c = (over[0] * a + c[0] * (1 - a), over[1] * a + c[1] * (1 - a), over[2] * a + c[2] * (1 - a))
 
-    blend(GOLD, cov(sd_round_box(px, py, 32.0, 12.5, 10.0, 2.5, 2.0)))    # 夹子横条
-    blend(GOLD, cov(sd_circle(px, py, 32.0, 15.5, 3.5)))                  # 夹子扣
-    blend(GOLD, cov(sd_round_box(px, py, 32.0, 38.5, 17.0, 17.5, 8.0)))   # 金砖卡片
-    blend(BG,   cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4)))               # 表盘深色环
-    blend(GOLD, cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4)) * cov(sd_circle(px, py, 32.0, 31.6, 1.4)))
-    blend(GOLD, cov(sd_capsule(px, py, 32.0, 33.2, 32.0, 37.8, 0.9)))     # 指针
-    blend(GOLD, cov(sd_circle(px, py, 32.0, 38.0, 1.7)))                  # 中心轴点
-    a_out = cov(sd_circle(px, py, 32.0, 32.0, 30.0))                      # 圆底
+    blend(GOLD, cov(sd_circle(px, py, 32.0, 32.0, 24.0)))              # 金币外盘
+    blend(BG,   cov(sd_circle(px, py, 32.0, 32.0, 17.0)))              # 深色内盘（硬币边）
+    blend(GOLD, cov(sd_capsule(px, py, 32.0, 19.0, 32.0, 22.5, 2.0)))  # 12 点刻度
+    blend(GOLD, cov(sd_capsule(px, py, 32.0, 32.0, 44.0, 22.0, 3.5)))  # 指针（指向约 2 点钟）
+    blend(GOLD, cov(sd_circle(px, py, 32.0, 32.0, 3.8)))               # 中心轴点
+    a_out = cov(sd_circle(px, py, 32.0, 32.0, 30.0))                   # 圆底
     return c + (a_out,)
 
 

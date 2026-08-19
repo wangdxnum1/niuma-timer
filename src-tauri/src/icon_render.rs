@@ -21,19 +21,6 @@ fn sd_circle(x: f64, y: f64, cx: f64, cy: f64, r: f64) -> f64 {
     (dx * dx + dy * dy).sqrt() - r
 }
 
-fn sd_round_box(x: f64, y: f64, cx: f64, cy: f64, hw: f64, hh: f64, r: f64) -> f64 {
-    let dx = (x - cx).abs() - (hw - r);
-    let dy = (y - cy).abs() - (hh - r);
-    let ox = dx.max(0.0);
-    let oy = dy.max(0.0);
-    (ox * ox + oy * oy).sqrt() + dx.max(dy).min(0.0) - r
-}
-
-fn sd_ring(x: f64, y: f64, cx: f64, cy: f64, ro: f64, ri: f64) -> f64 {
-    let d = ((x - cx) * (x - cx) + (y - cy) * (y - cy)).sqrt();
-    (d - (ro + ri) * 0.5).abs() - (ro - ri) * 0.5
-}
-
 fn sd_capsule(x: f64, y: f64, ax: f64, ay: f64, bx: f64, by: f64, r: f64) -> f64 {
     let pax = x - ax;
     let pay = y - ay;
@@ -58,8 +45,8 @@ fn blend(base: RGB, over: RGB, a: f64) -> RGB {
     )
 }
 
-/// 静态托盘图标：金砖工牌（金色圆角工牌卡 + 顶部夹子 + 卡内计时表盘）
-/// 设计意图：上班挂工牌，工牌里在计时 —— 打工人身份 + 时间=金钱
+/// 静态托盘图标：金币指针（金色硬币外盘 + 深色内盘 + 12 点刻度 + 粗指针 + 中心轴点）
+/// 设计意图：时间 = 金钱 —— 金币外圈暗示「钱」，盘面 + 指针暗示「时间」，双关明确、结构极简。
 pub fn static_icon() -> Image<'static> {
     let mut buf = vec![0u8; (W * H * 4) as usize];
     for y in 0..H {
@@ -68,40 +55,28 @@ pub fn static_icon() -> Image<'static> {
             let py = y as f64 + 0.5;
             let mut c = BG;
 
-            // 夹子横条（金）
-            let a = cov(sd_round_box(px, py, 32.0, 12.5, 10.0, 2.5, 2.0));
+            // 金币外盘（金，实心大圆）
+            let a = cov(sd_circle(px, py, 32.0, 32.0, 24.0));
             if a > 0.0 {
                 c = blend(c, GOLD, a);
             }
-            // 夹子扣（金，向下凸出形成夹头）
-            let a = cov(sd_circle(px, py, 32.0, 15.5, 3.5));
-            if a > 0.0 {
-                c = blend(c, GOLD, a);
-            }
-            // 金砖工牌卡（金，实心圆角矩形）
-            let a = cov(sd_round_box(px, py, 32.0, 38.5, 17.0, 17.5, 8.0));
-            if a > 0.0 {
-                c = blend(c, GOLD, a);
-            }
-            // 卡内表盘：深色圆环（负空间，刻在金色上）
-            let a = cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4));
+            // 深色内盘（硬币边，负空间）
+            let a = cov(sd_circle(px, py, 32.0, 32.0, 17.0));
             if a > 0.0 {
                 c = blend(c, BG, a);
             }
-            // 12 点刻度：深色环上的金色缺口
-            let ring = cov(sd_ring(px, py, 32.0, 38.0, 7.5, 5.4));
-            let tick = cov(sd_circle(px, py, 32.0, 31.6, 1.4));
-            let a = ring * tick;
+            // 12 点刻度（金，粗短）
+            let a = cov(sd_capsule(px, py, 32.0, 19.0, 32.0, 22.5, 2.0));
             if a > 0.0 {
                 c = blend(c, GOLD, a);
             }
-            // 指针（金，指向 12 点）
-            let a = cov(sd_capsule(px, py, 32.0, 33.2, 32.0, 37.8, 0.9));
+            // 指针（金，粗，指向约 2 点钟）
+            let a = cov(sd_capsule(px, py, 32.0, 32.0, 44.0, 22.0, 3.5));
             if a > 0.0 {
                 c = blend(c, GOLD, a);
             }
-            // 表盘中心轴点（金）
-            let a = cov(sd_circle(px, py, 32.0, 38.0, 1.7));
+            // 中心轴点（金）
+            let a = cov(sd_circle(px, py, 32.0, 32.0, 3.8));
             if a > 0.0 {
                 c = blend(c, GOLD, a);
             }

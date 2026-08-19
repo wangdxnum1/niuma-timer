@@ -6,3 +6,5 @@ bin/
 build_*.log
 # Trae 编辑器本地文件（不该入库）
 .trae/
+# Python
+__pycache__/
