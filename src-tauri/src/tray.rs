@@ -4,7 +4,7 @@ use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, App};
 
 use crate::calc::DayStatus;
-use crate::icon_render::render_icon;
+use crate::icon_render::static_icon;
 
 /// 创建托盘图标与菜单
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
@@ -13,7 +13,7 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&settings, &refresh, &quit])?;
 
-    let icon = render_icon("¥0");
+    let icon = static_icon();
     let tray = TrayIconBuilder::with_id("main")
         .icon(icon)
         .tooltip("牛马计时器启动中…")
@@ -43,10 +43,9 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     Ok(tray)
 }
 
-/// 更新托盘的 tooltip 与动态图标
+/// 更新托盘的 tooltip（图标为静态沙漏，无需每次重绘）
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(&status.tooltip));
-        let _ = tray.set_icon(Some(render_icon(&status.icon_text)));
     }
 }
