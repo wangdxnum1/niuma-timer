@@ -18,6 +18,7 @@
         color: #e6e8ef;
         width: 320px;
         height: 210px;
+        padding: 8px;
         -webkit-font-smoothing: antialiased;
         user-select: none;
       }
@@ -32,6 +33,14 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+        /* 初始隐藏，收到 hover_show 后平滑淡入 */
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+      }
+      .card.visible {
+        opacity: 1;
+        transform: translateY(0);
       }
       .head {
         display: flex;
@@ -116,6 +125,9 @@
       <div class="foot" id="foot">—</div>
     </div>
     <script>
+      var card = document.getElementById("card");
+      var shown = false; // 卡片当前是否处于"已淡入"状态（幂等，防重复事件闪烁）
+
       // 数据由 Rust 端每秒 emit "hover_data" 推送
       function render(s) {
         document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
@@ -131,12 +143,38 @@
           ? "搬砖中，冲鸭 🐂"
           : "今天休息 🛌";
       }
-      window.__TAURI_INTERNALS__.invoke("plugin:event|listen", {
-        event: "hover_data",
-        target: { kind: "Any" },
-        handler: window.__TAURI_INTERNALS__.transformCallback(function (e) {
-          render(e.payload);
-        }),
+
+      // 淡入（Rust 端可能在窗口刚 show 时重复推送，幂等处理）
+      function showCard() {
+        if (shown) return;
+        shown = true;
+        card.classList.add("visible");
+      }
+
+      // 淡出：动画结束后隐藏窗口（需要 hover_card 窗口的 allow-hide 权限）
+      function hideCard() {
+        if (!shown) return;
+        shown = false;
+        card.classList.remove("visible");
+      }
+
+      card.addEventListener("transitionend", function (e) {
+        if (e.propertyName === "opacity" && !card.classList.contains("visible")) {
+          window.__TAURI_INTERNALS__.invoke("plugin:window|hide", {});
+        }
+      });
+
+      function listen(name, fn) {
+        window.__TAURI_INTERNALS__.invoke("plugin:event|listen", {
+          event: name,
+          target: { kind: "Any" },
+          handler: window.__TAURI_INTERNALS__.transformCallback(fn),
+        });
+      }
+      listen("hover_show", showCard);
+      listen("hover_hide", hideCard);
+      listen("hover_data", function (e) {
+        render(e.payload);
       });
     </script>
   </body>
