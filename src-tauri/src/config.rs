@@ -27,6 +27,36 @@ pub struct Config {
     pub tray_hover_card: bool,
     /// 缓存年份标记（保留字段，便于迁移）
     pub last_holiday_year: i32,
+
+    // ---- 加班追踪 ----
+    /// 加班追踪开关
+    #[serde(default)]
+    pub overtime_enabled: bool,
+    /// 加班起算时间 "HH:MM"，None=用 pm_end
+    #[serde(default)]
+    pub overtime_start: Option<String>,
+    /// 加班费（元/小时）
+    #[serde(default = "default_overtime_rate")]
+    pub overtime_rate: f64,
+    /// 饭补开关
+    #[serde(default = "default_overtime_meal_enabled")]
+    pub overtime_meal_enabled: bool,
+    /// 饭补金额（元）
+    #[serde(default = "default_overtime_meal")]
+    pub overtime_meal: f64,
+    /// 周末加班开关（预留，暂未实现）
+    #[serde(default)]
+    pub weekend_overtime: bool,
+}
+
+fn default_overtime_rate() -> f64 {
+    20.0
+}
+fn default_overtime_meal_enabled() -> bool {
+    true
+}
+fn default_overtime_meal() -> f64 {
+    20.0
 }
 
 fn default_duration_format() -> String {
@@ -46,6 +76,12 @@ impl Default for Config {
             duration_format: "hms".into(),
             tray_hover_card: false,
             last_holiday_year: 0,
+            overtime_enabled: false,
+            overtime_start: None,
+            overtime_rate: 20.0,
+            overtime_meal_enabled: true,
+            overtime_meal: 20.0,
+            weekend_overtime: false,
         }
     }
 }

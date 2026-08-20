@@ -4,17 +4,21 @@ mod calc;
 mod config;
 mod holiday;
 mod icon_render;
+mod lock_monitor;
+mod overtime;
 mod tray;
 
 use std::sync::Mutex;
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use tauri::{Manager, State};
 
 struct AppState {
     config: Mutex<config::Config>,
     holiday: Mutex<holiday::HolidayCache>,
     last_date: Mutex<NaiveDate>,
+    /// 最近一次已处理的锁屏时间戳，用于检测新锁屏事件
+    last_lock_seen: Mutex<Option<i64>>,
 }
 
 impl Default for AppState {
@@ -23,6 +27,7 @@ impl Default for AppState {
             config: Mutex::new(config::load()),
             holiday: Mutex::new(holiday::HolidayCache::default()),
             last_date: Mutex::new(Local::now().date_naive()),
+            last_lock_seen: Mutex::new(None),
         }
     }
 }
@@ -137,6 +142,13 @@ fn focus_window(app: tauri::AppHandle) {
     }
 }
 
+/// 获取当月加班记录（含预计算汇总字段）
+#[tauri::command]
+fn get_overtime_records() -> overtime::MonthlyOvertimeView {
+    let now = Local::now();
+    overtime::get_month(now.year(), now.month()).to_view()
+}
+
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -185,6 +197,9 @@ fn main() {
             // 创建托盘
             let _tray = tray::create_tray(app)?;
 
+            // 启动锁屏监听线程（Windows session notification）
+            lock_monitor::start();
+
             // 窗口关闭仅隐藏，不退出程序
             if let Some(w) = app.get_webview_window("main") {
                 w.clone().on_window_event(move |event| {
@@ -215,6 +230,38 @@ fn main() {
                 }
                 let st = get_status(state.inner());
                 tray::update_tray(&apph, &st);
+
+                // ---- 加班锁屏检测 ----
+                let cfg = state.config.lock().unwrap().clone();
+                if cfg.overtime_enabled {
+                    if let Some(lock_ts) = lock_monitor::last_lock_timestamp() {
+                        let mut seen = state.last_lock_seen.lock().unwrap();
+                        if *seen != Some(lock_ts) {
+                            *seen = Some(lock_ts);
+                            drop(seen);
+
+                            let now = Local::now();
+                            let is_workday = state
+                                .holiday
+                                .lock()
+                                .unwrap()
+                                .is_workday(now.date_naive())
+                                .unwrap_or_else(|| {
+                                    now.weekday().num_days_from_monday() < 5
+                                });
+
+                            if is_workday {
+                                if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
+                                    if let Some(record) =
+                                        overtime::calc_record(now.date_naive(), lt, &cfg)
+                                    {
+                                        overtime::upsert_record(record);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             });
             Ok(())
         })
@@ -225,7 +272,8 @@ fn main() {
             get_status_cmd,
             hide_window,
             show_window,
-            focus_window
+            focus_window,
+            get_overtime_records
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

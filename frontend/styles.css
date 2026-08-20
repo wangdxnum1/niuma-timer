@@ -9,19 +9,36 @@ body {
   background: #14161c;
   color: #e6e8ef;
   -webkit-font-smoothing: antialiased;
-  /* 禁用横向滚动条 */
-  overflow-x: hidden;
+  /* 窗口固定高度，禁用页面级滚动，滚动交给 .app 容器内部 */
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app {
   width: 100%;
   max-width: 440px;
-  min-height: 600px;
+  height: 100vh;
   padding: 22px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   box-sizing: border-box;
+  overflow-y: auto;
+}
+
+/* 深色主题细滚动条 */
+.app::-webkit-scrollbar {
+  width: 6px;
+}
+.app::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+.app::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.app::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 h1 {
@@ -201,11 +218,65 @@ button:hover {
   min-height: 16px;
 }
 
-.actions {
-  display: flex;
-  gap: 10px;
-  margin-top: auto;
+/* 自动保存 toast：窗口顶部居中提示，非模态 */
+.toast {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translate(-50%, -14px);
+  background: #1c2a21;
+  color: #7fd99a;
+  border: 1px solid rgba(127, 217, 154, 0.35);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+  pointer-events: none;
+  z-index: 99;
+  white-space: nowrap;
 }
-.actions button {
-  flex: 1;
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.toast.err {
+  background: #2d1f1f;
+  color: #ff8a8a;
+  border-color: rgba(255, 138, 138, 0.35);
+}
+
+/* 加班记录区 */
+.big {
+  font-size: 32px;
+  font-weight: 800;
+  color: #ffd650;
+  text-align: center;
+  margin: 4px 0 2px;
+}
+.ot-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.ot-table th {
+  text-align: left;
+  color: #8a90a2;
+  font-weight: 500;
+  padding: 6px 4px;
+  border-bottom: 1px solid #2a2e3a;
+}
+.ot-table td {
+  padding: 6px 4px;
+  border-bottom: 1px solid #222632;
+  color: #cfd4e2;
+}
+.ot-table tr:last-child td {
+  border-bottom: none;
+}
+.ot-empty {
+  text-align: center;
+  color: #5a6070;
+  padding: 16px 0 !important;
 }

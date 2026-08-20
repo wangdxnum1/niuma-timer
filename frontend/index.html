@@ -61,6 +61,30 @@
         <div id="workdaysInfo" class="hint"></div>
       </section>
 
+      <section class="card">
+        <h2>加班设置</h2>
+        <label class="switch-row">
+          <span>启用加班追踪</span>
+          <input id="overtime_enabled" type="checkbox" class="switch" />
+        </label>
+        <label>
+          <span>加班起算时间（留空=下班时间）</span>
+          <input id="overtime_start" type="time" placeholder="下班时间" />
+        </label>
+        <label>
+          <span>加班费（元/小时）</span>
+          <input id="overtime_rate" type="number" min="0" step="5" value="20" />
+        </label>
+        <label class="switch-row">
+          <span>饭补</span>
+          <input id="overtime_meal_enabled" type="checkbox" class="switch" />
+        </label>
+        <label>
+          <span>饭补金额（元）</span>
+          <input id="overtime_meal" type="number" min="0" step="5" value="20" />
+        </label>
+      </section>
+
       <section class="card live">
         <h2>今日实时</h2>
         <div class="big" id="earned">¥0.00</div>
@@ -72,11 +96,25 @@
         </div>
       </section>
 
-      <div class="actions">
-        <button id="saveBtn" class="primary">保存</button>
-        <button id="closeBtn" class="ghost">关闭</button>
-      </div>
+      <section class="card">
+        <h2>加班记录</h2>
+        <div class="big" id="ot_total">¥0.00</div>
+        <p class="sub">本月加班合计</p>
+        <div class="grid">
+          <div><span>有效时长</span><b id="ot_hours">0.0h</b></div>
+          <div><span>加班天数</span><b id="ot_days">0</b></div>
+          <div><span>饭补合计</span><b id="ot_meal_total">¥0.00</b></div>
+          <div><span>日均</span><b id="ot_avg">¥0.00</b></div>
+        </div>
+        <table class="ot-table">
+          <thead>
+            <tr><th>日期</th><th>锁屏</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th></tr>
+          </thead>
+          <tbody id="ot_tbody"></tbody>
+        </table>
+      </section>
     </div>
+    <div id="toast" class="toast"></div>
     <script src="app.js"></script>
   </body>
 </html>
