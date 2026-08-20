@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -107,7 +107,7 @@ fn format_hm(min: f64) -> String {
     format!("{:02}:{:02}", h, m)
 }
 
-/// 根据锁屏时间和配置计算单日加班记录
+/// 根据锁屏时间和配置计算单日加班记录（自动锁屏路径）
 /// 返回 None 表示无有效加班（锁屏早于起算时间、不足 1 小时等）
 pub fn calc_record(
     date: NaiveDate,
@@ -116,6 +116,17 @@ pub fn calc_record(
 ) -> Option<OvertimeRecord> {
     // 加班起算时间：overtime_start 有值则用，否则用 pm_end
     let ot_start_str = cfg.overtime_start.as_deref().unwrap_or(&cfg.pm_end);
+    compute_record(date, lock_time, ot_start_str, cfg)
+}
+
+/// 核心计算：给定明确的加班起算时间字符串，计算单日记录。
+/// 抽出来供自动锁屏路径与手动录入路径共用，保证规则一致。
+fn compute_record(
+    date: NaiveDate,
+    lock_time: DateTime<Local>,
+    ot_start_str: &str,
+    cfg: &Config,
+) -> Option<OvertimeRecord> {
     let ot_start_min = to_min(ot_start_str)?;
 
     let lock_min = lock_time.hour() as f64 * 60.0
@@ -152,6 +163,105 @@ pub fn calc_record(
         meal,
         total,
     })
+}
+
+/// 手动录入请求：前端提交日期 + 锁屏时间（+ 可选起算时间覆盖）
+#[derive(Clone, Debug, Deserialize)]
+pub struct ManualOvertimeInput {
+    /// 日期 "2026-08-19"
+    pub date: String,
+    /// 锁屏时间（最后离开时间）"20:30"
+    pub lock_time: String,
+    /// 可选：覆盖加班起算时间 "HH:MM"；None 用配置默认值
+    pub ot_start: Option<String>,
+}
+
+/// "YYYY-MM-DD" + "HH:MM" → 当天本地 DateTime
+fn parse_lock_datetime(date: &str, time: &str) -> Option<DateTime<Local>> {
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    let parts: Vec<&str> = time.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let h: u32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let nt = NaiveTime::from_hms_opt(h, m, 0)?;
+    let ndt = d.and_time(nt);
+    Local.from_local_datetime(&ndt).single()
+}
+
+/// 判断给定日期字符串是否属于当前月份
+pub fn is_current_month(date: &str) -> bool {
+    let d = match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let now = Local::now();
+    d.year() == now.year() && d.month() == now.month()
+}
+
+/// 手动添加/修改某天加班记录（按日期 upsert）。
+/// 仅允许当前月份；返回生成的记录或错误信息。
+pub fn save_manual(
+    input: ManualOvertimeInput,
+    cfg: &Config,
+) -> Result<OvertimeRecord, String> {
+    let date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
+        .map_err(|_| "日期格式错误".to_string())?;
+    if !is_current_month(&input.date) {
+        return Err("只能添加或修改当月的数据".to_string());
+    }
+    let lock_dt = parse_lock_datetime(&input.date, &input.lock_time)
+        .ok_or_else(|| "锁屏时间格式错误，应为 HH:MM".to_string())?;
+    // 起算时间：手动覆盖 > 配置 overtime_start > pm_end
+    let ot_start_str = input
+        .ot_start
+        .as_deref()
+        .or(cfg.overtime_start.as_deref())
+        .unwrap_or(&cfg.pm_end);
+    // 预校验，给出明确错误（compute_record 返回 None 时无法区分原因）
+    let ot_start_min = to_min(ot_start_str)
+        .ok_or_else(|| "加班起算时间格式错误".to_string())?;
+    let lock_min = lock_dt.hour() as f64 * 60.0
+        + lock_dt.minute() as f64
+        + lock_dt.second() as f64 / 60.0;
+    if lock_min <= ot_start_min {
+        return Err(format!(
+            "锁屏时间 {} 需晚于加班起算时间 {}",
+            input.lock_time, ot_start_str
+        ));
+    }
+    let raw_hours = (lock_min - ot_start_min) / 60.0;
+    if calc_valid_hours(raw_hours) < 1.0 {
+        return Err("加班时长不足 1 小时，无法生成有效记录".to_string());
+    }
+    let rec = compute_record(date, lock_dt, ot_start_str, cfg)
+        .ok_or_else(|| "无法生成加班记录".to_string())?;
+    upsert_record(rec.clone());
+    Ok(rec)
+}
+
+/// 手动删除某天加班记录。仅允许当前月份。
+pub fn delete_manual(date: &str) -> Result<(), String> {
+    if !is_current_month(date) {
+        return Err("只能删除当月的数据".to_string());
+    }
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| "日期格式错误".to_string())?;
+    let mut all = load_all();
+    let key = month_key(d);
+    let removed = if let Some(m) = all.get_mut(&key) {
+        let before = m.records.len();
+        m.records.retain(|r| r.date != date);
+        before != m.records.len()
+    } else {
+        false
+    };
+    if !removed {
+        return Err("未找到该日期的加班记录".to_string());
+    }
+    save_all(&all);
+    Ok(())
 }
 
 // ---- 持久化 ----

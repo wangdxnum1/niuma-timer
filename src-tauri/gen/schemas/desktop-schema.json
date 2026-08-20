@@ -177,10 +177,22 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the delete_overtime_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-overtime-record",
+          "markdownDescription": "Enables the delete_overtime_record command without any pre-configured scope."
+        },
+        {
           "description": "Enables the focus_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-focus-window",
           "markdownDescription": "Enables the focus_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_overtime_records command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-overtime-records",
+          "markdownDescription": "Enables the get_overtime_records command without any pre-configured scope."
         },
         {
           "description": "Enables the get_status_cmd command without any pre-configured scope.",
@@ -213,16 +225,34 @@
           "markdownDescription": "Enables the save_config command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_overtime_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-overtime-record",
+          "markdownDescription": "Enables the save_overtime_record command without any pre-configured scope."
+        },
+        {
           "description": "Enables the show_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-show-window",
           "markdownDescription": "Enables the show_window command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_overtime_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-overtime-record",
+          "markdownDescription": "Denies the delete_overtime_record command without any pre-configured scope."
+        },
+        {
           "description": "Denies the focus_window command without any pre-configured scope.",
           "type": "string",
           "const": "deny-focus-window",
           "markdownDescription": "Denies the focus_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_overtime_records command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-overtime-records",
+          "markdownDescription": "Denies the get_overtime_records command without any pre-configured scope."
         },
         {
           "description": "Denies the get_status_cmd command without any pre-configured scope.",
@@ -253,6 +283,12 @@
           "type": "string",
           "const": "deny-save-config",
           "markdownDescription": "Denies the save_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_overtime_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-overtime-record",
+          "markdownDescription": "Denies the save_overtime_record command without any pre-configured scope."
         },
         {
           "description": "Denies the show_window command without any pre-configured scope.",

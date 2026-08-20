@@ -17,6 +17,9 @@ fn main() {
             "hide_window",
             "show_window",
             "focus_window",
+            "get_overtime_records",
+            "save_overtime_record",
+            "delete_overtime_record",
         ]),
     );
     tauri_build::try_build(attrs).expect("tauri-build failed");

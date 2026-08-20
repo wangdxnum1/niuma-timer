@@ -1,4 +1,4 @@
-// 牛马计时器 设置页前端逻辑
+// 牛马计时器 主界面前端逻辑
 // window.__TAURI__ 由 Rust 端 append_invoke_initialization_script 注入的垫片暴露
 const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
@@ -138,32 +138,150 @@ async function tick() {
 async function loadOvertime() {
   try {
     const ot = await invoke("get_overtime_records");
-    $("ot_total").textContent = "¥" + ot.total_all.toFixed(0);
-    $("ot_hours").textContent = ot.total_hours.toFixed(1) + "h";
-    $("ot_days").textContent = ot.days;
-    $("ot_meal_total").textContent = "¥" + ot.total_meal.toFixed(0);
-    $("ot_avg").textContent =
-      ot.days > 0 ? "¥" + (ot.total_all / ot.days).toFixed(0) : "¥0";
-    const tbody = $("ot_tbody");
-    tbody.innerHTML = "";
-    if (ot.records.length === 0) {
-      tbody.innerHTML =
-        '<tr><td colspan="6" class="ot-empty">暂无加班记录</td></tr>';
-      return;
-    }
-    for (const r of [...ot.records].reverse()) {
-      const tr = document.createElement("tr");
-      tr.innerHTML =
-        "<td>" + r.date.slice(5) + "</td>" +
-        "<td>" + r.lock_time + "</td>" +
-        "<td>" + r.valid_hours.toFixed(1) + "h</td>" +
-        "<td>¥" + r.fee.toFixed(0) + "</td>" +
-        "<td>" + (r.meal > 0 ? "¥" + r.meal.toFixed(0) : "—") + "</td>" +
-        "<td>¥" + r.total.toFixed(0) + "</td>";
-      tbody.appendChild(tr);
-    }
+    renderOt(ot);
   } catch (e) {
     console.error("loadOvertime error:", e);
+  }
+}
+
+function renderOt(ot) {
+  const now = new Date();
+  $("otMonthTitle").textContent =
+    now.getFullYear() + "年" + (now.getMonth() + 1) + "月 加班明细";
+  $("ot_total").textContent = "¥" + ot.total_all.toFixed(0);
+  $("ot_hours").textContent = ot.total_hours.toFixed(1) + "h";
+  $("ot_days").textContent = ot.days;
+  $("ot_meal_total").textContent = "¥" + ot.total_meal.toFixed(0);
+  $("ot_avg").textContent =
+    ot.days > 0 ? "¥" + (ot.total_all / ot.days).toFixed(0) : "¥0";
+  const tbody = $("ot_tbody");
+  tbody.innerHTML = "";
+  if (ot.records.length === 0) {
+    tbody.innerHTML =
+      '<tr><td colspan="7" class="ot-empty">暂无加班记录</td></tr>';
+    return;
+  }
+  for (const r of [...ot.records].reverse()) {
+    const tr = document.createElement("tr");
+    const cells = [
+      r.date.slice(5),
+      r.lock_time,
+      r.valid_hours.toFixed(1) + "h",
+      "¥" + r.fee.toFixed(0),
+      r.meal > 0 ? "¥" + r.meal.toFixed(0) : "—",
+      "¥" + r.total.toFixed(0),
+    ];
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    const opTd = document.createElement("td");
+    opTd.className = "ot-op";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "编辑";
+    editBtn.className = "btn-sm";
+    editBtn.onclick = () => editOtRecord(r);
+    opTd.appendChild(editBtn);
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "删除";
+    delBtn.className = "btn-sm danger";
+    delBtn.onclick = () => deleteOtRecord(r.date);
+    opTd.appendChild(delBtn);
+    tr.appendChild(opTd);
+    tbody.appendChild(tr);
+  }
+}
+
+// ---- 加班记录手动增删改（仅当月）----
+function showOtForm() {
+  $("otForm").classList.remove("hidden");
+}
+function hideOtForm() {
+  $("otForm").classList.add("hidden");
+  $("otfMsg").textContent = "";
+}
+function showOtMsg(msg) {
+  $("otfMsg").textContent = msg;
+}
+
+// 点击「添加记录」
+function openOtForm() {
+  $("otf_date").value = "";
+  $("otf_lock").value = "";
+  $("otf_start").value = "";
+  $("otfSave").textContent = "保存";
+  showOtMsg("");
+  showOtForm();
+}
+
+// 点击某行的「编辑」
+function editOtRecord(r) {
+  $("otf_date").value = r.date;
+  $("otf_lock").value = r.lock_time;
+  $("otf_start").value = r.ot_start && r.ot_start !== "" ? r.ot_start : "";
+  $("otfSave").textContent = "更新";
+  showOtMsg("");
+  showOtForm();
+}
+
+// 提交添加/更新（后端按日期 upsert，同一日期即覆盖=编辑）
+async function submitOtForm() {
+  const date = $("otf_date").value;
+  const lock = $("otf_lock").value;
+  const start = $("otf_start").value || null;
+  if (!date || !lock) {
+    showOtMsg("请填写日期和锁屏时间");
+    return;
+  }
+  // 前端先把关：只能当月
+  const parts = date.split("-");
+  const now = new Date();
+  if (+parts[0] !== now.getFullYear() || +parts[1] - 1 !== now.getMonth()) {
+    showOtMsg("只能添加/修改当月的数据");
+    return;
+  }
+  try {
+    const view = await invoke("save_overtime_record", {
+      input: { date, lock_time: lock, ot_start: start },
+    });
+    renderOt(view);
+    hideOtForm();
+    showToast("已保存加班记录", "ok");
+  } catch (e) {
+    showOtMsg("保存失败：" + e);
+  }
+}
+
+// 自定义确认弹窗（替代浏览器默认 confirm）
+let confirmResolve = null;
+function showConfirm(text) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    $("confirmText").textContent = text;
+    $("confirmModal").classList.remove("hidden");
+  });
+}
+function hideConfirm(result) {
+  $("confirmModal").classList.add("hidden");
+  if (confirmResolve) {
+    confirmResolve(result);
+    confirmResolve = null;
+  }
+}
+$("confirmOk").addEventListener("click", () => hideConfirm(true));
+$("confirmCancel").addEventListener("click", () => hideConfirm(false));
+
+// 删除某天记录
+async function deleteOtRecord(date) {
+  const ok = await showConfirm("确定删除 " + date + " 的加班记录？");
+  if (!ok) return;
+  try {
+    const view = await invoke("delete_overtime_record", { date });
+    renderOt(view);
+    showToast("已删除", "ok");
+  } catch (e) {
+    showToast("删除失败：" + e, "err");
   }
 }
 
@@ -191,6 +309,19 @@ $("overtime_enabled").addEventListener("change", () => {
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
 $("refreshBtn").addEventListener("click", refresh);
+// 加班记录增删改
+$("otAddBtn").addEventListener("click", openOtForm);
+$("otfSave").addEventListener("click", submitOtForm);
+$("otfCancel").addEventListener("click", hideOtForm);
+// 主界面 ↔ 加班明细二级页面切换
+function showView(id) {
+  const target = $(id);
+  if (!target) return; // 目标视图不存在则不操作，避免误隐藏所有视图
+  document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
+  target.classList.remove("hidden");
+}
+$("otDetailBtn").addEventListener("click", () => showView("viewOt"));
+$("otBackBtn").addEventListener("click", () => showView("viewMain"));
 
 // 关闭窗口：若有未保存改动先落盘再隐藏，不丢数据
 async function closeWindow() {
@@ -199,12 +330,10 @@ async function closeWindow() {
   }
   TAURI.window.getCurrentWindow().hide();
 }
-// Esc 键关闭
+// Esc 键关闭（关闭交给原生窗口标题栏按钮；Esc 作为键盘快捷键保留）
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeWindow();
 });
-// 点击窗口外部（失焦）自动关闭
-window.addEventListener("blur", closeWindow);
 
 load();
 refresh();

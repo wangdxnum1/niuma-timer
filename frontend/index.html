@@ -3,16 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>牛马计时器 · 设置</title>
+    <title>牛马计时器 · 主界面</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="app" id="viewMain">
       <h1>🐎 牛马计时器</h1>
       <p class="sub">实时计算你今天赚了多少钱</p>
 
+      <section class="card live">
+        <h2>今日实时</h2>
+        <div class="big" id="earned">¥0.00</div>
+        <div class="grid">
+          <div><span>已工作</span><b id="worked">0.0h</b></div>
+          <div><span>距下班</span><b id="toff">—</b></div>
+          <div><span>速率</span><b id="rate">¥0.00/分</b></div>
+          <div><span>距发薪</span><b id="pay">—</b></div>
+        </div>
+      </section>
+
       <section class="card">
-        <h2>基础设置</h2>
+        <h2>加班总览</h2>
+        <div class="big" id="ot_total">¥0.00</div>
+        <p class="sub">本月加班合计</p>
+        <div class="grid">
+          <div><span>有效时长</span><b id="ot_hours">0.0h</b></div>
+          <div><span>加班天数</span><b id="ot_days">0</b></div>
+          <div><span>饭补合计</span><b id="ot_meal_total">¥0.00</b></div>
+          <div><span>日均</span><b id="ot_avg">¥0.00</b></div>
+        </div>
+        <div class="ot-actions">
+          <button id="otDetailBtn" class="ghost">查看每日明细 ›</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>基础配置</h2>
         <label>
           <span>月薪（元）</span>
           <input id="monthly_salary" type="number" min="0" step="100" />
@@ -62,7 +88,7 @@
       </section>
 
       <section class="card">
-        <h2>加班设置</h2>
+        <h2>加班配置</h2>
         <label class="switch-row">
           <span>启用加班追踪</span>
           <input id="overtime_enabled" type="checkbox" class="switch" />
@@ -84,37 +110,52 @@
           <input id="overtime_meal" type="number" min="0" step="5" value="20" />
         </label>
       </section>
+    </div>
 
-      <section class="card live">
-        <h2>今日实时</h2>
-        <div class="big" id="earned">¥0.00</div>
-        <div class="grid">
-          <div><span>已工作</span><b id="worked">0.0h</b></div>
-          <div><span>距下班</span><b id="toff">—</b></div>
-          <div><span>速率</span><b id="rate">¥0.00/分</b></div>
-          <div><span>距发薪</span><b id="pay">—</b></div>
-        </div>
-      </section>
-
+    <!-- 二级页面：加班每日明细 -->
+    <div class="app hidden" id="viewOt">
+      <div class="page-head">
+        <button id="otBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
+        <h2 id="otMonthTitle">加班明细</h2>
+      </div>
       <section class="card">
-        <h2>加班记录</h2>
-        <div class="big" id="ot_total">¥0.00</div>
-        <p class="sub">本月加班合计</p>
-        <div class="grid">
-          <div><span>有效时长</span><b id="ot_hours">0.0h</b></div>
-          <div><span>加班天数</span><b id="ot_days">0</b></div>
-          <div><span>饭补合计</span><b id="ot_meal_total">¥0.00</b></div>
-          <div><span>日均</span><b id="ot_avg">¥0.00</b></div>
-        </div>
         <table class="ot-table">
           <thead>
-            <tr><th>日期</th><th>锁屏</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th></tr>
+            <tr><th>日期</th><th>锁屏</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th><th>操作</th></tr>
           </thead>
           <tbody id="ot_tbody"></tbody>
         </table>
+        <div class="ot-actions">
+          <button id="otAddBtn" class="ghost">+ 添加记录</button>
+        </div>
+        <div id="otForm" class="ot-form hidden">
+          <div class="ot-form-row">
+            <label>日期<input id="otf_date" type="date" /></label>
+            <label>锁屏时间<input id="otf_lock" type="time" /></label>
+          </div>
+          <label class="ot-form-wide">加班起算时间（留空=配置值）<input id="otf_start" type="time" placeholder="配置默认值" /></label>
+          <div class="ot-form-actions">
+            <button id="otfSave" class="primary">保存</button>
+            <button id="otfCancel" class="ghost">取消</button>
+            <span id="otfMsg" class="ot-form-msg"></span>
+          </div>
+        </div>
       </section>
     </div>
     <div id="toast" class="toast"></div>
+
+    <!-- 自定义确认弹窗（替代默认 confirm） -->
+    <div id="confirmModal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-box">
+        <p id="confirmText" class="modal-text">确定删除该记录？</p>
+        <div class="modal-actions">
+          <button id="confirmOk" class="primary">确定</button>
+          <button id="confirmCancel" class="ghost">取消</button>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>

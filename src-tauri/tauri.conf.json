@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "牛马计时器 · 设置",
+        "title": "牛马计时器 · 主界面",
         "url": "index.html",
         "width": 440,
         "height": 600,

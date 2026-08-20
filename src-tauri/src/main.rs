@@ -117,7 +117,7 @@ fn get_status_cmd(state: State<AppState>) -> calc::DayStatus {
     get_status(state.inner())
 }
 
-/// 隐藏设置窗口（点关闭按钮时调用）
+/// 隐藏主窗口（点关闭按钮时调用）
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -125,7 +125,7 @@ fn hide_window(app: tauri::AppHandle) {
     }
 }
 
-/// 显示并设置焦点到设置窗口
+/// 显示并设置焦点到主窗口
 #[tauri::command]
 fn show_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -134,7 +134,7 @@ fn show_window(app: tauri::AppHandle) {
     }
 }
 
-/// 仅把设置窗口提到前台
+/// 仅把主窗口提到前台
 #[tauri::command]
 fn focus_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -147,6 +147,28 @@ fn focus_window(app: tauri::AppHandle) {
 fn get_overtime_records() -> overtime::MonthlyOvertimeView {
     let now = Local::now();
     overtime::get_month(now.year(), now.month()).to_view()
+}
+
+/// 手动添加/修改某天加班记录（仅当月），返回刷新后的当月视图
+#[tauri::command]
+fn save_overtime_record(
+    state: State<AppState>,
+    input: overtime::ManualOvertimeInput,
+) -> Result<overtime::MonthlyOvertimeView, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    overtime::save_manual(input, &cfg)?;
+    let now = Local::now();
+    Ok(overtime::get_month(now.year(), now.month()).to_view())
+}
+
+/// 手动删除某天加班记录（仅当月），返回刷新后的当月视图
+#[tauri::command]
+fn delete_overtime_record(
+    date: String,
+) -> Result<overtime::MonthlyOvertimeView, String> {
+    overtime::delete_manual(&date)?;
+    let now = Local::now();
+    Ok(overtime::get_month(now.year(), now.month()).to_view())
 }
 
 /// 注入到 webview 的轻量 Tauri API 垫片。
@@ -177,7 +199,7 @@ if (!window.__TAURI__) {
 fn main() {
     tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
-        // 并在回调里把已存在的设置窗口显示并置前，自己退出。
+        // 并在回调里把已存在的主窗口显示并置前，自己退出。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -273,7 +295,9 @@ fn main() {
             hide_window,
             show_window,
             focus_window,
-            get_overtime_records
+            get_overtime_records,
+            save_overtime_record,
+            delete_overtime_record
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

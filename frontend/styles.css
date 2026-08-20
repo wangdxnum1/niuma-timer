@@ -25,6 +25,10 @@ body {
   box-sizing: border-box;
   overflow-y: auto;
 }
+/* 视图切换：二级页面默认隐藏 */
+.app.hidden {
+  display: none;
+}
 
 /* 深色主题细滚动条 */
 .app::-webkit-scrollbar {
@@ -246,6 +250,49 @@ button:hover {
   border-color: rgba(255, 138, 138, 0.35);
 }
 
+/* 自定义确认弹窗 */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal.hidden {
+  display: none;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+.modal-box {
+  position: relative;
+  background: #1c2029;
+  border: 1px solid #2a2e3a;
+  border-radius: 14px;
+  padding: 20px 22px;
+  width: 280px;
+  max-width: 86vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+.modal-text {
+  margin: 0 0 18px;
+  font-size: 14px;
+  color: #e8ebf2;
+  line-height: 1.5;
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.modal-actions button {
+  min-width: 76px;
+}
+
 /* 加班记录区 */
 .big {
   font-size: 32px;
@@ -280,3 +327,117 @@ button:hover {
   color: #5a6070;
   padding: 16px 0 !important;
 }
+/* 二级页面：加班明细顶部返回栏 */
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.page-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.back-btn {
+  background: #2a3446;
+  border: 1px solid #3b4558;
+  color: #cfe0ff;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 5px 12px;
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.back-btn:hover {
+  background: #34425a;
+  border-color: #5b9dff;
+}
+/* 加班记录 操作列按钮 */
+.ot-op {
+  white-space: nowrap;
+}
+.btn-sm {
+  background: #2a3446;
+  border: 1px solid #3b4558;
+  color: #cfe0ff;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-right: 5px;
+  border-radius: 6px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-sm:hover {
+  background: #34425a;
+  border-color: #5b9dff;
+}
+.btn-sm.danger {
+  background: #3d2a2a;
+  border-color: #5e3a3a;
+  color: #ffaeae;
+}
+.btn-sm.danger:hover {
+  background: #5c3535;
+  border-color: #ff6b6b;
+}
+/* 添加/编辑表单 */
+.ot-actions {
+  margin-top: 10px;
+}
+.ot-form {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #2a2e3a;
+  border-radius: 10px;
+  background: #1c2029;
+}
+.ot-form.hidden {
+  display: none;
+}
+.ot-form-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ot-form-row label,
+.ot-form-wide {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #8a90a2;
+  gap: 4px;
+  flex: 1;
+}
+.ot-form input {
+  background: #11141b;
+  border: 1px solid #2a2e3a;
+  border-radius: 6px;
+  color: #cfd4e2;
+  padding: 6px 8px;
+  font-size: 13px;
+  color-scheme: dark;
+}
+.ot-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ot-form-msg {
+  font-size: 12px;
+  color: #ff6b6b;
+}
+.primary {
+  background: #5b9dff;
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.primary:hover {
+  background: #4a8bee;
+}
+
