@@ -12,9 +12,9 @@ use crate::icon_render::static_icon;
 
 /// 彩色悬停卡片尺寸（逻辑像素）
 const HOVER_CARD_W: f64 = 320.0;
-// 高度留足：内容（大金额+4宫格+状态行）在默认行高下约 170px，
-// 210 会把底部状态行挤出圆角框（overflow 溢出到透明背景），故加到 220
-const HOVER_CARD_H: f64 = 220.0;
+// 高度留足：内容（大金额 + 2×2 信息格 + 状态行）约 230px，
+// 240 与前端 body 一致，避免底部状态行被挤出圆角框（overflow 溢出到透明背景）
+const HOVER_CARD_H: f64 = 240.0;
 
 /// 是否处于"待隐藏"状态：鼠标已离开托盘、淡出动画进行中。
 /// 用于防止"兜底隐藏线程"误关掉用户重新进入时正在淡入的卡片。
@@ -174,14 +174,17 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                     });
                 }
             }
-            // 鼠标在托盘内移动：卡片已可见时跟随移动（保持原位、避免抖动）；
-            // 未显示期间只更新待显位置，真正的显示由延迟计时器统一处理
+            // 鼠标在托盘内移动：卡片已可见时【只刷新实时数据】，绝不再
+            // set_position / 重触发淡入——卡片锚定在托盘正上方（固定位置，
+            // 不跟随光标），对透明分层窗口反复重定位会在移动（尤其向左移出）
+            // 时造成抖动；未显示期间只更新待显位置，真正的显示由延迟计时器统一处理
             TrayIconEvent::Move { position, .. } => {
                 let app = tray.app_handle();
                 if let Some(w) = app.get_webview_window("hover_card") {
                     if w.is_visible().unwrap_or(false) {
-                        let anchor = tray_anchor(tray, position);
-                        position_hover_card(app, anchor);
+                        let st =
+                            crate::get_status(app.state::<crate::AppState>().inner());
+                        let _ = w.emit("hover_data", st);
                     } else {
                         *HOVER_PENDING_POS.lock().unwrap() =
                             Some(tray_anchor(tray, position));
@@ -215,6 +218,18 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                         let _ = w2.set_focus();
                     });
                 }
+            }
+            // 单击（右键弹菜单 / 左键单击）：【立即】隐藏悬停卡片（不走淡出动画），
+            // 与系统原生 tooltip 在点击托盘时瞬间消失的行为保持一致。
+            // 不走淡出是为了避免：淡出动画进行中弹出的原生右键菜单与半透明卡片
+            // 争抢 always_on_top 顶层，造成"抖一下"的闪烁。
+            TrayIconEvent::Click { button, .. } => {
+                hover_log(&format!(
+                    "[hover_card] Click({button:?}) → 立即隐藏卡片（与系统 tooltip 一致）"
+                ));
+                // 取消待显，避免点击后延迟计时器又把卡片弹出来
+                SHOW_PENDING.store(false, Ordering::Relaxed);
+                hide_hover_card_instant(tray.app_handle());
             }
             _ => {}
         })
@@ -311,10 +326,15 @@ fn position_hover_card(app: &AppHandle, pos: PhysicalPosition<f64>) {
     }
 
     // 记录卡片当前屏幕矩形（供"鼠标是否仍在卡片上"判断，防移入卡片时闪烁）
-    *HOVER_CARD_RECT.lock().unwrap() = Some((x, y, HOVER_CARD_W, HOVER_CARD_H));
+    let new_rect = (x, y, HOVER_CARD_W, HOVER_CARD_H);
+    let prev = *HOVER_CARD_RECT.lock().unwrap();
+    *HOVER_CARD_RECT.lock().unwrap() = Some(new_rect);
 
     let was_visible = w.is_visible().unwrap_or(false);
-    let _ = w.set_position(PhysicalPosition::new(x, y));
+    // 位置未变则不重定位：避免对透明分层窗口反复 set_position 引发抖动/重绘闪烁
+    if prev != Some(new_rect) {
+        let _ = w.set_position(PhysicalPosition::new(x, y));
+    }
     if !was_visible {
         hover_log(&format!("[hover_card] show() pos=({x:.0},{y:.0})"));
         // show() 不抢焦点（Windows SW_SHOW），避免干扰用户操作
@@ -365,6 +385,21 @@ fn hide_hover_card(app: &AppHandle) {
                 }
             });
         }
+    }
+}
+
+/// 立即隐藏悬停卡片（不走淡出动画）：点击托盘（右键弹菜单/左键单击）时调用，
+/// 与系统原生 tooltip 点击即消失的行为一致。直接 hide() 窗口，避免淡出动画
+/// 与弹出的原生右键菜单争抢 always_on_top 顶层造成闪烁。
+fn hide_hover_card_instant(app: &AppHandle) {
+    HOVER_CARD_RECT.lock().unwrap().take();
+    // 取消任何进行中的淡出兜底线程，避免它二次 hide
+    HIDE_PENDING.store(false, Ordering::Relaxed);
+    if let Some(w) = app.get_webview_window("hover_card") {
+        // 通知前端重置 shown 标志并移除 visible 类（下次显示时可正常淡入）
+        let _ = w.emit("hover_hide", ());
+        // 立即隐藏窗口——无动画、无争层
+        let _ = w.hide();
     }
 }
 

@@ -17,8 +17,9 @@
         "width": 440,
         "height": 600,
         "resizable": false,
-        "visible": true,
+        "visible": false,
         "center": true,
+        "backgroundColor": "#14161c",
         "theme": "Dark"
       }
     ],

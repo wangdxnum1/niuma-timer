@@ -3,18 +3,23 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 
+/// 串行化对 overtime.json 的读写（ensure_archived 与 upsert/delete 共享），
+/// 避免跨线程 load-modify-save 互相覆盖导致数据丢失。
+static OT_LOCK: Mutex<()> = Mutex::new(());
+
 /// 单日加班记录
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OvertimeRecord {
     /// 日期 "2026-08-19"
     pub date: String,
-    /// 最后锁屏时间 "20:30"
+    /// 下班时间（最后一次锁屏离开）"20:30"
     pub lock_time: String,
     /// 加班起算时间 "18:00"
     pub ot_start: String,
@@ -107,8 +112,8 @@ fn format_hm(min: f64) -> String {
     format!("{:02}:{:02}", h, m)
 }
 
-/// 根据锁屏时间和配置计算单日加班记录（自动锁屏路径）
-/// 返回 None 表示无有效加班（锁屏早于起算时间、不足 1 小时等）
+/// 根据锁屏时间（=下班离开时刻）和配置计算单日加班记录（自动锁屏路径）
+/// 返回 None 表示无有效加班（下班早于起算时间、不足 1 小时等）
 pub fn calc_record(
     date: NaiveDate,
     lock_time: DateTime<Local>,
@@ -133,7 +138,7 @@ fn compute_record(
         + lock_time.minute() as f64
         + lock_time.second() as f64 / 60.0;
 
-    // 锁屏必须晚于起算时间
+    // 下班（锁屏离开）必须晚于起算时间
     if lock_min <= ot_start_min {
         return None;
     }
@@ -165,12 +170,12 @@ fn compute_record(
     })
 }
 
-/// 手动录入请求：前端提交日期 + 锁屏时间（+ 可选起算时间覆盖）
+/// 手动录入请求：前端提交日期 + 下班时间（+ 可选起算时间覆盖）
 #[derive(Clone, Debug, Deserialize)]
 pub struct ManualOvertimeInput {
     /// 日期 "2026-08-19"
     pub date: String,
-    /// 锁屏时间（最后离开时间）"20:30"
+    /// 下班时间（最后一次锁屏离开）"20:30"
     pub lock_time: String,
     /// 可选：覆盖加班起算时间 "HH:MM"；None 用配置默认值
     pub ot_start: Option<String>,
@@ -212,7 +217,7 @@ pub fn save_manual(
         return Err("只能添加或修改当月的数据".to_string());
     }
     let lock_dt = parse_lock_datetime(&input.date, &input.lock_time)
-        .ok_or_else(|| "锁屏时间格式错误，应为 HH:MM".to_string())?;
+        .ok_or_else(|| "下班时间格式错误，应为 HH:MM".to_string())?;
     // 起算时间：手动覆盖 > 配置 overtime_start > pm_end
     let ot_start_str = input
         .ot_start
@@ -227,7 +232,7 @@ pub fn save_manual(
         + lock_dt.second() as f64 / 60.0;
     if lock_min <= ot_start_min {
         return Err(format!(
-            "锁屏时间 {} 需晚于加班起算时间 {}",
+            "下班时间 {} 需晚于加班起算时间 {}",
             input.lock_time, ot_start_str
         ));
     }
@@ -248,6 +253,7 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
     }
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
+    let _g = OT_LOCK.lock().unwrap();
     let mut all = load_all();
     let key = month_key(d);
     let removed = if let Some(m) = all.get_mut(&key) {
@@ -300,6 +306,7 @@ pub fn upsert_record(record: OvertimeRecord) {
         Some(d) => month_key(d),
         None => return,
     };
+    let _g = OT_LOCK.lock().unwrap();
     let mut all = load_all();
     let monthly = all.entry(key).or_default();
 
@@ -312,9 +319,74 @@ pub fn upsert_record(record: OvertimeRecord) {
     save_all(&all);
 }
 
-/// 获取指定月份的加班记录
+/// 获取指定月份的加班记录。
+/// 先查活动文件 overtime.json（当前月），查不到再回退到归档文件
+/// overtime-YYYY-MM.json（历史月），方便将来做历史浏览。
 pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
     let key = format!("{:04}-{:02}", year, month);
+    {
+        let _g = OT_LOCK.lock().unwrap();
+        let all = load_all();
+        if let Some(m) = all.get(&key) {
+            return m.clone();
+        }
+    }
+    // 当前文件无此月 → 尝试读归档文件（历史月）
+    let path = archive_path(&key);
+    if let Ok(s) = fs::read_to_string(&path) {
+        if let Ok(m) = serde_json::from_str::<MonthlyOvertime>(&s) {
+            return m;
+        }
+    }
+    MonthlyOvertime::default()
+}
+
+/// 某月归档文件路径：overtime-YYYY-MM.json（与 overtime.json 同目录）
+fn archive_path(key: &str) -> PathBuf {
+    crate::config::config_dir().join(format!("overtime-{}.json", key))
+}
+
+/// 将某月数据写入独立归档文件。成功返回 true。
+fn archive_month(key: &str, monthly: &MonthlyOvertime) -> bool {
+    let dir = crate::config::config_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let path = archive_path(key);
+    match serde_json::to_string_pretty(monthly) {
+        Ok(s) => fs::write(&path, s).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// 跨月自动归档：把 overtime.json 中所有"非当前月份"的数据，
+/// 分别写入 overtime-YYYY-MM.json 独立文件，并从 overtime.json 移除。
+/// 当前月份保留在 overtime.json 中作为活动工作文件。
+///
+/// 触发时机：① 程序启动；② 每秒循环检测到跨天（含跨月）时。
+/// 即便 App 在跨月时段全程运行，也能在次日检测到并归档。
+pub fn ensure_archived() {
+    let cur_key = month_key(Local::now().date_naive());
+    let _g = OT_LOCK.lock().unwrap();
     let all = load_all();
-    all.get(&key).cloned().unwrap_or_default()
+    if all.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    let mut remaining: BTreeMap<String, MonthlyOvertime> = BTreeMap::new();
+    for (key, monthly) in all.into_iter() {
+        if key == cur_key {
+            // 当前月：保留在活动文件
+            remaining.insert(key, monthly);
+        } else if archive_month(&key, &monthly) {
+            // 历史月：归档为独立文件
+            changed = true;
+        } else {
+            // 归档失败：保险起见仍留在活动文件，避免数据丢失
+            remaining.insert(key, monthly);
+        }
+    }
+    if changed {
+        save_all(&remaining);
+    }
 }

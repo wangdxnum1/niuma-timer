@@ -4,9 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>牛马计时器 · 主界面</title>
+    <style>
+      /* 启动页：内联样式，先于 styles.css 生效，避免加载期间白屏/无样式闪烁 */
+      #splash{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#14161c;}
+      #splash.hide{opacity:0;visibility:hidden;transition:opacity .45s ease,visibility .45s;}
+      #splash .splash-inner{display:flex;flex-direction:column;align-items:center;gap:16px;}
+      #splash .splash-logo{width:88px;height:88px;}
+      #splash .splash-title{font-size:23px;font-weight:700;color:#e6e8ef;letter-spacing:3px;}
+      #splash .splash-sub{font-size:13px;color:#8a8f9c;letter-spacing:1px;}
+      #splash .splash-bar{width:150px;height:3px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;}
+      #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
+      @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+    </style>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
+    <div id="splash">
+      <div class="splash-inner">
+        <div class="splash-logo">
+          <svg viewBox="0 0 100 100" width="88" height="88" aria-hidden="true">
+            <circle cx="50" cy="50" r="44" fill="none" stroke="#2a2d36" stroke-width="6"/>
+            <circle cx="50" cy="50" r="44" fill="none" stroke="#ffb74d" stroke-width="6" stroke-linecap="round" stroke-dasharray="69.1 276.5" transform="rotate(-90 50 50)"/>
+            <line x1="50" y1="50" x2="50" y2="27" stroke="#e6e8ef" stroke-width="5" stroke-linecap="round"/>
+            <line x1="50" y1="50" x2="69" y2="50" stroke="#e6e8ef" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="50" cy="50" r="4.5" fill="#ffb74d"/>
+          </svg>
+        </div>
+        <div class="splash-title">牛马计时器</div>
+        <div class="splash-sub">正在启动…</div>
+        <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+      </div>
+    </div>
+    <script>
+      // 兜底：极端情况下 app.js 未执行时，8 秒后强制收起启动页，避免永久遮挡
+      setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
+    </script>
+
     <div class="app" id="viewMain">
       <h1>🐎 牛马计时器</h1>
       <p class="sub">实时计算你今天赚了多少钱</p>
@@ -121,26 +155,32 @@
       <section class="card">
         <table class="ot-table">
           <thead>
-            <tr><th>日期</th><th>锁屏</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th><th>操作</th></tr>
+            <tr><th>日期</th><th>下班</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th><th>操作</th></tr>
           </thead>
           <tbody id="ot_tbody"></tbody>
         </table>
         <div class="ot-actions">
           <button id="otAddBtn" class="ghost">+ 添加记录</button>
         </div>
-        <div id="otForm" class="ot-form hidden">
-          <div class="ot-form-row">
-            <label>日期<input id="otf_date" type="date" /></label>
-            <label>锁屏时间<input id="otf_lock" type="time" /></label>
-          </div>
-          <label class="ot-form-wide">加班起算时间（留空=配置值）<input id="otf_start" type="time" placeholder="配置默认值" /></label>
-          <div class="ot-form-actions">
-            <button id="otfSave" class="primary">保存</button>
-            <button id="otfCancel" class="ghost">取消</button>
-            <span id="otfMsg" class="ot-form-msg"></span>
-          </div>
-        </div>
       </section>
+    </div>
+
+    <!-- 加班添加/编辑弹窗（居中 modal，日期与下班时间自动预填） -->
+    <div id="otForm" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-box ot-modal">
+        <h3 id="otfTitle" class="modal-title">添加加班记录</h3>
+        <div class="ot-form-row">
+          <label>日期<input id="otf_date" type="date" /></label>
+          <label>下班时间<input id="otf_lock" type="time" /></label>
+        </div>
+        <label class="ot-form-wide">加班起算时间（留空=配置值）<input id="otf_start" type="time" placeholder="配置默认值" /></label>
+        <div class="ot-form-actions">
+          <button id="otfSave" class="primary">保存</button>
+          <button id="otfCancel" class="ghost">取消</button>
+          <span id="otfMsg" class="ot-form-msg"></span>
+        </div>
+      </div>
     </div>
     <div id="toast" class="toast"></div>
 

@@ -293,6 +293,18 @@ button:hover {
   min-width: 76px;
 }
 
+/* 加班添加/编辑弹窗：加宽 + 左对齐（表单字段） */
+.ot-modal {
+  width: 320px;
+  text-align: left;
+}
+.modal-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #e8ebf2;
+}
+
 /* 加班记录区 */
 .big {
   font-size: 32px;
@@ -385,16 +397,7 @@ button:hover {
 .ot-actions {
   margin-top: 10px;
 }
-.ot-form {
-  margin-top: 10px;
-  padding: 12px;
-  border: 1px solid #2a2e3a;
-  border-radius: 10px;
-  background: #1c2029;
-}
-.ot-form.hidden {
-  display: none;
-}
+/* 加班表单字段样式（弹窗 modal 内复用；容器定位由 .modal 负责） */
 .ot-form-row {
   display: flex;
   gap: 10px;

@@ -219,6 +219,21 @@ fn main() {
             // 创建托盘
             let _tray = tray::create_tray(app)?;
 
+            // 跨月自动归档：把历史月数据拆成 overtime-YYYY-MM.json 独立文件
+            overtime::ensure_archived();
+
+            // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
+            // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
+            {
+                let app2 = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    if let Some(w) = app2.get_webview_window("main") {
+                        let _ = w.show();
+                    }
+                });
+            }
+
             // 启动锁屏监听线程（Windows session notification）
             lock_monitor::start();
 
@@ -248,6 +263,8 @@ fn main() {
                         drop(last);
                         // 跨天：重新拉取节假日
                         spawn_holiday_refresh(apph.clone());
+                        // 跨天也可能跨月：把已结束的月份归档为独立文件
+                        overtime::ensure_archived();
                     }
                 }
                 let st = get_status(state.inner());

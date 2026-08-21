@@ -205,14 +205,19 @@ function showOtMsg(msg) {
   $("otfMsg").textContent = msg;
 }
 
-// 点击「添加记录」
+// 点击「添加记录」：自动预填今天日期 + 当前时刻，焦点落在下班时间上
 function openOtForm() {
-  $("otf_date").value = "";
-  $("otf_lock").value = "";
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  $("otf_date").value =
+    d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  $("otf_lock").value = pad(d.getHours()) + ":" + pad(d.getMinutes());
   $("otf_start").value = "";
+  $("otfTitle").textContent = "添加加班记录";
   $("otfSave").textContent = "保存";
   showOtMsg("");
   showOtForm();
+  $("otf_lock").focus();
 }
 
 // 点击某行的「编辑」
@@ -220,9 +225,11 @@ function editOtRecord(r) {
   $("otf_date").value = r.date;
   $("otf_lock").value = r.lock_time;
   $("otf_start").value = r.ot_start && r.ot_start !== "" ? r.ot_start : "";
+  $("otfTitle").textContent = "编辑加班记录";
   $("otfSave").textContent = "更新";
   showOtMsg("");
   showOtForm();
+  $("otf_lock").focus();
 }
 
 // 提交添加/更新（后端按日期 upsert，同一日期即覆盖=编辑）
@@ -231,7 +238,7 @@ async function submitOtForm() {
   const lock = $("otf_lock").value;
   const start = $("otf_start").value || null;
   if (!date || !lock) {
-    showOtMsg("请填写日期和锁屏时间");
+    showOtMsg("请填写日期和下班时间");
     return;
   }
   // 前端先把关：只能当月
@@ -335,10 +342,42 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeWindow();
 });
 
-load();
-refresh();
-tick();
-loadOvertime();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 启动页淡出：确保主界面数据就位后再收起，避免露出空值界面
+function hideSplash() {
+  const s = document.getElementById("splash");
+  if (!s || s.classList.contains("hide")) return;
+  s.classList.add("hide");
+  setTimeout(() => { s.style.display = "none"; }, 500);
+}
+
+// 显示主窗口：窗口初始 visible:false（避免原生白闪）；splash 已在内存渲染好，
+// 此刻 show 即深色画面，绝无白闪。Rust 端另有 1s 兜底 show 防 JS 异常。
+async function showWindow() {
+  try {
+    await TAURI.window.getCurrentWindow().show();
+  } catch (e) {
+    console.error("showWindow", e);
+  }
+}
+
+async function boot() {
+  // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
+  await showWindow();
+  const shownAt = Date.now();
+  try { await load(); } catch (e) { console.error("load", e); }
+  try { await tick(); } catch (e) { console.error("tick", e); }
+  try { await loadOvertime(); } catch (e) { console.error("ot", e); }
+  // 节假日刷新在后台进行，不阻塞启动页
+  refresh();
+  // 启动页至少显示 2 秒
+  const elapsed = Date.now() - shownAt;
+  if (elapsed < 2000) await sleep(2000 - elapsed);
+  hideSplash();
+}
+
+boot();
 setInterval(tick, 1000);
-// 加班记录每 10 秒刷新（锁屏事件可能随时产生新记录）
+// 加班记录每 10 秒刷新（锁屏=下班离开事件可能随时产生新记录）
 setInterval(loadOvertime, 10000);

@@ -17,7 +17,7 @@
         font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
         color: #e6e8ef;
         width: 320px;
-        height: 210px;
+        height: 240px;
         padding: 8px;
         -webkit-font-smoothing: antialiased;
         user-select: none;
@@ -78,7 +78,7 @@
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(2, 1fr);
         gap: 6px;
       }
       .grid div {
@@ -94,9 +94,11 @@
         margin-bottom: 3px;
       }
       .grid b {
-        font-size: 13px;
+        display: block;
+        font-size: 14px;
         color: #e6e8ef;
         font-variant-numeric: tabular-nums;
+        white-space: nowrap;
       }
       .foot {
         text-align: center;
@@ -145,11 +147,23 @@
       var card = document.getElementById("card");
       var shown = false; // 卡片是否已淡入
 
+      // 时长：小数小时 → "5时10分30秒"，带秒、单行显示不换行
+      function fmtDur(h) {
+        if (h == null || isNaN(h) || h < 0) return "—";
+        var total = Math.max(0, Math.round(h * 3600));
+        var hh = Math.floor(total / 3600);
+        var mm = Math.floor((total % 3600) / 60);
+        var ss = total % 60;
+        return hh + "时" + mm + "分" + ss + "秒";
+      }
+
       // 数据由 Rust 端每秒 emit "hover_data" 推送
       function render(s) {
         document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
-        document.getElementById("worked").textContent = s.worked_str || s.worked_h.toFixed(1) + "h";
-        document.getElementById("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
+        document.getElementById("worked").textContent = fmtDur(s.worked_h);
+        document.getElementById("toff").textContent = s.is_workday
+          ? s.off_work ? "已下班" : fmtDur(s.to_off_h)
+          : "休息中";
         document.getElementById("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
         document.getElementById("pay").textContent = s.days_to_pay + " 天";
         var now = new Date();
