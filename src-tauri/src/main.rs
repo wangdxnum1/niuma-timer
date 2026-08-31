@@ -114,6 +114,65 @@ fn apply_monitor_switches(cfg: &config::Config) {
     }
 }
 
+/// 每秒刷新托盘实时状态（已赚¥ / 距下班 / 距发薪日）。仅 UI 刷新，无副作用，
+/// 从主循环抽离以便独立调频率或单元测试。
+fn refresh_tray(apph: &tauri::AppHandle, state: &AppState) {
+    let st = get_status(state);
+    tray::update_tray(apph, &st);
+}
+
+/// 跨天检测：日期变化（last_date 落后）时重拉当年节假日缓存。
+/// 低频调用即可，无需秒级——托盘 UI 每秒仍按实时日期正常显示。
+fn maybe_rollover_day(state: &AppState, apph: &tauri::AppHandle) {
+    let today = Local::now().date_naive();
+    let need_refresh = {
+        let mut last = state.last_date.lock().unwrap();
+        if *last != today {
+            *last = today;
+            true
+        } else {
+            false
+        }
+    };
+    if need_refresh {
+        spawn_holiday_refresh(apph.clone());
+    }
+}
+
+/// 加班锁屏检测：last_lock_timestamp 变化且开启加班、且为工作日时，计算并落盘加班记录。
+/// 原耦合在 1s 主循环里每秒轮询，现抽到低频业务线程，减少无谓的每秒锁竞争与计算。
+fn maybe_record_overtime_lock(state: &AppState) {
+    let cfg = state.config.lock().unwrap().clone();
+    if !cfg.overtime_enabled {
+        return;
+    }
+    let Some(lock_ts) = lock_monitor::last_lock_timestamp() else {
+        return;
+    };
+    let mut seen = state.last_lock_seen.lock().unwrap();
+    if *seen == Some(lock_ts) {
+        return;
+    }
+    *seen = Some(lock_ts);
+    drop(seen);
+
+    let now = Local::now();
+    let is_workday = state
+        .holiday
+        .lock()
+        .unwrap()
+        .is_workday(now.date_naive())
+        .unwrap_or_else(|| now.weekday().num_days_from_monday() < 5);
+    if !is_workday {
+        return;
+    }
+    if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
+        if let Some(record) = overtime::calc_record(now.date_naive(), lt, &cfg) {
+            overtime::upsert_record(record);
+        }
+    }
+}
+
 #[tauri::command]
 async fn refresh_holidays(
     state: State<'_, AppState>,
@@ -374,55 +433,28 @@ fn main() {
             // 启动即拉一次节假日
             spawn_holiday_refresh(apph.clone());
 
-            // 每秒刷新一轮
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                let state = apph.state::<AppState>();
-                let today = Local::now().date_naive();
-                {
-                    let mut last = state.last_date.lock().unwrap();
-                    if *last != today {
-                        *last = today;
-                        drop(last);
-                        // 跨天：重新拉取节假日（加班/活动数据均按日期落 SQLite，无需归档）
-                        spawn_holiday_refresh(apph.clone());
-                    }
-                }
-                let st = get_status(state.inner());
-                tray::update_tray(&apph, &st);
+            // 托盘 UI 刷新：独立 1s 循环，仅做实时状态显示（已赚¥/距下班/距发薪），
+            // 与下方业务轮询解耦，方便单独调频率或替换实现。
+            {
+                let apph = apph.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let state = apph.state::<AppState>();
+                    refresh_tray(&apph, state.inner());
+                });
+            }
 
-                // ---- 加班锁屏检测 ----
-                let cfg = state.config.lock().unwrap().clone();
-                if cfg.overtime_enabled {
-                    if let Some(lock_ts) = lock_monitor::last_lock_timestamp() {
-                        let mut seen = state.last_lock_seen.lock().unwrap();
-                        if *seen != Some(lock_ts) {
-                            *seen = Some(lock_ts);
-                            drop(seen);
-
-                            let now = Local::now();
-                            let is_workday = state
-                                .holiday
-                                .lock()
-                                .unwrap()
-                                .is_workday(now.date_naive())
-                                .unwrap_or_else(|| {
-                                    now.weekday().num_days_from_monday() < 5
-                                });
-
-                            if is_workday {
-                                if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
-                                    if let Some(record) =
-                                        overtime::calc_record(now.date_naive(), lt, &cfg)
-                                    {
-                                        overtime::upsert_record(record);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            // 业务轮询：跨天检测 + 加班锁屏检测，低频（无需秒级）。
+            // 与 UI 刷新分离后，锁屏→记加班的延迟从 ≤1s 放宽到 ≤5s，对加班统计无影响。
+            {
+                let apph = apph.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let state = apph.state::<AppState>();
+                    maybe_rollover_day(state.inner(), &apph);
+                    maybe_record_overtime_lock(state.inner());
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
