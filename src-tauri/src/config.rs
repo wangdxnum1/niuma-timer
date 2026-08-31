@@ -48,6 +48,14 @@ pub struct Config {
     #[serde(default)]
     pub weekend_overtime: bool,
 
+    // ---- 应用使用白名单 ----
+    /// 仅统计白名单内应用（关闭或空名单=统计全部前台应用，兼容现状）
+    #[serde(default)]
+    pub app_whitelist_enabled: bool,
+    /// 应用名白名单（展示名，大小写不敏感）；仅当 app_whitelist_enabled=true 且非空时生效
+    #[serde(default)]
+    pub app_whitelist: Vec<String>,
+
     // ---- 功能监控开关（关闭后对应线程空转，几乎不占 CPU）----
     /// 鼠标键盘活动监控
     #[serde(default = "default_true")]
@@ -97,6 +105,8 @@ impl Default for Config {
             overtime_meal_enabled: true,
             overtime_meal: 20.0,
             weekend_overtime: false,
+            app_whitelist_enabled: false,
+            app_whitelist: Vec::new(),
             monitor_activity: true,
             monitor_app_usage: true,
             monitor_audio: true,

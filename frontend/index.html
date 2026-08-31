@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=10" />
+    <link rel="stylesheet" href="styles.css?v=11" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -209,6 +209,22 @@
           <input id="weekend_overtime" type="checkbox" class="switch" />
         </label>
       </section>
+
+      <section class="card">
+        <h2>应用使用白名单</h2>
+        <label class="switch-row">
+          <span>仅统计白名单内应用</span>
+          <input id="app_whitelist_enabled" type="checkbox" class="switch" />
+        </label>
+        <p class="hint">关闭或名单为空 = 统计全部前台应用；开启后只统计下方列出的应用（按展示名、大小写不敏感，如「微信」「钉钉」「VS Code」）</p>
+        <div class="wl-editor">
+          <div class="wl-input-row">
+            <input id="appWhitelistInput" type="text" placeholder="输入应用名后点添加" />
+            <button id="appWhitelistAdd" class="primary wl-add">添加</button>
+          </div>
+          <div id="appWhitelistList" class="wl-list"></div>
+        </div>
+      </section>
     </div>
 
     <!-- 二级页面：加班每日明细 -->
@@ -328,6 +344,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=10"></script>
+    <script src="app.js?v=11"></script>
   </body>
 </html>

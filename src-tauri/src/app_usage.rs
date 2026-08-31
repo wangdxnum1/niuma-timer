@@ -167,6 +167,29 @@ pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
 
+/// 应用使用白名单（设置页可维护）：开启且名单非空时，仅名单内应用计入使用统计。
+pub static WHITELIST_ENABLED: AtomicBool = AtomicBool::new(false);
+static WHITELIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// 运行时切换应用白名单（启动与保存配置时调用，立即生效）
+pub fn set_whitelist(enabled: bool, list: Vec<String>) {
+    WHITELIST_ENABLED.store(enabled, Ordering::SeqCst);
+    *WHITELIST.lock().unwrap() = list;
+}
+
+/// 当前应用是否纳入统计：未开启白名单或名单为空 → 统计全部；否则按展示名（大小写不敏感）匹配。
+fn in_whitelist(display: &str) -> bool {
+    if !WHITELIST_ENABLED.load(Ordering::Relaxed) {
+        return true;
+    }
+    let list = WHITELIST.lock().unwrap();
+    if list.is_empty() {
+        return true;
+    }
+    let d = display.to_lowercase();
+    list.iter().any(|w| w.to_lowercase() == d)
+}
+
 /// 重新开启监控时调用：把当前前台窗口立即纳入统计，无需等下次窗口切换
 pub fn refresh_foreground() {
     unsafe {
@@ -469,6 +492,11 @@ fn update_cur_app(hwnd: HWND) {
         return;
     }
     let display = display_name_of(&exe_path, &exe_name);
+    // 白名单过滤：开启且不在名单内 → 不纳入统计（CUR_APP 置空，tick 不会累加该时段）
+    if !in_whitelist(&display) {
+        *CUR_APP.lock().unwrap() = None;
+        return;
+    }
     ensure_icon(&display, &exe_path);
     *CUR_APP.lock().unwrap() = Some(CurApp { display });
 }

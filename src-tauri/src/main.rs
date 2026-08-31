@@ -108,6 +108,8 @@ fn apply_monitor_switches(cfg: &config::Config) {
     activity::set_enabled(cfg.monitor_activity);
     app_usage::set_enabled(cfg.monitor_app_usage);
     audio_usage::set_enabled(cfg.monitor_audio);
+    // 应用使用白名单（开启后只统计名单内应用）
+    app_usage::set_whitelist(cfg.app_whitelist_enabled, cfg.app_whitelist.clone());
     // 重开时把当前前台窗口立即纳入统计
     if cfg.monitor_app_usage {
         app_usage::refresh_foreground();

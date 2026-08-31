@@ -586,3 +586,59 @@ button:hover {
   width: 64px;
 }
 
+/* ---- 应用使用白名单编辑器 ---- */
+.wl-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+.wl-input-row {
+  display: flex;
+  gap: 8px;
+}
+.wl-input-row input {
+  flex: 1;
+}
+.wl-add {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.wl-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 20px;
+}
+.wl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #14161c;
+  border: 1px solid #2a2e3a;
+  border-radius: 14px;
+  padding: 4px 6px 4px 10px;
+  font-size: 12px;
+  color: #e6e8ef;
+}
+.wl-chip .wl-rm {
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: #8a90a2;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 3px;
+  border-radius: 50%;
+}
+.wl-chip .wl-rm:hover {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.12);
+}
+.wl-empty {
+  color: #5a6070;
+  font-size: 12px;
+  margin: 0;
+}
+

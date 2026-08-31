@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-08-21.v10";
+const FE_VER = "2026-08-31.v11";
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -49,6 +49,8 @@ async function load() {
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
     $("overtime_meal").value = cfg.overtime_meal ?? 20;
     $("weekend_overtime").checked = !!cfg.weekend_overtime;
+    $("app_whitelist_enabled").checked = !!cfg.app_whitelist_enabled;
+    renderWhitelist(cfg.app_whitelist || []);
     $("monitor_activity").checked = cfg.monitor_activity !== false;
     $("monitor_app_usage").checked = cfg.monitor_app_usage !== false;
     $("monitor_audio").checked = cfg.monitor_audio !== false;
@@ -73,6 +75,84 @@ function syncMonitorState() {
   monitors.audio = $("monitor_audio").checked;
 }
 
+// ---- 应用使用白名单（设置页可维护）----
+// 从 DOM 列表读取当前白名单（去重、去空、大小写规范化仅用于判等，展示名原样保留）
+function readWhitelist() {
+  const out = [];
+  const seen = new Set();
+  document.querySelectorAll("#appWhitelistList .wl-chip-text").forEach((el) => {
+    const v = (el.textContent || "").trim();
+    const k = v.toLowerCase();
+    if (v && !seen.has(k)) {
+      seen.add(k);
+      out.push(v);
+    }
+  });
+  return out;
+}
+
+// 渲染白名单列表为可删除 chip；空列表显示提示
+function renderWhitelist(list) {
+  const box = $("appWhitelistList");
+  if (!box) return;
+  box.innerHTML = "";
+  const seen = new Set();
+  const items = (list || [])
+    .map((x) => (x || "").trim())
+    .filter((x) => {
+      const k = x.toLowerCase();
+      if (!x || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  if (items.length === 0) {
+    box.innerHTML = '<p class="wl-empty">名单为空：当前统计全部应用</p>';
+    return;
+  }
+  for (const name of items) box.appendChild(makeChip(name));
+}
+
+function makeChip(name) {
+  const chip = document.createElement("span");
+  chip.className = "wl-chip";
+  const txt = document.createElement("span");
+  txt.className = "wl-chip-text";
+  txt.textContent = name;
+  const rm = document.createElement("button");
+  rm.className = "wl-rm";
+  rm.textContent = "×";
+  rm.title = "移除";
+  rm.addEventListener("click", () => {
+    chip.remove();
+    if ($("appWhitelistList").children.length === 0) renderWhitelist([]);
+    saveNow();
+  });
+  chip.appendChild(txt);
+  chip.appendChild(rm);
+  return chip;
+}
+
+function addWhitelistItem() {
+  const input = $("appWhitelistInput");
+  const v = (input.value || "").trim();
+  if (!v) return;
+  const k = v.toLowerCase();
+  let dup = false;
+  document.querySelectorAll("#appWhitelistList .wl-chip-text").forEach((el) => {
+    if ((el.textContent || "").trim().toLowerCase() === k) dup = true;
+  });
+  if (dup) {
+    input.value = "";
+    return;
+  }
+  const box = $("appWhitelistList");
+  if (box.querySelector(".wl-empty")) box.innerHTML = "";
+  box.appendChild(makeChip(v));
+  input.value = "";
+  input.focus();
+  saveNow();
+}
+
 function readCfg() {
   return {
     monthly_salary: parseFloat($("monthly_salary").value) || 0,
@@ -95,6 +175,8 @@ function readCfg() {
     monitor_app_usage: $("monitor_app_usage").checked,
     monitor_audio: $("monitor_audio").checked,
     weekend_overtime: $("weekend_overtime").checked,
+    app_whitelist_enabled: $("app_whitelist_enabled").checked,
+    app_whitelist: readWhitelist(),
     last_holiday_year: 0,
   };
 }
@@ -615,6 +697,15 @@ $("overtime_enabled").addEventListener("change", () => {
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
 $("weekend_overtime").addEventListener("change", saveNow);
+// 应用使用白名单：开关立即保存；添加按钮/回车新增 chip 并保存
+$("app_whitelist_enabled").addEventListener("change", saveNow);
+$("appWhitelistAdd").addEventListener("click", addWhitelistItem);
+$("appWhitelistInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addWhitelistItem();
+  }
+});
 // 监控开关：立即保存（后端即时生效）+ 同步内存状态刷新首页卡片
 ["monitor_activity", "monitor_app_usage", "monitor_audio"].forEach((id) =>
   $(id).addEventListener("change", () => {
