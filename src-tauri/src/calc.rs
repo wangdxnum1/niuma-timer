@@ -198,3 +198,104 @@ pub fn compute(
         icon_text,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn format_duration_variants() {
+        assert_eq!(format_duration(0.0, "hms"), "0秒");
+        assert_eq!(format_duration(60.0, "hms"), "1小时0分0秒");
+        assert_eq!(format_duration(65.0, "hms"), "1小时5分0秒");
+        assert_eq!(format_duration(5.0, "hms"), "5分0秒");
+        assert_eq!(format_duration(5.5, "hms"), "5分30秒");
+        assert_eq!(format_duration(60.0, "hm"), "1小时0分");
+        assert_eq!(format_duration(5.0, "hm"), "5分");
+        assert_eq!(format_duration(60.0, "x"), "1.0h");
+        assert_eq!(format_duration(-10.0, "hms"), "0秒");
+    }
+
+    #[test]
+    fn to_min_variants() {
+        assert!(approx(to_min("09:00"), 540.0));
+        assert!(approx(to_min("18:30"), 1110.0));
+        assert!(approx(to_min("9"), 540.0));
+        assert!(approx(to_min("abc"), 0.0));
+        assert!(approx(to_min(""), 0.0));
+        assert!(approx(to_min("9:"), 0.0));
+    }
+
+    #[test]
+    fn overlap_variants() {
+        assert!(approx(overlap(100.0, 0.0, 200.0), 100.0));
+        assert!(approx(overlap(0.0, 0.0, 200.0), 0.0));
+        assert!(approx(overlap(300.0, 0.0, 200.0), 200.0));
+        assert!(approx(overlap(50.0, 100.0, 200.0), 0.0));
+        assert!(approx(overlap(150.0, 100.0, 200.0), 50.0));
+    }
+
+    #[test]
+    fn daily_hours_default_and_custom() {
+        assert!(approx(daily_hours(&Config::default()), 8.0));
+        let mut cfg = Config::default();
+        cfg.am_start = "10:00".into();
+        cfg.am_end = "12:00".into();
+        cfg.pm_start = "13:00".into();
+        cfg.pm_end = "17:30".into();
+        assert!(approx(daily_hours(&cfg), 6.5));
+    }
+
+    #[test]
+    fn days_to_payday_variants() {
+        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), 10), 9);
+        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), 10), 0);
+        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(), 10), 26);
+        // 发薪日超过当月天数 → 钳到月末
+        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap(), 31), 13);
+        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 31), 29);
+    }
+
+    #[test]
+    fn compute_workday_morning() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        let now = Local
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(10, 0, 0).unwrap()))
+            .single()
+            .unwrap();
+        let st = compute(&cfg, true, 22, now);
+        assert!(st.is_workday);
+        assert!(!st.off_work);
+        assert!(approx(st.worked_h, 1.0));
+        assert!(approx(st.to_off_h, 8.0));
+        assert!(approx(st.daily_hours, 8.0));
+        let hourly = 15000.0 / (22.0 * 8.0);
+        assert!(approx(st.hourly_rate, hourly));
+        assert!(approx(st.rate_per_min, hourly / 60.0));
+        assert!(approx(st.earned, hourly));
+        assert_eq!(st.days_to_pay, 22);
+        assert_eq!(st.worked_str, "1小时0分0秒");
+        assert_eq!(st.to_off_str, "8小时0分0秒");
+    }
+
+    #[test]
+    fn compute_restday_gating() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
+        let now = Local
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(10, 0, 0).unwrap()))
+            .single()
+            .unwrap();
+        let st = compute(&cfg, false, 22, now);
+        assert!(!st.is_workday);
+        assert!(!st.off_work);
+        assert!(approx(st.to_off_h, 0.0));
+        assert_eq!(st.to_off_str, "今天休息");
+    }
+}

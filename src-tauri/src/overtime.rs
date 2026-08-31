@@ -317,3 +317,127 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
         Err(_) => MonthlyOvertime::default(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// 构造本地下班时刻（锁屏离开时刻）
+    fn lock_dt(y: i32, m: u32, d: u32, hh: u32, mm: u32) -> DateTime<Local> {
+        let date = NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        Local
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(hh, mm, 0).unwrap()))
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn calc_valid_hours_rounds_down() {
+        // 不足 1h → 0；>=1h 向下取 0.5h
+        assert!(approx(calc_valid_hours(0.5), 0.0));
+        assert!(approx(calc_valid_hours(0.99), 0.0));
+        assert!(approx(calc_valid_hours(1.0), 1.0));
+        assert!(approx(calc_valid_hours(1.3), 1.0));
+        assert!(approx(calc_valid_hours(1.6), 1.5));
+        assert!(approx(calc_valid_hours(2.0), 2.0));
+        assert!(approx(calc_valid_hours(2.4), 2.0));
+        assert!(approx(calc_valid_hours(2.6), 2.5));
+        assert!(approx(calc_valid_hours(3.0), 3.0));
+        assert!(approx(calc_valid_hours(8.9), 8.5));
+    }
+
+    #[test]
+    fn to_min_option() {
+        assert!(approx(to_min("18:00").expect("some"), 1080.0));
+        assert!(approx(to_min("18:30").expect("some"), 1110.0));
+        assert!(to_min("abc").is_none());
+        assert!(to_min("18:xx").is_none());
+        assert!(to_min("18").is_none());
+    }
+
+    #[test]
+    fn format_hm_basic() {
+        assert_eq!(format_hm(540.0), "09:00");
+        assert_eq!(format_hm(1110.0), "18:30");
+        assert_eq!(format_hm(60.0), "01:00");
+        assert_eq!(format_hm(0.0), "00:00");
+    }
+
+    #[test]
+    fn parse_lock_datetime_basic() {
+        assert!(parse_lock_datetime("2026-08-19", "20:30").is_some());
+        assert!(parse_lock_datetime("2026-08-19", "25:00").is_none());
+        assert!(parse_lock_datetime("2026-13-01", "20:30").is_none());
+        assert!(parse_lock_datetime("2026-08-19", "20").is_none());
+    }
+
+    #[test]
+    fn compute_record_weekday_valid() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(); // 周三
+        let r = compute_record(date, lock_dt(2026, 8, 19, 20, 30), "18:00", &cfg)
+            .expect("应生成记录");
+        assert_eq!(r.date, "2026-08-19");
+        assert_eq!(r.lock_time, "20:30");
+        assert_eq!(r.ot_start, "18:00");
+        assert!(approx(r.raw_hours, 2.5));
+        assert!(approx(r.valid_hours, 2.5));
+        assert!(approx(r.fee, 50.0)); // 2.5 * 20
+        assert!(approx(r.meal, 20.0)); // 默认开启饭补
+        assert!(approx(r.total, 70.0));
+    }
+
+    #[test]
+    fn compute_record_short_overtime_none() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        // 18:30 离开，加班 0.5h < 1h → 无有效记录
+        assert!(compute_record(date, lock_dt(2026, 8, 19, 18, 30), "18:00", &cfg).is_none());
+    }
+
+    #[test]
+    fn compute_record_weekend_disabled_none() {
+        let cfg = Config::default(); // weekend_overtime=false
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
+        assert!(compute_record(date, lock_dt(2026, 8, 22, 22, 0), "18:00", &cfg).is_none());
+    }
+
+    #[test]
+    fn compute_record_weekend_enabled_some() {
+        let mut cfg = Config::default();
+        cfg.weekend_overtime = true;
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
+        let r = compute_record(date, lock_dt(2026, 8, 22, 22, 0), "18:00", &cfg)
+            .expect("周末开启应生成");
+        assert!(approx(r.valid_hours, 4.0));
+        assert!(approx(r.fee, 80.0));
+        assert!(approx(r.total, 100.0));
+    }
+
+    #[test]
+    fn compute_record_custom_start() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        // 自定义起算 19:00，20:30 离开 → 1.5h
+        let r = compute_record(date, lock_dt(2026, 8, 19, 20, 30), "19:00", &cfg).expect("应生成");
+        assert_eq!(r.ot_start, "19:00");
+        assert!(approx(r.raw_hours, 1.5));
+        assert!(approx(r.valid_hours, 1.5));
+        assert!(approx(r.fee, 30.0));
+        assert!(approx(r.total, 50.0));
+    }
+
+    #[test]
+    fn calc_record_defaults_to_pm_end() {
+        let cfg = Config::default(); // overtime_start=None → 用 pm_end 18:00
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        let r = calc_record(date, lock_dt(2026, 8, 19, 20, 0), &cfg).expect("应生成");
+        assert_eq!(r.ot_start, "18:00");
+        assert!(approx(r.valid_hours, 2.0));
+    }
+}
