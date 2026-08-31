@@ -150,14 +150,10 @@ pub fn conn() -> &'static Mutex<Connection> {
     C.get_or_init(|| {
         let dir = crate::config::config_dir();
         let _ = fs::create_dir_all(&dir);
-        eprintln!("[diag] conn: dir={:?} db={:?}", dir, db_path());
         let db = Connection::open(db_path()).expect("无法打开 niuma.db");
-        eprintln!("[diag] conn: opened");
         let _ = db.busy_timeout(Duration::from_secs(5));
         let _ = db.pragma_update(None, "journal_mode", "WAL");
-        eprintln!("[diag] conn: wal set");
         migrate_db(&db);
-        eprintln!("[diag] conn: schema ok");
         Mutex::new(db)
     })
 }

@@ -363,16 +363,13 @@ fn main() {
         .append_invoke_initialization_script(INVOKE_SHIM)
         .manage(AppState::default())
         .setup(|app| {
-            eprintln!("[diag] setup begin");
             // 初始化 SQLite（WAL + 建表）并一次性迁移旧 JSON 数据。
             // 必须在 activity::start() 之前：start 内部 load_today 要从 SQLite 恢复当天统计。
             db::migrate_legacy();
-            eprintln!("[diag] setup: migrate done");
 
             // 历史应用名归一化（英文 FileDescription → 中文常用名），
             // 必须在 app_usage::start() / audio_usage::start() 写入新数据之前。
             db::normalize_app_names();
-            eprintln!("[diag] setup: normalize names done");
 
             // 载入本地节假日缓存
             {

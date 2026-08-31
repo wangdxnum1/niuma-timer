@@ -12,7 +12,7 @@
 //! audio_usage 靠「音频输出」判定媒体播放，两者并列、各自明细。
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{Local, Timelike};
@@ -207,10 +207,6 @@ pub struct AudioUsageSummary {
 
 /// 今日媒体播放汇总
 pub fn summary() -> AudioUsageSummary {
-    // 后端侧证据：首次 + 此后每 150 次调用（约 5 分钟）记一条 debug.log，
-    // 用于证明前端确实调到了本命令、以及返回的数据长什么样（排查空卡问题）。
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
-    let call_no = CALLS.fetch_add(1, Ordering::Relaxed);
     let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
     let g = crate::db::conn().lock().unwrap();
 
@@ -250,19 +246,6 @@ pub fn summary() -> AudioUsageSummary {
     }
 
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
-    if call_no == 0 || call_no % 150 == 0 {
-        let top = apps
-            .first()
-            .map(|a| format!("{}={}s", a.app, a.seconds))
-            .unwrap_or_else(|| "empty".into());
-        crate::db::debug_log(&format!(
-            "backend audio summary #{}: apps={} [{}] watch_ok={}",
-            call_no,
-            apps.len(),
-            top,
-            watch_ok
-        ));
-    }
     AudioUsageSummary {
         date,
         apps,
