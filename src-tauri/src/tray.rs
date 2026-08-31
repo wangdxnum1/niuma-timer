@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -44,6 +44,26 @@ const HOVER_SHOW_DELAY_MS: u64 = 400;
 /// 延迟显示是否待执行：进入托盘后置 true，离开或被取消后置 false。
 /// 延迟计时器据此判断是否还应弹出卡片。
 static SHOW_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// 上次点击托盘的时间戳（毫秒）：点击后进入冷却期，期间抑制悬停卡片自动
+/// 显示，避免"右键弹出系统菜单 → 鼠标仍停在托盘上触发 Enter → 卡片重新
+/// 弹出遮挡菜单"的竞争。
+static LAST_CLICK_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 点击冷却期（毫秒）：右键/左键点击托盘后，该时长内不自动弹出悬停卡片。
+const CLICK_COOLDOWN_MS: u64 = 1500;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 是否处于点击冷却期：距上次点击不足 CLICK_COOLDOWN_MS
+fn in_click_cooldown() -> bool {
+    now_ms().saturating_sub(LAST_CLICK_MS.load(Ordering::Relaxed)) < CLICK_COOLDOWN_MS
+}
 
 /// 延迟计时器是否已在运行（防重复启动）：一个计时期内只跑一个线程。
 static SHOW_TIMER_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -133,8 +153,11 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
         // 左键只产生 Click/DoubleClick 事件，右键仍正常弹菜单
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
+            // 点击任意菜单项时立即收掉悬停卡片，双保险防止卡片残留
+            hide_hover_card_instant(app);
             if event.id == MenuId::new("settings") {
                 if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
                     let _ = w.show();
                     let _ = w.set_focus();
                 }
@@ -152,6 +175,13 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                     "[hover_card] Enter 托盘 pos=({:.0},{:.0})",
                     position.x, position.y
                 ));
+                // 点击冷却期：刚点过托盘（可能弹出了系统右键菜单），
+                // 抑制自动显示，防止卡片重新弹出遮挡菜单
+                if in_click_cooldown() {
+                    hover_log("[hover_card] Enter 在点击冷却期内，抑制显示");
+                    SHOW_PENDING.store(false, Ordering::Relaxed);
+                    return;
+                }
                 let apph = tray.app_handle().clone();
                 // 记录进入位置（延迟计时器到点时若鼠标仍在，用它定位）
                 *HOVER_PENDING_POS.lock().unwrap() = Some(tray_anchor(tray, position));
@@ -161,8 +191,10 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(HOVER_SHOW_DELAY_MS));
                         let app2 = apph.clone();
-                        // 到点时校验：仍待显示、且鼠标停留在托盘范围内才弹出
-                        if SHOW_PENDING.load(Ordering::Relaxed) {
+                        // 到点时校验：仍待显示、不在点击冷却期、且鼠标停留在托盘范围内才弹出
+                        if SHOW_PENDING.load(Ordering::Relaxed)
+                            && !in_click_cooldown()
+                        {
                             let cur = app2.cursor_position().unwrap_or_default();
                             if mouse_near_tray(&app2, cur) {
                                 let anchor =
@@ -206,8 +238,11 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 ..
             } => {
                 hover_log("[tray] 左键双击 → 打开主界面");
+                LAST_CLICK_MS.store(now_ms(), Ordering::Relaxed);
                 hide_hover_card(tray.app_handle());
                 if let Some(w) = tray.app_handle().get_webview_window("main") {
+                    // 最小化状态下 show() 无效，必须先 unminimize 还原窗口
+                    let _ = w.unminimize();
                     let _ = w.show();
                     let _ = w.set_focus();
                     // 延迟再抢一次焦点：绕过 Windows 前台锁定（SetForegroundWindow
@@ -227,6 +262,8 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 hover_log(&format!(
                     "[hover_card] Click({button:?}) → 立即隐藏卡片（与系统 tooltip 一致）"
                 ));
+                // 记录点击时间，进入冷却期（抑制菜单弹出后卡片再次显示）
+                LAST_CLICK_MS.store(now_ms(), Ordering::Relaxed);
                 // 取消待显，避免点击后延迟计时器又把卡片弹出来
                 SHOW_PENDING.store(false, Ordering::Relaxed);
                 hide_hover_card_instant(tray.app_handle());

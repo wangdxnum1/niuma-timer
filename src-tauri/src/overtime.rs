@@ -1,18 +1,10 @@
-//! 加班记录：数据结构、费用计算、overtime.json 持久化。
-
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Mutex;
+//! 加班记录：数据结构、费用计算、SQLite 持久化（ot_records 表）。
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-
-/// 串行化对 overtime.json 的读写（ensure_archived 与 upsert/delete 共享），
-/// 避免跨线程 load-modify-save 互相覆盖导致数据丢失。
-static OT_LOCK: Mutex<()> = Mutex::new(());
 
 /// 单日加班记录
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -251,142 +243,67 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
     if !is_current_month(date) {
         return Err("只能删除当月的数据".to_string());
     }
-    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
-    let _g = OT_LOCK.lock().unwrap();
-    let mut all = load_all();
-    let key = month_key(d);
-    let removed = if let Some(m) = all.get_mut(&key) {
-        let before = m.records.len();
-        m.records.retain(|r| r.date != date);
-        before != m.records.len()
-    } else {
-        false
-    };
-    if !removed {
+    let g = crate::db::conn().lock().unwrap();
+    let n = g
+        .execute("DELETE FROM ot_records WHERE date = ?1", params![date])
+        .map_err(|e| format!("删除失败: {e}"))?;
+    if n == 0 {
         return Err("未找到该日期的加班记录".to_string());
     }
-    save_all(&all);
     Ok(())
 }
 
-// ---- 持久化 ----
+// ---- 持久化（SQLite） ----
 
-fn overtime_path() -> PathBuf {
-    crate::config::config_dir().join("overtime.json")
-}
-
-fn load_all() -> BTreeMap<String, MonthlyOvertime> {
-    let path = overtime_path();
-    if let Ok(s) = fs::read_to_string(&path) {
-        if let Ok(map) = serde_json::from_str::<BTreeMap<String, MonthlyOvertime>>(&s) {
-            return map;
-        }
-    }
-    BTreeMap::new()
-}
-
-fn save_all(map: &BTreeMap<String, MonthlyOvertime>) {
-    let dir = crate::config::config_dir();
-    let _ = fs::create_dir_all(&dir);
-    if let Ok(s) = serde_json::to_string_pretty(map) {
-        let _ = fs::write(overtime_path(), s);
-    }
-}
-
-/// 月份键 "2026-08"
-pub fn month_key(date: NaiveDate) -> String {
-    format!("{:04}-{:02}", date.year(), date.month())
-}
-
-/// 添加或更新某天的加班记录（按日期去重，同日覆盖）
+/// 添加或更新某天的加班记录（date 主键，同日覆盖）
 pub fn upsert_record(record: OvertimeRecord) {
-    let date = NaiveDate::parse_from_str(&record.date, "%Y-%m-%d").ok();
-    let key = match date {
-        Some(d) => month_key(d),
-        None => return,
-    };
-    let _g = OT_LOCK.lock().unwrap();
-    let mut all = load_all();
-    let monthly = all.entry(key).or_default();
-
-    if let Some(r) = monthly.records.iter_mut().find(|r| r.date == record.date) {
-        *r = record;
-    } else {
-        monthly.records.push(record);
-        monthly.records.sort_by(|a, b| a.date.cmp(&b.date));
-    }
-    save_all(&all);
+    let g = crate::db::conn().lock().unwrap();
+    let _ = g.execute(
+        "INSERT OR REPLACE INTO ot_records \
+         (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            record.date,
+            record.lock_time,
+            record.ot_start,
+            record.raw_hours,
+            record.valid_hours,
+            record.fee,
+            record.meal,
+            record.total
+        ],
+    );
 }
 
-/// 获取指定月份的加班记录。
-/// 先查活动文件 overtime.json（当前月），查不到再回退到归档文件
-/// overtime-YYYY-MM.json（历史月），方便将来做历史浏览。
+/// 获取指定月份的加班记录（SQL 按日期前缀过滤，历史月与当月同表，无需归档）。
 pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
-    let key = format!("{:04}-{:02}", year, month);
-    {
-        let _g = OT_LOCK.lock().unwrap();
-        let all = load_all();
-        if let Some(m) = all.get(&key) {
-            return m.clone();
-        }
-    }
-    // 当前文件无此月 → 尝试读归档文件（历史月）
-    let path = archive_path(&key);
-    if let Ok(s) = fs::read_to_string(&path) {
-        if let Ok(m) = serde_json::from_str::<MonthlyOvertime>(&s) {
-            return m;
-        }
-    }
-    MonthlyOvertime::default()
-}
-
-/// 某月归档文件路径：overtime-YYYY-MM.json（与 overtime.json 同目录）
-fn archive_path(key: &str) -> PathBuf {
-    crate::config::config_dir().join(format!("overtime-{}.json", key))
-}
-
-/// 将某月数据写入独立归档文件。成功返回 true。
-fn archive_month(key: &str, monthly: &MonthlyOvertime) -> bool {
-    let dir = crate::config::config_dir();
-    if fs::create_dir_all(&dir).is_err() {
-        return false;
-    }
-    let path = archive_path(key);
-    match serde_json::to_string_pretty(monthly) {
-        Ok(s) => fs::write(&path, s).is_ok(),
-        Err(_) => false,
-    }
-}
-
-/// 跨月自动归档：把 overtime.json 中所有"非当前月份"的数据，
-/// 分别写入 overtime-YYYY-MM.json 独立文件，并从 overtime.json 移除。
-/// 当前月份保留在 overtime.json 中作为活动工作文件。
-///
-/// 触发时机：① 程序启动；② 每秒循环检测到跨天（含跨月）时。
-/// 即便 App 在跨月时段全程运行，也能在次日检测到并归档。
-pub fn ensure_archived() {
-    let cur_key = month_key(Local::now().date_naive());
-    let _g = OT_LOCK.lock().unwrap();
-    let all = load_all();
-    if all.is_empty() {
-        return;
-    }
-    let mut changed = false;
-    let mut remaining: BTreeMap<String, MonthlyOvertime> = BTreeMap::new();
-    for (key, monthly) in all.into_iter() {
-        if key == cur_key {
-            // 当前月：保留在活动文件
-            remaining.insert(key, monthly);
-        } else if archive_month(&key, &monthly) {
-            // 历史月：归档为独立文件
-            changed = true;
-        } else {
-            // 归档失败：保险起见仍留在活动文件，避免数据丢失
-            remaining.insert(key, monthly);
-        }
-    }
-    if changed {
-        save_all(&remaining);
+    let prefix = format!("{:04}-{:02}-", year, month);
+    let g = crate::db::conn().lock().unwrap();
+    let mut stmt = match g.prepare(
+        "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total \
+         FROM ot_records WHERE date LIKE ?1 ORDER BY date",
+    ) {
+        Ok(s) => s,
+        Err(_) => return MonthlyOvertime::default(),
+    };
+    let rows = stmt.query_map(params![format!("{prefix}%")], |r| {
+        Ok(OvertimeRecord {
+            date: r.get(0)?,
+            lock_time: r.get(1)?,
+            ot_start: r.get(2)?,
+            raw_hours: r.get(3)?,
+            valid_hours: r.get(4)?,
+            fee: r.get(5)?,
+            meal: r.get(6)?,
+            total: r.get(7)?,
+        })
+    });
+    match rows {
+        Ok(iter) => MonthlyOvertime {
+            records: iter.filter_map(|r| r.ok()).collect(),
+        },
+        Err(_) => MonthlyOvertime::default(),
     }
 }

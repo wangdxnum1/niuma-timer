@@ -47,6 +47,21 @@ pub struct Config {
     /// 周末加班开关（预留，暂未实现）
     #[serde(default)]
     pub weekend_overtime: bool,
+
+    // ---- 功能监控开关（关闭后对应线程空转，几乎不占 CPU）----
+    /// 鼠标键盘活动监控
+    #[serde(default = "default_true")]
+    pub monitor_activity: bool,
+    /// 应用使用监控
+    #[serde(default = "default_true")]
+    pub monitor_app_usage: bool,
+    /// 媒体播放监控
+    #[serde(default = "default_true")]
+    pub monitor_audio: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_overtime_rate() -> f64 {
@@ -82,6 +97,9 @@ impl Default for Config {
             overtime_meal_enabled: true,
             overtime_meal: 20.0,
             weekend_overtime: false,
+            monitor_activity: true,
+            monitor_app_usage: true,
+            monitor_audio: true,
         }
     }
 }

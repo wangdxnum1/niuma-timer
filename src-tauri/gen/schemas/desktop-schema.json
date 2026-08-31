@@ -189,6 +189,24 @@
           "markdownDescription": "Enables the focus_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_activity_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-activity-summary",
+          "markdownDescription": "Enables the get_activity_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_app_usage_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-app-usage-summary",
+          "markdownDescription": "Enables the get_app_usage_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_audio_usage_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-audio-usage-summary",
+          "markdownDescription": "Enables the get_audio_usage_summary command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_overtime_records command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-overtime-records",
@@ -237,6 +255,12 @@
           "markdownDescription": "Enables the show_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the write_debug_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-debug-log",
+          "markdownDescription": "Enables the write_debug_log command without any pre-configured scope."
+        },
+        {
           "description": "Denies the delete_overtime_record command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-overtime-record",
@@ -247,6 +271,24 @@
           "type": "string",
           "const": "deny-focus-window",
           "markdownDescription": "Denies the focus_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_activity_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-activity-summary",
+          "markdownDescription": "Denies the get_activity_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_app_usage_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-app-usage-summary",
+          "markdownDescription": "Denies the get_app_usage_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_audio_usage_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-audio-usage-summary",
+          "markdownDescription": "Denies the get_audio_usage_summary command without any pre-configured scope."
         },
         {
           "description": "Denies the get_overtime_records command without any pre-configured scope.",
@@ -295,6 +337,12 @@
           "type": "string",
           "const": "deny-show-window",
           "markdownDescription": "Denies the show_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_debug_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-debug-log",
+          "markdownDescription": "Denies the write_debug_log command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

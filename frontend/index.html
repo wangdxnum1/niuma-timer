@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=10" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -42,7 +42,10 @@
     </script>
 
     <div class="app" id="viewMain">
-      <h1>🐎 牛马计时器</h1>
+      <div class="home-head">
+        <h1>🐎 牛马计时器</h1>
+        <button id="settingsBtn" class="ghost settings-btn">⚙ 设置</button>
+      </div>
       <p class="sub">实时计算你今天赚了多少钱</p>
 
       <section class="card live">
@@ -69,6 +72,64 @@
         <div class="ot-actions">
           <button id="otDetailBtn" class="ghost">查看每日明细 ›</button>
         </div>
+      </section>
+
+      <section class="card">
+        <h2>今日活动</h2>
+        <div class="grid">
+          <div><span>左键次数</span><b id="act_left">0</b></div>
+          <div><span>右键次数</span><b id="act_right">0</b></div>
+          <div><span>按键次数</span><b id="act_keys">0</b></div>
+          <div><span>活跃时段</span><b id="act_hours">0h</b></div>
+        </div>
+        <div class="ot-actions">
+          <button id="actDetailBtn" class="ghost">查看活动明细 ›</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>应用使用</h2>
+        <div class="appu-home" id="appuHomeList">
+          <p class="hint">今日暂无应用使用记录</p>
+        </div>
+        <div class="ot-actions">
+          <button id="appuDetailBtn" class="ghost">查看使用明细 ›</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>媒体播放</h2>
+        <div class="appu-home" id="audioHomeList">
+          <p class="hint">今日暂无播放记录</p>
+        </div>
+        <div class="ot-actions">
+          <button id="audioDetailBtn" class="ghost">查看播放明细 ›</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 二级页面：设置 -->
+    <div class="app hidden" id="viewSettings">
+      <div class="page-head">
+        <button id="settingsBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
+        <h2>设置</h2>
+      </div>
+
+      <section class="card">
+        <h2>功能监控</h2>
+        <label class="switch-row">
+          <span>鼠标键盘活动监控</span>
+          <input id="monitor_activity" type="checkbox" class="switch" />
+        </label>
+        <label class="switch-row">
+          <span>应用使用监控</span>
+          <input id="monitor_app_usage" type="checkbox" class="switch" />
+        </label>
+        <label class="switch-row">
+          <span>媒体播放监控</span>
+          <input id="monitor_audio" type="checkbox" class="switch" />
+        </label>
+        <p class="hint">监控在后台持续运行会占用少量 CPU，不需要的功能可关闭，已统计的数据不受影响</p>
       </section>
 
       <section class="card">
@@ -165,6 +226,73 @@
       </section>
     </div>
 
+    <!-- 二级页面：活动统计明细 -->
+    <div class="app hidden" id="viewAct">
+      <div class="page-head">
+        <button id="actBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
+        <h2 id="actTitle">今日活动明细</h2>
+      </div>
+      <section class="card">
+        <h2>逐小时活跃度</h2>
+        <div id="actChart" class="act-chart"></div>
+        <div class="act-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+        <p class="hint" id="actChartHint">金色 = 当前小时；悬停柱子查看该小时详情</p>
+      </section>
+      <section class="card">
+        <h2>鼠标 · 键盘统计</h2>
+        <div class="grid">
+          <div><span>鼠标点击</span><b id="actL">0</b></div>
+          <div><span>其中双击</span><b id="actD">0</b></div>
+          <div><span>右键</span><b id="actR">0</b></div>
+          <div><span>滚轮</span><b id="actW">0</b></div>
+          <div><span>移动次数</span><b id="actM">0</b></div>
+          <div><span>按键次数</span><b id="actK">0</b></div>
+          <div><span>移动距离</span><b id="actP">0</b></div>
+          <div><span>活跃时段</span><b id="actH">0h</b></div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>高频按键 Top 榜</h2>
+        <div id="actTopKeys" class="act-topkeys"></div>
+      </section>
+    </div>
+
+    <!-- 二级页面：应用使用明细 -->
+    <div class="app hidden" id="viewApp">
+      <div class="page-head">
+        <button id="appuBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
+        <h2>今日应用使用</h2>
+      </div>
+      <section class="card">
+        <h2>逐小时使用分布</h2>
+        <div id="appuChart" class="act-chart"></div>
+        <div class="act-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+        <p class="hint">金色 = 当前小时；悬停柱子查看该小时使用时长</p>
+      </section>
+      <section class="card">
+        <h2>各应用今日时长</h2>
+        <div id="appuList" class="act-topkeys"></div>
+      </section>
+    </div>
+
+    <!-- 二级页面：媒体播放明细 -->
+    <div class="app hidden" id="viewAudio">
+      <div class="page-head">
+        <button id="audioBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
+        <h2>今日媒体播放</h2>
+      </div>
+      <section class="card">
+        <h2>逐小时播放分布</h2>
+        <div id="audioChart" class="act-chart"></div>
+        <div class="act-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+        <p class="hint">金色 = 当前小时；悬停柱子查看该小时播放时长</p>
+      </section>
+      <section class="card">
+        <h2>各软件今日播放时长</h2>
+        <div id="audioList" class="act-topkeys"></div>
+      </section>
+    </div>
+
     <!-- 加班添加/编辑弹窗（居中 modal，日期与下班时间自动预填） -->
     <div id="otForm" class="modal hidden">
       <div class="modal-backdrop"></div>
@@ -196,6 +324,6 @@
       </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=10"></script>
   </body>
 </html>

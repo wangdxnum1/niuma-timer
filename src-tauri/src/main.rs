@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
+mod app_usage;
+mod audio_usage;
 mod calc;
 mod config;
+mod db;
 mod holiday;
 mod icon_render;
 mod lock_monitor;
@@ -88,8 +92,25 @@ fn load_config(state: State<AppState>) -> config::Config {
 fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: config::Config) {
     *state.config.lock().unwrap() = cfg.clone();
     config::save(&cfg);
+    // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
+    apply_monitor_switches(&cfg);
     let st = get_status(state.inner());
     tray::update_tray(&app, &st);
+}
+
+/// 把配置里的三个监控开关同步到各监控模块（启动时与保存配置后调用）。
+/// app_usage 在关闭前先 tick() 结算一次，避免丢掉最后一段已使用时长。
+fn apply_monitor_switches(cfg: &config::Config) {
+    if !cfg.monitor_app_usage {
+        app_usage::shutdown();
+    }
+    activity::set_enabled(cfg.monitor_activity);
+    app_usage::set_enabled(cfg.monitor_app_usage);
+    audio_usage::set_enabled(cfg.monitor_audio);
+    // 重开时把当前前台窗口立即纳入统计
+    if cfg.monitor_app_usage {
+        app_usage::refresh_foreground();
+    }
 }
 
 #[tauri::command]
@@ -125,10 +146,12 @@ fn hide_window(app: tauri::AppHandle) {
     }
 }
 
-/// 显示并设置焦点到主窗口
+/// 显示主窗口：还原最小化 + 显示 + 抢焦点
+/// （最小化状态下 show() 是无效操作，必须先 unminimize）
 #[tauri::command]
 fn show_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -138,6 +161,7 @@ fn show_window(app: tauri::AppHandle) {
 #[tauri::command]
 fn focus_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
         let _ = w.set_focus();
     }
 }
@@ -171,6 +195,30 @@ fn delete_overtime_record(
     Ok(overtime::get_month(now.year(), now.month()).to_view())
 }
 
+/// 获取今日鼠标/键盘活动统计（逐小时 + 汇总 + 高频按键）
+#[tauri::command]
+fn get_activity_summary() -> activity::ActivitySummary {
+    activity::summary()
+}
+
+/// 获取今日应用使用时长统计（各应用累计 + 24 小时分布）
+#[tauri::command]
+fn get_app_usage_summary() -> app_usage::AppUsageSummary {
+    app_usage::summary()
+}
+
+/// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）
+#[tauri::command]
+fn get_audio_usage_summary() -> audio_usage::AudioUsageSummary {
+    audio_usage::summary()
+}
+
+/// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
+#[tauri::command]
+fn write_debug_log(msg: String) {
+    crate::db::debug_log(&msg);
+}
+
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -196,6 +244,52 @@ if (!window.__TAURI__) {
 }
 "#;
 
+/// 修复任务栏图标模糊：
+/// tauri-codegen 生成默认窗口图标时只解码 icon.ico 的**第一个图层**（本项目为 16×16），
+/// 底层 tao 又把这同一张小图设为 ICON_BIG——任务栏在高 DPI 下放大 16px 位图必然发糊。
+/// （托盘图标是运行时 SDF 动态绘制、资源管理器读的是完整多尺寸 ico，所以那两处清晰。）
+/// 此处改为从 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
+/// 分别加载 ICON_BIG / ICON_SMALL 并 WM_SETICON 覆盖，Windows 自动挑选最贴合的图层。
+#[cfg(windows)]
+unsafe fn set_window_icons_from_resource(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{HINSTANCE, LPARAM, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, SM_CXICON,
+        SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
+    };
+
+    let Ok(hmod) = GetModuleHandleW(None) else {
+        return;
+    };
+    let hinst = HINSTANCE(hmod.0);
+    // MAKEINTRESOURCEW(32512)
+    let name = PCWSTR(32512usize as *const u16);
+    let mut dpi = GetDpiForWindow(hwnd);
+    if dpi == 0 {
+        dpi = 96;
+    }
+
+    let set_icon = |wparam: u32, cx: _, cy: _| {
+        let (cx, cy) = (
+            GetSystemMetricsForDpi(cx, dpi).max(1),
+            GetSystemMetricsForDpi(cy, dpi).max(1),
+        );
+        if let Ok(h) = LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) {
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(wparam as usize)),
+                Some(LPARAM(h.0 as isize)),
+            );
+        }
+    };
+    set_icon(ICON_BIG, SM_CXICON, SM_CYICON);
+    set_icon(ICON_SMALL, SM_CXSMICON, SM_CYSMICON);
+}
+
 fn main() {
     tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
@@ -209,6 +303,17 @@ fn main() {
         .append_invoke_initialization_script(INVOKE_SHIM)
         .manage(AppState::default())
         .setup(|app| {
+            eprintln!("[diag] setup begin");
+            // 初始化 SQLite（WAL + 建表）并一次性迁移旧 JSON 数据。
+            // 必须在 activity::start() 之前：start 内部 load_today 要从 SQLite 恢复当天统计。
+            db::migrate_legacy();
+            eprintln!("[diag] setup: migrate done");
+
+            // 历史应用名归一化（英文 FileDescription → 中文常用名），
+            // 必须在 app_usage::start() / audio_usage::start() 写入新数据之前。
+            db::normalize_app_names();
+            eprintln!("[diag] setup: normalize names done");
+
             // 载入本地节假日缓存
             {
                 let year = Local::now().year();
@@ -216,11 +321,16 @@ fn main() {
                     *app.state::<AppState>().holiday.lock().unwrap() = c;
                 }
             }
+            // 修复任务栏图标模糊：用 exe 内嵌多尺寸 ico 按 DPI 重新设置窗口图标
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window("main") {
+                if let Ok(hwnd) = w.hwnd() {
+                    unsafe { set_window_icons_from_resource(hwnd) };
+                }
+            }
+
             // 创建托盘
             let _tray = tray::create_tray(app)?;
-
-            // 跨月自动归档：把历史月数据拆成 overtime-YYYY-MM.json 独立文件
-            overtime::ensure_archived();
 
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
@@ -236,6 +346,18 @@ fn main() {
 
             // 启动锁屏监听线程（Windows session notification）
             lock_monitor::start();
+
+            // 按配置初始化三个监控开关（关闭的线程空转不计数）
+            apply_monitor_switches(&app.state::<AppState>().config.lock().unwrap().clone());
+
+            // 启动鼠标/键盘活动统计（全局低级钩子，常驻托盘即持续统计）
+            activity::start();
+
+            // 启动应用使用时长监控（前台窗口事件钩子，统计微信等白名单应用）
+            app_usage::start();
+
+            // 启动媒体播放时长监控（音频会话峰值轮询，统计正在发声的软件）
+            audio_usage::start();
 
             // 窗口关闭仅隐藏，不退出程序
             if let Some(w) = app.get_webview_window("main") {
@@ -261,10 +383,8 @@ fn main() {
                     if *last != today {
                         *last = today;
                         drop(last);
-                        // 跨天：重新拉取节假日
+                        // 跨天：重新拉取节假日（加班/活动数据均按日期落 SQLite，无需归档）
                         spawn_holiday_refresh(apph.clone());
-                        // 跨天也可能跨月：把已结束的月份归档为独立文件
-                        overtime::ensure_archived();
                     }
                 }
                 let st = get_status(state.inner());
@@ -314,8 +434,23 @@ fn main() {
             focus_window,
             get_overtime_records,
             save_overtime_record,
-            delete_overtime_record
+            delete_overtime_record,
+            get_activity_summary,
+            get_app_usage_summary,
+            get_audio_usage_summary,
+            write_debug_log
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据
+            if let tauri::RunEvent::Exit = event {
+                activity::shutdown();
+                app_usage::shutdown();
+                audio_usage::shutdown();
+            }
+        });
+    // [frontend-v3] 前端资源版本标记：改 frontend/ 下任何文件后，
+    // 必须同步改动本注释以触发 cargo 重编本 crate，否则 generate_context! 宏
+    // 不会重跑，exe 里嵌入的仍是旧 HTML/CSS/JS（cargo 增量编译不感知前端文件变化）。
 }

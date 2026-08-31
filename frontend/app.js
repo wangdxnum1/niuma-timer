@@ -3,6 +3,31 @@
 const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
+// 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
+const FE_VER = "2026-08-21.v10";
+
+// 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
+// 日志失败自身不抛错，绝不影响主流程。
+function flog(msg) {
+  try {
+    window.__TAURI_INTERNALS__.invoke("write_debug_log", {
+      msg: FE_VER + " " + msg,
+    }).catch(() => {});
+  } catch (_) {}
+}
+
+// 全局兜底：未捕获 JS 异常也进日志（否则 WebView2 里用户根本看不到）
+window.addEventListener("error", function (ev) {
+  flog(
+    "JS ERROR: " +
+      ev.message +
+      " @" +
+      (ev.filename || "?") +
+      ":" +
+      (ev.lineno || "?")
+  );
+});
+
 const $ = (id) => document.getElementById(id);
 
 async function load() {
@@ -23,9 +48,14 @@ async function load() {
     $("overtime_rate").value = cfg.overtime_rate ?? 20;
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
     $("overtime_meal").value = cfg.overtime_meal ?? 20;
+    $("monitor_activity").checked = cfg.monitor_activity !== false;
+    $("monitor_app_usage").checked = cfg.monitor_app_usage !== false;
+    $("monitor_audio").checked = cfg.monitor_audio !== false;
+    syncMonitorState();
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
   } catch (e) {
+    flog("load_config ERR: " + (e && e.message ? e.message : String(e)));
     console.error(e);
   }
 }
@@ -33,6 +63,14 @@ async function load() {
 // ---- 自动保存（控件失去焦点时触发）----
 let lastSaved = null; // 上次成功保存的配置 JSON 快照，用于去重
 let lastOverride = null; // 上次保存的上班天数，用于判断是否需静默刷新工作日数据
+
+// 三个监控开关的内存状态（同步自配置；关闭时对应卡片显示停用提示并跳过轮询）
+let monitors = { activity: true, app_usage: true, audio: true };
+function syncMonitorState() {
+  monitors.activity = $("monitor_activity").checked;
+  monitors.app_usage = $("monitor_app_usage").checked;
+  monitors.audio = $("monitor_audio").checked;
+}
 
 function readCfg() {
   return {
@@ -52,6 +90,9 @@ function readCfg() {
     overtime_rate: parseFloat($("overtime_rate").value) || 0,
     overtime_meal_enabled: $("overtime_meal_enabled").checked,
     overtime_meal: parseFloat($("overtime_meal").value) || 0,
+    monitor_activity: $("monitor_activity").checked,
+    monitor_app_usage: $("monitor_app_usage").checked,
+    monitor_audio: $("monitor_audio").checked,
     weekend_overtime: false,
     last_holiday_year: 0,
   };
@@ -292,6 +333,263 @@ async function deleteOtRecord(date) {
   }
 }
 
+// ---- 活动统计（鼠标/键盘）----
+
+// 像素 → 可读距离：96dpi 下 1 英寸 = 96px，1 米 ≈ 3779.5px
+function fmtDist(px) {
+  if (px == null || px < 1000) return (px || 0) + "px";
+  const m = px / 3779.5;
+  if (m < 1000) return m.toFixed(0) + "m";
+  return (m / 1000).toFixed(2) + "km";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// 某小时桶的简要描述（tooltip 用）
+function fmtBucket(b, i) {
+  const parts = [];
+  if (b.moves) parts.push("移动 " + b.moves.toLocaleString());
+  if (b.left) parts.push("点击 " + b.left.toLocaleString());
+  if (b.keys) parts.push("按键 " + b.keys.toLocaleString());
+  if (b.wheel) parts.push("滚轮 " + b.wheel + " 次");
+  return i + "时 · " + (parts.length ? parts.join("、") : "无活动");
+}
+
+async function loadActivity() {
+  if (!monitors.activity) {
+    // 已停用：首页卡片显示占位符
+    ["act_left", "act_right", "act_keys", "act_hours"].forEach((id) => ($(id).textContent = "—"));
+    return;
+  }
+  try {
+    const a = await invoke("get_activity_summary");
+    renderActivity(a);
+  } catch (e) {
+    console.error("loadActivity error:", e);
+  }
+}
+
+function renderActivity(a) {
+  const t = a.totals || {};
+  // 主界面汇总卡片
+  $("act_left").textContent = (t.left || 0).toLocaleString();
+  $("act_right").textContent = (t.right || 0).toLocaleString();
+  $("act_keys").textContent = (t.keys || 0).toLocaleString();
+  $("act_hours").textContent = (a.active_hours || 0) + "h";
+  // 二级页明细
+  $("actL").textContent = (t.left || 0).toLocaleString();
+  $("actD").textContent = (t.dbl || 0).toLocaleString();
+  $("actR").textContent = (t.right || 0).toLocaleString();
+  $("actW").textContent = (t.wheel || 0) + " 次 · " + (t.wheel_ticks || 0) + " 格";
+  $("actM").textContent = (t.moves || 0).toLocaleString();
+  $("actK").textContent = (t.keys || 0).toLocaleString();
+  $("actP").textContent = fmtDist(t.pixels);
+  $("actH").textContent = (a.active_hours || 0) + " 小时";
+  renderChart(a.hourly || []);
+  renderTopKeys(a.top_keys || []);
+}
+
+// 逐小时活跃柱状图（纯 CSS，无第三方库）
+function renderChart(hourly) {
+  const el = $("actChart");
+  if (!el) return;
+  const now = new Date().getHours();
+  const max = Math.max(
+    1,
+    ...hourly.map((b) => (b.moves || 0) + (b.left || 0) + (b.keys || 0))
+  );
+  el.innerHTML = "";
+  hourly.forEach((b, i) => {
+    const v =
+      (b.moves || 0) + (b.left || 0) + (b.dbl || 0) + (b.right || 0) +
+      (b.wheel || 0) + (b.mid || 0) + (b.xbtn || 0) + (b.keys || 0);
+    const hgt = v > 0 ? Math.max(5, Math.round((v / max) * 100)) : 2;
+    const d = document.createElement("div");
+    d.className = "bar" + (v > 0 ? "" : " empty") + (i === now ? " cur" : "");
+    d.style.height = hgt + "%";
+    d.title = fmtBucket(b, i);
+    el.appendChild(d);
+  });
+}
+
+// 高频按键 Top 榜
+function renderTopKeys(list) {
+  const el = $("actTopKeys");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!list.length) {
+    el.innerHTML = '<p class="hint">暂无按键数据</p>';
+    return;
+  }
+  const max = list[0].count;
+  for (const k of list) {
+    const row = document.createElement("div");
+    row.className = "tk-row";
+    row.innerHTML =
+      '<span class="tk-key">' + escapeHtml(k.key) + "</span>" +
+      '<div class="tk-bar"><div style="width:' + Math.round((k.count / max) * 100) + '%"></div></div>' +
+      '<span class="tk-count">' + k.count.toLocaleString() + "</span>";
+    el.appendChild(row);
+  }
+}
+
+// ---- 应用使用时长 ----
+
+// 秒数 → "x小时x分 / x分钟 / x秒"
+function fmtDurCN(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return h + "小时" + (m > 0 ? m + "分" : "");
+  if (m > 0) return m + "分钟";
+  return sec + "秒";
+}
+
+async function loadAppUsage() {
+  if (!monitors.app_usage) {
+    showCardHint("appuHomeList", "已在设置中关闭应用使用监控");
+    return;
+  }
+  try {
+    const s = await invoke("get_app_usage_summary");
+    renderAppUsage(s);
+    if (audioLogged.appu < 2) {
+      audioLogged.appu++;
+      const n = s.apps ? s.apps.length : "?";
+      flog("appu ok #" + audioLogged.appu + ": apps=" + n);
+    }
+  } catch (e) {
+    flog("appu ERR: " + (e && e.message ? e.message : String(e)));
+    showCardError("appuHomeList", "应用使用数据加载失败");
+    console.error("loadAppUsage error:", e);
+  }
+}
+
+// 把加载失败渲染到卡片上（不再静默伪装成"无记录"，一眼看出链路断了）
+function showCardError(listId, prefix) {
+  const el = $(listId);
+  if (el) el.innerHTML = '<p class="hint">' + prefix + "（详见 debug.log）</p>";
+}
+
+// 停用/提示类文案渲染到卡片
+function showCardHint(listId, text) {
+  const el = $(listId);
+  if (el) el.innerHTML = '<p class="hint">' + text + "</p>";
+}
+
+// 成功结果只记前几次，防止 2 秒轮询刷爆日志
+const audioLogged = { audio: 0, appu: 0 };
+
+function renderAppUsage(s) {
+  const apps = s.apps || [];
+  // 首页卡片：排行前 6
+  const home = $("appuHomeList");
+  if (home) renderAppRows(home, apps, 6);
+  // 明细页：全部
+  const list = $("appuList");
+  if (list) renderAppRows(list, apps, 0);
+  renderHourChart($("appuChart"), s.hourly || []);
+}
+
+// 应用行：图标 + 软件名 + 进度条 + 时长（按时长降序）。emptyText 自定义空态文案
+function renderAppRows(container, apps, limit, emptyText) {
+  container.innerHTML = "";
+  if (!apps.length) {
+    container.innerHTML =
+      '<p class="hint">' + (emptyText || "今日暂无应用使用记录") + "</p>";
+    return;
+  }
+  const max = Math.max(1, apps[0].seconds);
+  const shown = limit > 0 ? apps.slice(0, limit) : apps;
+  for (const a of shown) {
+    const row = document.createElement("div");
+    row.className = "tk-row appu-row";
+    row.innerHTML =
+      appIconHTML(a) +
+      '<span class="tk-key appu-name" title="' + escapeHtml(a.app) + '">' + escapeHtml(a.app) + "</span>" +
+      '<div class="tk-bar"><div style="width:' + Math.round((a.seconds / max) * 100) + '%"></div></div>' +
+      '<span class="tk-count appu-time">' + fmtDurCN(a.seconds) + "</span>";
+    container.appendChild(row);
+  }
+  if (limit > 0 && apps.length > limit) {
+    const more = document.createElement("p");
+    more.className = "hint";
+    more.textContent = "共 " + apps.length + " 个应用，点「查看使用明细」看全部";
+    container.appendChild(more);
+  }
+}
+
+// 图标：有 data URL 用 <img>，没有则显示首字占位
+function appIconHTML(a) {
+  if (a.icon) {
+    return '<img class="app-icon" src="' + a.icon + '" alt="">';
+  }
+  const ch = (a.app || "?").trim().charAt(0) || "?";
+  return '<span class="app-icon app-icon-fallback">' + escapeHtml(ch) + "</span>";
+}
+
+// 逐小时柱状图（复用 act-chart 样式；hourly 为 24 个秒数，空态文案自定义）
+function renderHourChart(el, hourly) {
+  if (!el) return;
+  const now = new Date().getHours();
+  const max = Math.max(1, ...hourly);
+  el.innerHTML = "";
+  hourly.forEach((sec, i) => {
+    const hgt = sec > 0 ? Math.max(5, Math.round((sec / max) * 100)) : 2;
+    const d = document.createElement("div");
+    d.className = "bar" + (sec > 0 ? "" : " empty") + (i === now ? " cur" : "");
+    d.style.height = hgt + "%";
+    d.title = i + "时 · " + (sec > 0 ? fmtDurCN(sec) : "无使用");
+    el.appendChild(d);
+  });
+}
+
+// ---- 媒体播放（audio_usage）：与「应用使用」完全独立的第二套统计 ----
+async function loadAudioUsage() {
+  if (!monitors.audio) {
+    showCardHint("audioHomeList", "已在设置中关闭媒体播放监控");
+    return;
+  }
+  try {
+    const s = await invoke("get_audio_usage_summary");
+    renderAudioUsage(s);
+    if (audioLogged.audio < 3) {
+      audioLogged.audio++;
+      const top =
+        s.apps && s.apps[0] ? s.apps[0].app + "=" + s.apps[0].seconds + "s" : "empty";
+      flog(
+        "audio ok #" +
+          audioLogged.audio +
+          ": apps=" +
+          (s.apps ? s.apps.length : "?") +
+          " [" +
+          top +
+          "] watch_ok=" +
+          s.watch_ok
+      );
+    }
+  } catch (e) {
+    flog("audio ERR: " + (e && e.message ? e.message : String(e)));
+    showCardError("audioHomeList", "媒体播放数据加载失败");
+    console.error("loadAudioUsage error:", e);
+  }
+}
+
+function renderAudioUsage(s) {
+  const apps = s.apps || [];
+  // 首页卡片：排行前 6
+  const home = $("audioHomeList");
+  if (home) renderAppRows(home, apps, 6, "今日暂无播放记录");
+  // 明细页：全部
+  const list = $("audioList");
+  if (list) renderAppRows(list, apps, 0, "今日暂无播放记录");
+  renderHourChart($("audioChart"), s.hourly || []);
+}
+
 // 文本/数字/时间控件：失去焦点时自动保存
 [
   "monthly_salary",
@@ -315,6 +613,17 @@ $("overtime_enabled").addEventListener("change", () => {
   loadOvertime();
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
+// 监控开关：立即保存（后端即时生效）+ 同步内存状态刷新首页卡片
+["monitor_activity", "monitor_app_usage", "monitor_audio"].forEach((id) =>
+  $(id).addEventListener("change", () => {
+    syncMonitorState();
+    saveNow();
+    // 立即刷新一次对应卡片（显示数据或停用提示）
+    if (id === "monitor_activity") loadActivity();
+    else if (id === "monitor_app_usage") loadAppUsage();
+    else loadAudioUsage();
+  }),
+);
 $("refreshBtn").addEventListener("click", refresh);
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);
@@ -329,6 +638,18 @@ function showView(id) {
 }
 $("otDetailBtn").addEventListener("click", () => showView("viewOt"));
 $("otBackBtn").addEventListener("click", () => showView("viewMain"));
+// 主界面 ↔ 活动明细二级页面切换
+$("actDetailBtn").addEventListener("click", () => showView("viewAct"));
+$("actBackBtn").addEventListener("click", () => showView("viewMain"));
+// 主界面 ↔ 应用使用明细二级页面切换
+$("appuDetailBtn").addEventListener("click", () => showView("viewApp"));
+$("appuBackBtn").addEventListener("click", () => showView("viewMain"));
+// 主界面 ↔ 媒体播放明细二级页面切换
+$("audioDetailBtn").addEventListener("click", () => showView("viewAudio"));
+$("audioBackBtn").addEventListener("click", () => showView("viewMain"));
+// 主界面 ↔ 设置二级页面切换
+$("settingsBtn").addEventListener("click", () => showView("viewSettings"));
+$("settingsBackBtn").addEventListener("click", () => showView("viewMain"));
 
 // 关闭窗口：若有未保存改动先落盘再隐藏，不丢数据
 async function closeWindow() {
@@ -363,12 +684,17 @@ async function showWindow() {
 }
 
 async function boot() {
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=8 = 新前端；旧值 = 缓存没刷新）
+  flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
   const shownAt = Date.now();
   try { await load(); } catch (e) { console.error("load", e); }
   try { await tick(); } catch (e) { console.error("tick", e); }
   try { await loadOvertime(); } catch (e) { console.error("ot", e); }
+  try { await loadActivity(); } catch (e) { console.error("act", e); }
+  try { await loadAppUsage(); } catch (e) { console.error("appu", e); }
+  try { await loadAudioUsage(); } catch (e) { console.error("audio", e); }
   // 节假日刷新在后台进行，不阻塞启动页
   refresh();
   // 启动页至少显示 2 秒
@@ -381,3 +707,9 @@ boot();
 setInterval(tick, 1000);
 // 加班记录每 10 秒刷新（锁屏=下班离开事件可能随时产生新记录）
 setInterval(loadOvertime, 10000);
+// 活动统计每 2 秒刷新（命令内部会先刷内存计数，点击/按键后近实时可见）
+setInterval(loadActivity, 2000);
+// 应用使用每 2 秒刷新（10 秒结算一次，2 秒轮询保证切回后尽快看到新值）
+setInterval(loadAppUsage, 2000);
+// 媒体播放每 2 秒刷新（5 秒结算一次，口径同上）
+setInterval(loadAudioUsage, 2000);
