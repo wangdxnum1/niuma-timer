@@ -88,6 +88,41 @@ CREATE TABLE IF NOT EXISTS audio_usage_hourly (
 );
 "#;
 
+/// 当前数据库 schema 版本。每次 schema 变更递增，旧库启动时会按版本逐步迁移。
+const CURRENT_DB_VERSION: i32 = 1;
+
+/// 按 `user_version` 执行数据库迁移（幂等、可重入）。
+///
+/// - 新库（user_version=0）：建全部表并置版本为 1；
+/// - 旧库（user_version<当前）：按版本差逐步执行迁移语句，最后更新版本号；
+/// - 已是最新：直接返回，不碰表。
+///
+/// 未来新增列/改表只需在下方 `if version < N` 分支追加对应 ALTER/CREATE，
+/// 旧用户升级时即可平滑迁移，无需 `DROP TABLE` 重建丢数据。
+fn migrate_db(db: &Connection) {
+    let version: i32 = db
+        .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+        .unwrap_or(0);
+    if version >= CURRENT_DB_VERSION {
+        return;
+    }
+    eprintln!("[db] 数据库迁移：当前版本 {version} → 目标 {CURRENT_DB_VERSION}");
+
+    // v0 → v1：建立初始全部数据表（IF NOT EXISTS 保证旧库表已存在时幂等）
+    if version < 1 {
+        db.execute_batch(SCHEMA)
+            .expect("初始化数据库表失败");
+    }
+    // 未来迁移示例（取消注释并改版本号即可扩展）：
+    // if version < 2 {
+    //     db.execute_batch("ALTER TABLE ot_records ADD COLUMN xxx REAL")
+    //         .expect("迁移 ot_records 失败");
+    // }
+
+    db.execute_batch(&format!("PRAGMA user_version = {CURRENT_DB_VERSION}"))
+        .expect("设置数据库版本失败");
+}
+
 fn db_path() -> PathBuf {
     crate::config::config_dir().join("niuma.db")
 }
@@ -121,7 +156,7 @@ pub fn conn() -> &'static Mutex<Connection> {
         let _ = db.busy_timeout(Duration::from_secs(5));
         let _ = db.pragma_update(None, "journal_mode", "WAL");
         eprintln!("[diag] conn: wal set");
-        db.execute_batch(SCHEMA).expect("初始化数据库表失败");
+        migrate_db(&db);
         eprintln!("[diag] conn: schema ok");
         Mutex::new(db)
     })
