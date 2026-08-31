@@ -1,7 +1,11 @@
 //! Windows 锁屏检测：后台线程创建隐藏消息窗口，
 //! 通过 WTSRegisterSessionNotification 接收 WM_WTSSESSION_CHANGE，
-//! 收到 WTS_SESSION_LOCK 时记录时间戳。
+//! 收到 WTS_SESSION_LOCK 时记录时间戳，并维护全局「离开(AWAY)」状态。
+//!
+//! AWAY 状态供「应用使用」「键鼠活动」等时间类统计在锁屏后暂停，
+//! 避免把锁屏界面 / 解锁输入误记为工作活动。媒体播放（听歌）不受影响。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use chrono::Local;
 
@@ -18,9 +22,20 @@ use windows::Win32::System::RemoteDesktop::{
 const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
 /// WTS_SESSION_LOCK = 0x7，定义在 wtsapi32.h
 const WTS_SESSION_LOCK: u32 = 0x7;
+/// WTS_SESSION_UNLOCK = 0x8
+const WTS_SESSION_UNLOCK: u32 = 0x8;
 
 /// 最近一次锁屏的 Unix 时间戳（秒）
 static LAST_LOCK_TIME: Mutex<Option<i64>> = Mutex::new(None);
+
+/// 全局「离开」状态：锁屏时为 true，解锁为 false。
+/// 供 app_usage / activity 在锁屏后暂停时间类统计。
+static AWAY: AtomicBool = AtomicBool::new(false);
+
+/// 查询当前是否处于「离开」（锁屏）状态
+pub fn is_away() -> bool {
+    AWAY.load(Ordering::Relaxed)
+}
 
 /// 查询最近一次锁屏时间戳
 pub fn last_lock_timestamp() -> Option<i64> {
@@ -71,9 +86,16 @@ extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_WTSSESSION_CHANGE {
-        if wparam.0 as u32 == WTS_SESSION_LOCK {
-            let now = Local::now().timestamp();
-            *LAST_LOCK_TIME.lock().unwrap() = Some(now);
+        match wparam.0 as u32 {
+            WTS_SESSION_LOCK => {
+                AWAY.store(true, Ordering::Relaxed);
+                let now = Local::now().timestamp();
+                *LAST_LOCK_TIME.lock().unwrap() = Some(now);
+            }
+            WTS_SESSION_UNLOCK => {
+                AWAY.store(false, Ordering::Relaxed);
+            }
+            _ => {}
         }
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }

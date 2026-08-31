@@ -534,6 +534,10 @@ fn tick() {
     if delta < 1 {
         return;
     }
+    // 锁屏离开后不统计应用使用时间（基准已在上面刷新，解锁后从当前时刻起算，无跳变）
+    if crate::lock_monitor::is_away() {
+        return;
+    }
     // 关闭期间不累计（基准已在上面刷新，重开时从当前时刻起算，无跳变）
     if !ENABLED.load(Ordering::Relaxed) {
         return;

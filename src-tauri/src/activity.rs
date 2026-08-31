@@ -370,6 +370,10 @@ unsafe fn hook_thread() {
 
 unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if ncode >= 0 {
+        // 锁屏离开后不统计活动，避免解锁输入污染活动数据
+        if crate::lock_monitor::is_away() {
+            return CallNextHookEx(None, ncode, wparam, lparam);
+        }
         // 任意鼠标事件都刷新「最后输入时间」（移动/按键/滚轮均算活跃）
         note_input();
         if !ENABLED.load(Ordering::Relaxed) {
@@ -433,6 +437,10 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
 
 unsafe extern "system" fn kb_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if ncode >= 0 {
+        // 锁屏离开后不统计活动，避免解锁输入污染活动数据
+        if crate::lock_monitor::is_away() {
+            return CallNextHookEx(None, ncode, wparam, lparam);
+        }
         // 键盘事件同样视为活跃输入
         note_input();
         if !ENABLED.load(Ordering::Relaxed) {
