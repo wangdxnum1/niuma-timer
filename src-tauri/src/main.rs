@@ -450,7 +450,7 @@ fn main() {
                 audio_usage::shutdown();
             }
         });
-    // [frontend-v3] 前端资源版本标记：改 frontend/ 下任何文件后，
-    // 必须同步改动本注释以触发 cargo 重编本 crate，否则 generate_context! 宏
-    // 不会重跑，exe 里嵌入的仍是旧 HTML/CSS/JS（cargo 增量编译不感知前端文件变化）。
+    // 前端资源自动重编：build.rs 用 frontend 目录内容指纹注入
+    // `cargo:rustc-env=TAURI_FRONTEND_FP`，内容一变即触发本 crate 重编、
+    // generate_context! 重跑并重新嵌入最新 HTML/CSS/JS，无需手动改动任何标记。
 }
