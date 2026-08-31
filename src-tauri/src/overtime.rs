@@ -1,6 +1,6 @@
 //! 加班记录：数据结构、费用计算、SQLite 持久化（ot_records 表）。
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Weekday};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -124,6 +124,12 @@ fn compute_record(
     ot_start_str: &str,
     cfg: &Config,
 ) -> Option<OvertimeRecord> {
+    // 周末加班受配置开关约束：周六/周日且未开启 weekend_overtime 时不计入加班。
+    // 按自然周几判断；调休补班日暂按周末处理（加班计算未接入 holiday 日类型）。
+    if !cfg.weekend_overtime && matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        return None;
+    }
+
     let ot_start_min = to_min(ot_start_str)?;
 
     let lock_min = lock_time.hour() as f64 * 60.0
@@ -207,6 +213,10 @@ pub fn save_manual(
         .map_err(|_| "日期格式错误".to_string())?;
     if !is_current_month(&input.date) {
         return Err("只能添加或修改当月的数据".to_string());
+    }
+    // 周末加班受开关约束：手动录入周末且未开启开关时给出明确提示
+    if !cfg.weekend_overtime && matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        return Err("周末加班功能未开启，请在设置中开启「周末加班」".to_string());
     }
     let lock_dt = parse_lock_datetime(&input.date, &input.lock_time)
         .ok_or_else(|| "下班时间格式错误，应为 HH:MM".to_string())?;

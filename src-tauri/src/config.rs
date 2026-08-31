@@ -44,7 +44,7 @@ pub struct Config {
     /// 饭补金额（元）
     #[serde(default = "default_overtime_meal")]
     pub overtime_meal: f64,
-    /// 周末加班开关（预留，暂未实现）
+    /// 周末加班开关：周六/周日是否计入加班（默认关闭；开启后周末下班晚也记加班）
     #[serde(default)]
     pub weekend_overtime: bool,
 

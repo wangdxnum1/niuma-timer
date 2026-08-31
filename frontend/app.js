@@ -48,6 +48,7 @@ async function load() {
     $("overtime_rate").value = cfg.overtime_rate ?? 20;
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
     $("overtime_meal").value = cfg.overtime_meal ?? 20;
+    $("weekend_overtime").checked = !!cfg.weekend_overtime;
     $("monitor_activity").checked = cfg.monitor_activity !== false;
     $("monitor_app_usage").checked = cfg.monitor_app_usage !== false;
     $("monitor_audio").checked = cfg.monitor_audio !== false;
@@ -93,7 +94,7 @@ function readCfg() {
     monitor_activity: $("monitor_activity").checked,
     monitor_app_usage: $("monitor_app_usage").checked,
     monitor_audio: $("monitor_audio").checked,
-    weekend_overtime: false,
+    weekend_overtime: $("weekend_overtime").checked,
     last_holiday_year: 0,
   };
 }
@@ -613,6 +614,7 @@ $("overtime_enabled").addEventListener("change", () => {
   loadOvertime();
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
+$("weekend_overtime").addEventListener("change", saveNow);
 // 监控开关：立即保存（后端即时生效）+ 同步内存状态刷新首页卡片
 ["monitor_activity", "monitor_app_usage", "monitor_audio"].forEach((id) =>
   $(id).addEventListener("change", () => {
