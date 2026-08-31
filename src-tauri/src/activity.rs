@@ -25,9 +25,8 @@ use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
-    WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
+    CallNextHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
 };
 
 // ---------------------------------------------------------------------------
@@ -342,20 +341,31 @@ pub fn shutdown() {
 }
 
 unsafe fn hook_thread() {
-    let m = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0);
-    let k = SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_proc), None, 0);
-    match (m, k) {
-        (Ok(_m), Ok(_k)) => {
-            HOOK_OK.store(true, Ordering::SeqCst);
-            crate::win::run_message_loop();
-            let _ = UnhookWindowsHookEx(_m);
-            let _ = UnhookWindowsHookEx(_k);
-        }
-        (Err(e), _) | (_, Err(e)) => {
-            eprintln!("[activity] 全局钩子安装失败: {e}");
+    // 用 RAII 守卫持有钩子：无论后续成功 / 失败 / 退出，离开作用域都会自动
+    // UnhookWindowsHookEx，彻底消除「装鼠标成功、装键盘失败漏卸鼠标」的分支泄漏。
+    // 下划线前缀仅为抑制「未读取」警告；绑定仍活到本函数结束，钩子在整个
+    // 消息循环期间保持安装，结束后才 Drop 卸载。
+    let _mouse = match crate::win::LowLevelHook::install(WH_MOUSE_LL, Some(mouse_proc), "mouse") {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("[activity] 鼠标钩子安装失败: {e}");
             HOOK_OK.store(false, Ordering::SeqCst);
+            return;
         }
-    }
+    };
+    let _keyboard =
+        match crate::win::LowLevelHook::install(WH_KEYBOARD_LL, Some(kb_proc), "keyboard") {
+            Ok(h) => h,
+            Err(e) => {
+                // _mouse 在此处随函数返回自动 Drop → 卸载已成功的鼠标钩子，无残留
+                eprintln!("[activity] 键盘钩子安装失败: {e}");
+                HOOK_OK.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+    HOOK_OK.store(true, Ordering::SeqCst);
+    crate::win::run_message_loop();
+    // _mouse / _keyboard 离开作用域自动 Drop，无需手写 UnhookWindowsHookEx
 }
 
 unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
