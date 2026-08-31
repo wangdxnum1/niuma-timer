@@ -42,9 +42,8 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DispatchMessageW, DrawIconEx, GetForegroundWindow, GetIconInfo, GetMessageW,
-    GetWindowThreadProcessId, TranslateMessage, DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON,
-    ICONINFO, MSG, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    DestroyIcon, DrawIconEx, GetForegroundWindow, GetIconInfo, GetWindowThreadProcessId, DI_NORMAL,
+    EVENT_SYSTEM_FOREGROUND, HICON, ICONINFO, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 /// 挂机阈值：距最后一次真实输入超过该时长（毫秒）→ 前台窗口不算使用中
@@ -516,11 +515,7 @@ unsafe fn watch_thread() {
     if !fg.is_invalid() {
         update_cur_app(fg);
     }
-    let mut msg = MSG::default();
-    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        let _ = TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
+    crate::win::run_message_loop();
     let _ = UnhookWinEvent(h);
 }
 

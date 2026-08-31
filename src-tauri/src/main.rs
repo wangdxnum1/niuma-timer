@@ -11,6 +11,7 @@ mod icon_render;
 mod lock_monitor;
 mod overtime;
 mod tray;
+mod win;
 
 use std::sync::Mutex;
 

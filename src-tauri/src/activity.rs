@@ -25,10 +25,9 @@ use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
-    MSG,
+    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+    WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
 };
 
 // ---------------------------------------------------------------------------
@@ -348,11 +347,7 @@ unsafe fn hook_thread() {
     match (m, k) {
         (Ok(_m), Ok(_k)) => {
             HOOK_OK.store(true, Ordering::SeqCst);
-            let mut msg = MSG::default();
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+            crate::win::run_message_loop();
             let _ = UnhookWindowsHookEx(_m);
             let _ = UnhookWindowsHookEx(_k);
         }

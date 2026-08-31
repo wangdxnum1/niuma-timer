@@ -8,8 +8,7 @@ use chrono::Local;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-    RegisterClassW, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
 use windows::Win32::System::RemoteDesktop::{
     NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
@@ -60,14 +59,7 @@ pub fn start() {
 
         let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
 
-        let mut msg = MSG::default();
-        loop {
-            let r = GetMessageW(&mut msg, None, 0, 0);
-            if !r.as_bool() {
-                break;
-            }
-            let _ = DispatchMessageW(&msg);
-        }
+        crate::win::run_message_loop();
     });
 }
 
