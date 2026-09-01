@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-08-31.v12";
+const FE_VER = "2026-09-01.v13";
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -178,7 +178,6 @@ function readCfg() {
     weekend_overtime: $("weekend_overtime").checked,
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
     app_whitelist: readWhitelist(),
-    last_holiday_year: 0,
   };
 }
 

@@ -16,6 +16,7 @@ mod win;
 use std::sync::Mutex;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
+use serde_json::{from_value, to_value, Value};
 use tauri::{Manager, State};
 
 struct AppState {
@@ -90,11 +91,29 @@ fn load_config(state: State<AppState>) -> config::Config {
 }
 
 #[tauri::command]
-fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: config::Config) {
-    *state.config.lock().unwrap() = cfg.clone();
-    config::save(&cfg);
+fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) {
+    // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
+    // （如 last_holiday_year 等保留字段，以及未来新增字段），避免整份替换把未传字段重置成默认值。
+    let existing = state.config.lock().unwrap().clone();
+    let mut base = to_value(&existing).unwrap_or(Value::Null);
+    if let Some(obj) = base.as_object_mut() {
+        if let Some(incoming) = cfg.as_object() {
+            for (k, v) in incoming {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let merged: config::Config = match from_value(base) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[config] save_config 合并失败，保留原配置: {e}");
+            return;
+        }
+    };
+    *state.config.lock().unwrap() = merged.clone();
+    config::save(&merged);
     // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
-    apply_monitor_switches(&cfg);
+    apply_monitor_switches(&merged);
     let st = get_status(state.inner());
     tray::update_tray(&app, &st);
 }
