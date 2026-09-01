@@ -5,7 +5,8 @@
 //! - 键盘：总按键次数 + 高频按键 Top 榜（按虚拟键码细分）
 //!
 //! 设计要点：
-//! - 钩子回调只做「原子 +1 / 极小锁临界区」，绝不阻塞（LL 钩子要求快速返回）；
+//! - 钩子回调完全锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
+//!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击/键盘一律走原子）；
 //! - 常驻合并线程每 10 秒把原子累计值刷进当天的 24 个「小时桶」并落盘 SQLite；
 //! - 数据落盘到 niuma.db 的 act_hourly / act_keys 表（WAL 模式，崩溃安全）；
 //! - 启动时自动从 SQLite 加载当天数据恢复统计，程序/电脑重启后接着计数，不归零；
@@ -15,7 +16,7 @@
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计）。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -143,10 +144,15 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 钩子回调内调用：记录一次真实输入（原子 store，零阻塞）。
-/// 鼠标任何事件 + 键盘按下都算。
+/// 钩子回调内调用：记录一次真实输入。为减少热路径上的 `SystemTime::now()` 系统调用，
+/// 每 500 次事件才真正读一次时钟——挂机判定用 5 分钟阈值，亚秒级精度完全无影响。
+/// （鼠标/键盘事件每秒可达数百次，逐次读时钟会在系统输入路径上放大开销）
+static INPUT_SEQ: AtomicU64 = AtomicU64::new(0);
 fn note_input() {
-    LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
+    let n = INPUT_SEQ.fetch_add(1, Ordering::Relaxed);
+    if n % 500 == 0 {
+        LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
+    }
 }
 
 /// 查询最近一次输入时刻（毫秒）。app_usage 用它判断挂机阈值。
@@ -154,22 +160,30 @@ pub fn last_input_ms() -> u64 {
     LAST_INPUT_MS.load(Ordering::Relaxed)
 }
 
-/// 鼠标上次位置（首次移动只记录、不累计距离）
-static LAST_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
-/// 左键上次按下 (time, x, y)，用于双击判定
-static LAST_LEFT: Mutex<(u32, i32, i32)> = Mutex::new((0, 0, 0));
+/// 鼠标上次位置（首次移动只记录、不累计距离）。
+/// 用两个原子取代 Mutex：钩子回调每收到 WM_MOUSEMOVE 都会读/写，锁无关才能避免
+/// 在系统输入路径上抢锁带来的卡顿与鼠标漂移。
+static LAST_X: AtomicI32 = AtomicI32::new(i32::MIN);
+static LAST_Y: AtomicI32 = AtomicI32::new(i32::MIN);
 
-/// 键盘状态：按键明细增量 + 每个键上次按下时间（过滤 auto-repeat）
-struct KeyState {
-    /// 钩子回调产生的增量（合并线程消费后清空）
-    pending: BTreeMap<u32, u64>,
-    /// 每个键码上次按下时刻（毫秒，用于去重）
-    last_time: BTreeMap<u32, u32>,
+/// 左键上次按下 (time, x, y)，用于双击判定。同样锁无关（原子三段），按钮按下频率
+/// 远低于移动，开销更可忽略，但避免在输入路径上留任何锁。
+static LAST_LBTN_TIME: AtomicU32 = AtomicU32::new(0);
+static LAST_LBTN_X: AtomicI32 = AtomicI32::new(0);
+static LAST_LBTN_Y: AtomicI32 = AtomicI32::new(0);
+
+/// 键盘状态：每键码(0..=255)一个原子槽，避免 BTreeMap+Mutex 在每次按键时抢锁。
+/// - KEY_LAST_TIME[vk]：该键上次按下时刻（毫秒，过滤自动重复），仅钩子回调写；
+/// - KEY_PENDING[vk]：该键待合并的按键次数，钩子回调 +1、合并线程每 10s swap(0) 取走。
+/// 用 OnceLock 延迟初始化定长原子数组（vkCode 范围 1..=254，256 足够覆盖）。
+fn key_last_time() -> &'static [AtomicU32; 256] {
+    static ARR: OnceLock<[AtomicU32; 256]> = OnceLock::new();
+    ARR.get_or_init(|| std::array::from_fn(|_| AtomicU32::new(0)))
 }
-static KEY_STATE: Mutex<KeyState> = Mutex::new(KeyState {
-    pending: BTreeMap::new(),
-    last_time: BTreeMap::new(),
-});
+fn key_pending() -> &'static [AtomicU64; 256] {
+    static ARR: OnceLock<[AtomicU64; 256]> = OnceLock::new();
+    ARR.get_or_init(|| std::array::from_fn(|_| AtomicU64::new(0)))
+}
 
 /// 当天累计状态（24 小时桶 + 当天按键全量明细）。
 /// 仅用于从旧 JSON 迁移时的反序列化（db.rs），正常读写走 SQLite。
@@ -386,32 +400,40 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
             match msg {
                 WM_MOUSEMOVE => {
                     C_MOVES.fetch_add(1, Ordering::Relaxed);
-                    let mut last = LAST_POS.lock().unwrap();
-                    match *last {
-                        Some((lx, ly)) => {
-                            let (dx, dy) = (info.pt.x - lx, info.pt.y - ly);
-                            if dx != 0 || dy != 0 {
-                                let dist = ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64)
-                                    .sqrt() as u64;
-                                C_PIXELS.fetch_add(dist, Ordering::Relaxed);
-                            }
+                    // 锁无关：原子读旧坐标 → 算距离 → 原子写新坐标（钩子线程独占，无并发，
+                    // 比 Mutex 更快且绝不会在输入路径上引入任何锁等待）。
+                    let (x, y) = (info.pt.x, info.pt.y);
+                    let (px, py) =
+                        (LAST_X.load(Ordering::Relaxed), LAST_Y.load(Ordering::Relaxed));
+                    if px != i32::MIN && py != i32::MIN {
+                        let (dx, dy) = (x - px, y - py);
+                        if dx != 0 || dy != 0 {
+                            let dist = ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64)
+                                .sqrt() as u64;
+                            C_PIXELS.fetch_add(dist, Ordering::Relaxed);
                         }
-                        None => {}
                     }
-                    *last = Some((info.pt.x, info.pt.y));
+                    LAST_X.store(x, Ordering::Relaxed);
+                    LAST_Y.store(y, Ordering::Relaxed);
                 }
                 WM_LBUTTONDOWN => {
                     C_LEFT.fetch_add(1, Ordering::Relaxed);
-                    // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px
+                    // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px。锁无关（原子读三段 + 写三段）。
                     let now = info.time;
-                    let mut last = LAST_LEFT.lock().unwrap();
-                    let dt = now.wrapping_sub(last.0);
-                    let dx = (info.pt.x - last.1).abs();
-                    let dy = (info.pt.y - last.2).abs();
+                    let (lt, lx, ly) = (
+                        LAST_LBTN_TIME.load(Ordering::Relaxed),
+                        LAST_LBTN_X.load(Ordering::Relaxed),
+                        LAST_LBTN_Y.load(Ordering::Relaxed),
+                    );
+                    let dt = now.wrapping_sub(lt);
+                    let dx = (info.pt.x - lx).abs();
+                    let dy = (info.pt.y - ly).abs();
                     if dt > 0 && dt < GetDoubleClickTime() && dx <= 5 && dy <= 5 {
                         C_DBL.fetch_add(1, Ordering::Relaxed);
                     }
-                    *last = (now, info.pt.x, info.pt.y);
+                    LAST_LBTN_TIME.store(now, Ordering::Relaxed);
+                    LAST_LBTN_X.store(info.pt.x, Ordering::Relaxed);
+                    LAST_LBTN_Y.store(info.pt.y, Ordering::Relaxed);
                 }
                 WM_RBUTTONDOWN => {
                     C_RIGHT.fetch_add(1, Ordering::Relaxed);
@@ -450,16 +472,20 @@ unsafe extern "system" fn kb_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) ->
             let p = lparam.0 as *const KBDLLHOOKSTRUCT;
             if !p.is_null() {
                 let info = &*p;
-                let vk = info.vkCode;
-                let now = info.time;
-                let mut ks = KEY_STATE.lock().unwrap();
-                let last = ks.last_time.get(&vk).copied().unwrap_or(0);
-                // 按住自动重复间隔极短（~33ms），正常打字 ≥50ms，据此过滤重复计数
-                if now.wrapping_sub(last) >= 50 {
+                let vk = info.vkCode as usize;
+                // vkCode 越界（罕见扩展键）→ 仅计总数，不做去重/明细
+                if vk < 256 {
+                    let now = info.time;
+                    let last = key_last_time()[vk].load(Ordering::Relaxed);
+                    // 按住自动重复间隔极短（~33ms），正常打字 ≥50ms，据此过滤重复计数
+                    if now.wrapping_sub(last) >= 50 {
+                        C_KEYS.fetch_add(1, Ordering::Relaxed);
+                        key_pending()[vk].fetch_add(1, Ordering::Relaxed);
+                    }
+                    key_last_time()[vk].store(now, Ordering::Relaxed);
+                } else {
                     C_KEYS.fetch_add(1, Ordering::Relaxed);
-                    *ks.pending.entry(vk).or_insert(0) += 1;
                 }
-                *ks.last_time.entry(vk).or_insert(0) = now;
             }
         }
     }
@@ -504,11 +530,13 @@ fn flush_pending_impl(persist: bool) {
     b.xbtn += C_XBTN.swap(0, Ordering::Relaxed);
     b.keys += C_KEYS.swap(0, Ordering::Relaxed);
 
-    let mut ks = KEY_STATE.lock().unwrap();
-    let pending = std::mem::take(&mut ks.pending);
-    drop(ks);
-    for (k, v) in pending {
-        *d.key_detail.entry(k).or_insert(0) += v;
+    // 取走键盘增量：遍历 256 个原子键槽，swap(0) 收归到 key_detail（vkCode 即数组下标）。
+    // 锁无关：合并线程不再与钩子回调在每次按键时抢 KEY_STATE 锁，消除输入卡顿的并发来源。
+    for (vk, slot) in key_pending().iter().enumerate() {
+        let v = slot.swap(0, Ordering::Relaxed);
+        if v > 0 {
+            *d.key_detail.entry(vk as u32).or_insert(0) += v;
+        }
     }
 
     if persist {
