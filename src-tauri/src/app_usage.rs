@@ -149,9 +149,19 @@ pub(crate) const SELF_EXE: &str = "niuma-timer.exe";
 struct CurApp {
     /// 显示名（软件名，如「微信」「钉钉」）
     display: String,
+    /// exe 完整路径（用于懒提取图标，避免在前台切换回调热路径里同步做 GDI+PNG）
+    exe_path: String,
 }
 
 static CUR_APP: Mutex<Option<CurApp>> = Mutex::new(None);
+
+/// 「显示名 → exe 路径」映射：前台切换时填充，供 summary() 查询路径懒提取图标，
+/// 覆盖「仅短暂前台、tick 来不及提取」的边界情况，避免明细里出现首字占位图标。
+/// （HashMap::new 不是 const fn，不能用在 static 直接量里，故用 OnceLock 延迟初始化）
+fn app_exe_map() -> &'static Mutex<HashMap<String, String>> {
+    static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// 上次结算时刻（毫秒），用于按真实时间差累加
 static LAST_TICK_MS: AtomicU64 = AtomicU64::new(0);
@@ -497,8 +507,14 @@ fn update_cur_app(hwnd: HWND) {
         *CUR_APP.lock().unwrap() = None;
         return;
     }
-    ensure_icon(&display, &exe_path);
-    *CUR_APP.lock().unwrap() = Some(CurApp { display });
+    // 注意：图标不再在这里（前台切换回调，热路径）同步提取，改为在 tick() 后台线程懒提取，
+    // 避免 GDI 提取 + PNG 编码 + 落盘阻塞切换识别造成卡顿。
+    // 记录「显示名→exe路径」，供 summary() 懒提取覆盖 tick 未来得及提取的边界情况。
+    app_exe_map()
+        .lock()
+        .unwrap()
+        .insert(display.clone(), exe_path.clone());
+    *CUR_APP.lock().unwrap() = Some(CurApp { display, exe_path });
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +589,8 @@ fn tick() {
     let Some(cur) = CUR_APP.lock().unwrap().clone() else {
         return;
     };
+    // 懒提取当前前台应用图标（后台线程，非热路径）：首次命中时 GDI+PNG 一次，之后走缓存。
+    ensure_icon(&cur.display, &cur.exe_path);
     // 挂机判定：距最后一次输入超过阈值 → 整段不算
     let idle = now.saturating_sub(crate::activity::last_input_ms());
     if idle > IDLE_THRESHOLD_MS {
@@ -650,6 +668,10 @@ pub fn summary() -> AppUsageSummary {
             Ok(rows) => {
                 for row in rows.flatten() {
                     let app = row.0;
+                    // 懒提取：若尚未缓存图标，用记录的 exe 路径补提取（GDI+PNG 一次，幂等）
+                    if let Some(exe) = app_exe_map().lock().unwrap().get(&app).cloned() {
+                        ensure_icon(&app, &exe);
+                    }
                     let icon = cached_icon(&app);
                     apps.push(AppUsageItem {
                         app,

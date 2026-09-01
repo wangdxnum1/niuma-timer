@@ -11,8 +11,9 @@
 //! 与应用使用（app_usage）的关系：完全独立。app_usage 靠「前台窗口 + 输入」判定主动使用，
 //! audio_usage 靠「音频输出」判定媒体播放，两者并列、各自明细。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{Local, Timelike};
@@ -37,6 +38,14 @@ const POLL_INTERVAL_SECS: u64 = 5;
 
 /// 发声判定阈值：会话峰值 > 该值视为正在播放（0.0~1.0 归一化）
 const PEAK_THRESHOLD: f32 = 0.0;
+
+/// 播放中的「显示名 → exe 路径」映射：collect_playing 轮询时填充，
+/// 供 summary() 在查询路径懒提取图标（不再于 5 秒热轮询里同步做 GDI+PNG）。
+/// （HashMap::new 不是 const fn，不能用在 static 直接量里，故用 OnceLock 延迟初始化）
+fn playing_exe() -> &'static Mutex<HashMap<String, String>> {
+    static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 static WATCH_STARTED: AtomicBool = AtomicBool::new(false);
 static WATCH_OK: AtomicBool = AtomicBool::new(false);
@@ -133,7 +142,8 @@ unsafe fn collect_playing() -> Vec<String> {
             continue;
         }
         let display = crate::app_usage::display_name_of(&exe_path, &exe_name);
-        crate::app_usage::ensure_icon(&display, &exe_path);
+        // 不再于热轮询里同步提取图标：只记录「显示名→exe路径」，留给 summary() 懒提取
+        playing_exe().lock().unwrap().insert(display.clone(), exe_path);
         found.insert(display);
     }
     found.into_iter().collect()
@@ -219,6 +229,10 @@ pub fn summary() -> AudioUsageSummary {
         }) {
             for row in rows.flatten() {
                 let app = row.0;
+                // 懒提取：若尚未缓存图标，用轮询时记录的 exe 路径补提取（GDI+PNG 一次，幂等）
+                if let Some(exe) = playing_exe().lock().unwrap().get(&app).cloned() {
+                    crate::app_usage::ensure_icon(&app, &exe);
+                }
                 let icon = crate::app_usage::cached_icon(&app);
                 apps.push(AudioUsageItem {
                     app,
