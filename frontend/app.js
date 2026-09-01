@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-08-31.v11";
+const FE_VER = "2026-08-31.v12";
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -44,6 +44,7 @@ async function load() {
     $("workdays_override").value = cfg.workdays_override ?? "";
     lastOverride = cfg.workdays_override ?? null;
     $("overtime_enabled").checked = !!cfg.overtime_enabled;
+    applyOvertimeVisibility(cfg.overtime_enabled);
     $("overtime_start").value = cfg.overtime_start || "";
     $("overtime_rate").value = cfg.overtime_rate ?? 20;
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
@@ -258,8 +259,16 @@ async function tick() {
   }
 }
 
+// 加班开关关闭时隐藏主界面「加班总览」卡片；已有数据保留在库中不受影响
+function applyOvertimeVisibility(enabled) {
+  const card = $("otCard");
+  if (card) card.style.display = enabled ? "" : "none";
+}
+
 // 加班记录加载与渲染
 async function loadOvertime() {
+  // 加班追踪关闭时不拉取、不展示（历史记录仍保留在 SQLite，开关不影响数据）
+  if (!$("overtime_enabled").checked) return;
   try {
     const ot = await invoke("get_overtime_records");
     renderOt(ot);
@@ -692,8 +701,11 @@ $("tray_hover_card").addEventListener("change", saveNow);
   $(id).addEventListener("blur", saveIfChanged),
 );
 $("overtime_enabled").addEventListener("change", () => {
+  const on = $("overtime_enabled").checked;
+  // 关闭时立即隐藏主界面加班卡片；开启时立即重新拉取并展示
+  applyOvertimeVisibility(on);
   saveNow();
-  loadOvertime();
+  if (on) loadOvertime();
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
 $("weekend_overtime").addEventListener("change", saveNow);
