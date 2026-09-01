@@ -1,57 +1,50 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+//! 托盘悬停卡片状态机（P3 重写）
+//!
+//! 旧实现用 9 个全局 static + 看门狗线程 + 延迟计时器 + 点击冷却 + 分档重发，
+//! 多个线程并发读写同一批状态，难以推理。本版本改为 **actor 模型**：
+//! - 托盘事件 / hover_ready 握手只向通道发送消息，不做任何状态变更；
+//! - 单个工作线程独占 `HoverController`（持有全部状态），用 `recv_timeout`
+//!   统一驱动"延迟显示 / 看门狗轮询 / 淡出兜底 / 分档重发"四类定时任务；
+//! - 空闲时阻塞 `recv`，无空转；状态变更只发生在一个线程，结构上不可能数据竞争。
+//! 前端握手协议（hover_ready / hover_show / hover_hide / hover_data）保持不变。
 
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+use tauri::Emitter;
+use tauri::Listener;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuId, MenuItem};
 use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, App, Emitter, Listener, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{App, AppHandle, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::calc::DayStatus;
 use crate::icon_render::static_icon;
 
 /// 彩色悬停卡片尺寸（逻辑像素）
 const HOVER_CARD_W: f64 = 320.0;
-// 高度留足：内容（大金额 + 2×2 信息格 + 状态行）约 230px，
-// 240 与前端 body 一致，避免底部状态行被挤出圆角框（overflow 溢出到透明背景）
 const HOVER_CARD_H: f64 = 240.0;
 
-/// 是否处于"待隐藏"状态：鼠标已离开托盘、淡出动画进行中。
-/// 用于防止"兜底隐藏线程"误关掉用户重新进入时正在淡入的卡片。
-static HIDE_PENDING: AtomicBool = AtomicBool::new(false);
-
-/// hover_card 窗口懒创建锁：防止托盘事件并发触发重复创建
-static HOVER_CREATING: AtomicBool = AtomicBool::new(false);
-
-/// 最近一次悬停位置缓存：hover_card 页面首次加载完成（hover_ready）后，
-/// 若鼠标仍停留在托盘上，用它补一次定位 + 淡入，避免"首次悬停事件丢失"。
-static HOVER_PENDING_POS: Mutex<Option<PhysicalPosition<f64>>> = Mutex::new(None);
-
-/// 看门狗线程是否已在运行（防重复启动）。
-/// 背景：Windows 托盘 Leave 事件偶发丢失（鼠标快速滑出时），
-/// 一旦丢失卡片会一直残留。因此由看门狗每 150ms 轮询鼠标位置兜底。
-static WATCHDOG_RUNNING: AtomicBool = AtomicBool::new(false);
-
-/// 悬停卡片当前矩形（屏幕物理坐标 x,y,w,h）：用于判断鼠标是否停留在卡片上，
-/// 避免"鼠标从托盘滑入卡片"时因已离开托盘图标而被误隐藏（闪烁）。
-/// 卡片显示时写入，隐藏时清空。
-static HOVER_CARD_RECT: Mutex<Option<(f64, f64, f64, f64)>> = Mutex::new(None);
-
-/// 悬停卡片延迟显示时长（毫秒）：鼠标进入托盘后等待该时长，
-/// 若仍停留在托盘范围内才显示，模仿系统原生 tooltip 的延迟出现效果。
+/// 延迟显示时长（毫秒）：进入托盘后等待该时长，若仍停留才显示，
+/// 模仿系统原生 tooltip 的延迟出现，避免划过托盘就弹窗。
 const HOVER_SHOW_DELAY_MS: u64 = 400;
 
-/// 延迟显示是否待执行：进入托盘后置 true，离开或被取消后置 false。
-/// 延迟计时器据此判断是否还应弹出卡片。
-static SHOW_PENDING: AtomicBool = AtomicBool::new(false);
-
-/// 上次点击托盘的时间戳（毫秒）：点击后进入冷却期，期间抑制悬停卡片自动
-/// 显示，避免"右键弹出系统菜单 → 鼠标仍停在托盘上触发 Enter → 卡片重新
-/// 弹出遮挡菜单"的竞争。
-static LAST_CLICK_MS: AtomicU64 = AtomicU64::new(0);
-
-/// 点击冷却期（毫秒）：右键/左键点击托盘后，该时长内不自动弹出悬停卡片。
+/// 点击冷却期（毫秒）：点击托盘后该时长内不自动弹出卡片，
+/// 避免"右键弹系统菜单 → 鼠标仍停托盘触发 Enter → 卡片重新弹出遮挡菜单"。
 const CLICK_COOLDOWN_MS: u64 = 1500;
+
+/// 看门狗轮询间隔（毫秒）：卡片可见时每 150ms 检查一次鼠标是否离开活动区域。
+const WATCHDOG_INTERVAL_MS: u64 = 150;
+
+/// 卡片与托盘锚点的间隙（像素）：卡片底部距锚点上方留 24px，比系统默认更透气。
+const HOVER_CARD_GAP: f64 = 24.0;
+
+/// 活动区域余量（像素）：判断鼠标是否仍在托盘图标 / 卡片内，防边缘抖动误隐藏。
+const REGION_PAD: f64 = 12.0;
+
+/// hover_show 分档重发延迟（毫秒）：首帧在 do_show 立即发送，
+/// 之后按此序列补发，覆盖 WebView2 冷启动加载期（可达 1s+）。
+const RETRY_DELAYS: &[u64] = &[200, 500, 1000, 1800];
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -59,14 +52,6 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
-
-/// 是否处于点击冷却期：距上次点击不足 CLICK_COOLDOWN_MS
-fn in_click_cooldown() -> bool {
-    now_ms().saturating_sub(LAST_CLICK_MS.load(Ordering::Relaxed)) < CLICK_COOLDOWN_MS
-}
-
-/// 延迟计时器是否已在运行（防重复启动）：一个计时期内只跑一个线程。
-static SHOW_TIMER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 悬停卡片调试日志：写入临时目录（Windows GUI 程序无控制台，eprintln 不可见）。
 /// 路径：%TEMP%\niuma_timer_hover.log
@@ -78,83 +63,528 @@ fn hover_log(msg: &str) {
     }
 }
 
-/// 托盘图标中心锚点缓存：rect() 成功时刷新。即便 rect() 后续偶发失败，
-/// 也用缓存中心定位卡片，避免卡片跟随实时光标左右平移（"抖动"的主因）。
-static TRAY_CENTER: Mutex<Option<PhysicalPosition<f64>>> = Mutex::new(None);
+/// 工作线程收到的消息（全部来自主线程托盘事件 / 前端握手，自身不持有状态）。
+#[derive(Debug)]
+enum HoverMsg {
+    /// 进入托盘（pos 为光标位置，仅作锚点回退用）
+    Enter(PhysicalPosition<f64>),
+    /// 托盘内移动
+    Move(PhysicalPosition<f64>),
+    /// 离开托盘（不立即隐藏，交给看门狗去抖）
+    Leave,
+    /// 单击托盘（立即隐藏，与系统 tooltip 点击即消失一致）
+    Click,
+    /// 左键双击（淡出 + 打开主界面）
+    DoubleClick,
+    /// 前端 hover_card.html 加载完成握手
+    Ready,
+    /// 菜单项点击（仅隐藏，不进入点击冷却，保持与原行为一致）
+    MenuHide,
+}
 
-/// 计算托盘图标中心锚点：卡片水平居中于此（精确居中，不受鼠标进入方向影响）。
-/// Windows 托盘图标很小，rect() 拿不到时退回缓存中心，再不行才退光标位置。
-fn tray_anchor(tray: &TrayIcon, fallback: PhysicalPosition<f64>) -> PhysicalPosition<f64> {
-    if let Ok(Some(r)) = tray.rect() {
-        // tauri 的 Position/Size 是枚举（Physical/Logical），需解包后求中心
-        let (cx, cy) = match (r.position, r.size) {
-            (tauri::Position::Physical(p), tauri::Size::Physical(s)) => (
-                p.x as f64 + s.width as f64 / 2.0,
-                p.y as f64 + s.height as f64 / 2.0,
-            ),
-            (tauri::Position::Logical(p), tauri::Size::Logical(s)) => (
-                p.x + s.width / 2.0,
-                p.y + s.height / 2.0,
-            ),
-            // 混合量纲（罕见）：各自按数值相加即可，误差一个像素量级
-            (tauri::Position::Physical(p), tauri::Size::Logical(s)) => (
-                p.x as f64 + s.width / 2.0,
-                p.y as f64 + s.height / 2.0,
-            ),
-            (tauri::Position::Logical(p), tauri::Size::Physical(s)) => (
-                p.x + s.width as f64 / 2.0,
-                p.y + s.height as f64 / 2.0,
-            ),
-        };
-        let c = PhysicalPosition::new(cx, cy);
-        // 刷新缓存，供 rect() 偶发失败时仍能稳定定位
-        *TRAY_CENTER.lock().unwrap() = Some(c);
-        c
-    } else if let Some(c) = *TRAY_CENTER.lock().unwrap() {
-        // rect 拿不到：优先用缓存中心（托盘位置基本不变），避免卡片跟手抖动
-        c
-    } else {
+/// 卡片阶段：唯一真相来源，所有状态机转移都围绕它。
+#[derive(Default)]
+enum Phase {
+    /// 空闲：卡片未显示、无待显示任务。
+    #[default]
+    Hidden,
+    /// 已进入托盘，等待延迟到期后校验鼠标仍停留才显示。
+    Pending {
+        show_at: Instant,
+    },
+    /// 卡片可见。fading=true 表示正在淡出（看门狗暂停、不重发），
+    /// fade_deadline 为强制隐藏窗口的兜底时刻。
+    Shown {
+        fading: bool,
+        fade_deadline: Option<Instant>,
+    },
+}
+
+/// 悬停卡片控制器：工作线程独占，持有全部可变状态。
+#[derive(Default)]
+struct HoverController {
+    /// 托盘图标中心锚点缓存（rect 偶发失败时退回，避免卡片跟手抖动）
+    tray_center: Option<PhysicalPosition<f64>>,
+    /// 最近一次悬停锚点（hover_ready 补显 + 延迟显示定位用）
+    pending_pos: Option<PhysicalPosition<f64>>,
+    /// 上次点击时间戳（毫秒），用于点击冷却判定
+    last_click_ms: u64,
+    /// 卡片当前屏幕矩形（x,y,w,h），用于"鼠标是否仍在卡片上"判定
+    card_rect: Option<(f64, f64, f64, f64)>,
+    /// 当前阶段
+    phase: Phase,
+    /// 看门狗连续"离开"轮询计数（去抖：连续 2 次确认才隐藏）
+    gone_polls: u32,
+    /// hover_show 分档重发基准时刻与下一档索引
+    retry_base: Option<Instant>,
+    retry_idx: usize,
+}
+
+impl HoverController {
+    /// 是否处于点击冷却期
+    fn in_click_cooldown(&self) -> bool {
+        now_ms().saturating_sub(self.last_click_ms) < CLICK_COOLDOWN_MS
+    }
+
+    /// 计算悬停卡片左上角坐标：水平居中于锚点正上方，按主屏钳制防溢出。
+    fn card_pos(app: &AppHandle, anchor: PhysicalPosition<f64>) -> (f64, f64) {
+        let mut x = anchor.x - HOVER_CARD_W / 2.0;
+        let mut y = anchor.y - HOVER_CARD_H - HOVER_CARD_GAP;
+        if let Ok(Some(m)) = app.primary_monitor() {
+            let size = m.size();
+            let sw = size.width as f64;
+            let sh = size.height as f64;
+            if y < 8.0 {
+                y = anchor.y + 18.0;
+            }
+            if x < 8.0 {
+                x = 8.0;
+            }
+            if x + HOVER_CARD_W > sw - 8.0 {
+                x = sw - HOVER_CARD_W - 8.0;
+            }
+            if y + HOVER_CARD_H > sh - 8.0 {
+                y = sh - HOVER_CARD_H - 8.0;
+            }
+            if y < 8.0 {
+                y = 8.0;
+            }
+        }
+        (x, y)
+    }
+
+    /// 计算托盘图标中心锚点：卡片水平居中于此（精确居中，不随进入方向偏移）。
+    /// rect 成功时刷新缓存；失败退回缓存中心；再不行退光标位置。
+    fn tray_anchor(&mut self, app: &AppHandle, fallback: PhysicalPosition<f64>) -> PhysicalPosition<f64> {
+        if let Some(tray) = app.tray_by_id("main") {
+            if let Ok(Some(r)) = tray.rect() {
+                let (cx, cy) = match (r.position, r.size) {
+                    (tauri::Position::Physical(p), tauri::Size::Physical(s)) => (
+                        p.x as f64 + s.width as f64 / 2.0,
+                        p.y as f64 + s.height as f64 / 2.0,
+                    ),
+                    (tauri::Position::Logical(p), tauri::Size::Logical(s)) => (
+                        p.x + s.width / 2.0,
+                        p.y + s.height / 2.0,
+                    ),
+                    (tauri::Position::Physical(p), tauri::Size::Logical(s)) => (
+                        p.x as f64 + s.width / 2.0,
+                        p.y as f64 + s.height / 2.0,
+                    ),
+                    (tauri::Position::Logical(p), tauri::Size::Physical(s)) => (
+                        p.x + s.width as f64 / 2.0,
+                        p.y + s.height as f64 / 2.0,
+                    ),
+                };
+                let c = PhysicalPosition::new(cx, cy);
+                self.tray_center = Some(c);
+                return c;
+            }
+        }
+        if let Some(c) = self.tray_center {
+            return c;
+        }
         fallback
+    }
+
+    /// 鼠标是否仍在托盘图标范围内（带余量）。rect 拿不到时退回锚点 ±40px；
+    /// 完全未知时返回 true（不误隐藏）。
+    fn mouse_near_tray(&self, app: &AppHandle, pos: PhysicalPosition<f64>) -> bool {
+        const PAD: f64 = REGION_PAD;
+        if let Some(tray) = app.tray_by_id("main") {
+            if let Ok(Some(r)) = tray.rect() {
+                let (rx, ry, rw, rh) = match (r.position, r.size) {
+                    (tauri::Position::Physical(p), tauri::Size::Physical(s)) => (
+                        p.x as f64,
+                        p.y as f64,
+                        s.width as f64,
+                        s.height as f64,
+                    ),
+                    (tauri::Position::Logical(p), tauri::Size::Logical(s)) => {
+                        (p.x, p.y, s.width, s.height)
+                    }
+                    (tauri::Position::Physical(p), tauri::Size::Logical(s)) => {
+                        (p.x as f64, p.y as f64, s.width, s.height)
+                    }
+                    (tauri::Position::Logical(p), tauri::Size::Physical(s)) => {
+                        (p.x, p.y, s.width as f64, s.height as f64)
+                    }
+                };
+                return pos.x >= rx - PAD
+                    && pos.x <= rx + rw + PAD
+                    && pos.y >= ry - PAD
+                    && pos.y <= ry + rh + PAD;
+            }
+        }
+        if let Some(a) = self.pending_pos {
+            return (pos.x - a.x).abs() <= 40.0 && (pos.y - a.y).abs() <= 40.0;
+        }
+        true
+    }
+
+    /// 鼠标是否在"保持卡片可见"的活动区域内：托盘图标内 或 悬停卡片矩形内。
+    fn mouse_in_active_region(&self, app: &AppHandle, pos: PhysicalPosition<f64>) -> bool {
+        if self.mouse_near_tray(app, pos) {
+            return true;
+        }
+        if let Some((cx, cy, cw, ch)) = self.card_rect {
+            const PAD: f64 = REGION_PAD;
+            return pos.x >= cx - PAD
+                && pos.x <= cx + cw + PAD
+                && pos.y >= cy - PAD
+                && pos.y <= cy + ch + PAD;
+        }
+        false
+    }
+
+    /// 显示卡片（淡入 + 首帧 hover_show + 分档重发调度）。幂等：已显示则刷新。
+    fn do_show(&mut self, app: &AppHandle, anchor: PhysicalPosition<f64>) {
+        let cfg = app
+            .state::<crate::AppState>()
+            .config
+            .lock()
+            .unwrap()
+            .clone();
+        if !cfg.tray_hover_card {
+            return;
+        }
+        self.pending_pos = Some(anchor);
+        let Some(w) = ensure_hover_card(app) else {
+            return;
+        };
+        let (x, y) = Self::card_pos(app, anchor);
+        let rect = (x, y, HOVER_CARD_W, HOVER_CARD_H);
+        let prev = self.card_rect;
+        self.card_rect = Some(rect);
+        // 位置未变则不重定位：避免对透明分层窗口反复 set_position 引发抖动/重绘闪烁
+        if prev != Some(rect) {
+            let _ = w.set_position(PhysicalPosition::new(x, y));
+        }
+        let was_visible = w.is_visible().unwrap_or(false);
+        if !was_visible {
+            // show() 不抢焦点（Windows SW_SHOW），避免干扰用户操作
+            let _ = w.show();
+        }
+        // 立即推送一帧数据（此后由 update_tray 每秒续推）
+        let st = crate::get_status(app.state::<crate::AppState>().inner());
+        let _ = w.emit("hover_data", st);
+        // 淡入事件：立即 + 分档重试覆盖 WebView2 首次冷启动加载期；
+        // 页面加载超过重试窗口时，由 hover_ready 握手兜底补显
+        let _ = w.emit("hover_show", ());
+        self.retry_base = Some(Instant::now());
+        self.retry_idx = 0;
+        self.phase = Phase::Shown {
+            fading: false,
+            fade_deadline: None,
+        };
+        self.gone_polls = 0;
+        hover_log(&format!("[hover_card] show pos=({x:.0},{y:.0})"));
+    }
+
+    /// 鼠标离开托盘：播放淡出动画，动画结束后由页面自行隐藏窗口。
+    fn do_hide(&mut self, app: &AppHandle) {
+        self.card_rect = None;
+        if let Some(w) = app.get_webview_window("hover_card") {
+            if w.is_visible().unwrap_or(false) {
+                let _ = w.emit("hover_hide", ());
+                // 兜底：页面动画异常时强制隐藏； fade_deadline 到点由 on_timeout 处理
+                self.phase = Phase::Shown {
+                    fading: true,
+                    fade_deadline: Some(Instant::now() + Duration::from_millis(450)),
+                };
+                hover_log("[hover_card] hide (fade)");
+                return;
+            }
+        }
+        self.phase = Phase::Hidden;
+        self.gone_polls = 0;
+    }
+
+    /// 立即隐藏卡片（不走淡出）：点击托盘时调用，与系统原生 tooltip 点击即消失一致。
+    fn do_hide_instant(&mut self, app: &AppHandle) {
+        self.card_rect = None;
+        self.retry_base = None;
+        self.retry_idx = 0;
+        if let Some(w) = app.get_webview_window("hover_card") {
+            let _ = w.emit("hover_hide", ());
+            let _ = w.hide();
+        }
+        self.phase = Phase::Hidden;
+        self.gone_polls = 0;
+    }
+
+    /// 处理一条消息（全部在 worker 线程，独占 self）
+    fn handle(&mut self, msg: HoverMsg, app: &AppHandle) {
+        match msg {
+            HoverMsg::Enter(pos) => {
+                if self.in_click_cooldown() {
+                    hover_log("[hover_card] Enter 在冷却期，抑制显示");
+                    self.phase = Phase::Hidden;
+                    self.pending_pos = None;
+                    return;
+                }
+                let anchor = self.tray_anchor(app, pos);
+                self.pending_pos = Some(anchor);
+                self.phase = Phase::Pending {
+                    show_at: Instant::now() + Duration::from_millis(HOVER_SHOW_DELAY_MS),
+                };
+                hover_log(&format!(
+                    "[hover_card] Enter pos=({:.0},{:.0})",
+                    pos.x, pos.y
+                ));
+            }
+            HoverMsg::Move(pos) => {
+                if matches!(self.phase, Phase::Pending { .. }) {
+                    // 未显示期间只更新待显位置，真正的显示由延迟计时器统一处理
+                    self.pending_pos = Some(self.tray_anchor(app, pos));
+                } else if matches!(self.phase, Phase::Shown { .. }) {
+                    // 已可见时只刷新实时数据，绝不重复重定位（防抖动）
+                    if let Some(w) = app.get_webview_window("hover_card") {
+                        if w.is_visible().unwrap_or(false) {
+                            let st =
+                                crate::get_status(app.state::<crate::AppState>().inner());
+                            let _ = w.emit("hover_data", st);
+                        }
+                    }
+                }
+            }
+            HoverMsg::Leave => {
+                // 取消待显示；不立即隐藏（Windows 托盘边缘偶发抖动，
+                // 交由看门狗带去抖裁决，避免 Enter/Leave 高频抖动导致闪烁）
+                if matches!(self.phase, Phase::Pending { .. }) {
+                    self.phase = Phase::Hidden;
+                    self.pending_pos = None;
+                }
+                hover_log("[hover_card] Leave");
+            }
+            HoverMsg::Click => {
+                // 记录点击时间（进入冷却期），立即隐藏（与系统 tooltip 一致）
+                self.last_click_ms = now_ms();
+                self.phase = Phase::Hidden;
+                self.pending_pos = None;
+                self.do_hide_instant(app);
+                hover_log("[hover_card] Click → 立即隐藏卡片（与系统 tooltip 一致）");
+            }
+            HoverMsg::DoubleClick => {
+                self.last_click_ms = now_ms();
+                self.do_hide(app);
+                // 打开主界面（最小化状态需先 unminimize）
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    // 延迟再抢一次焦点：绕过 Windows 前台锁定
+                    let w2 = w.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(300));
+                        let _ = w2.set_focus();
+                    });
+                }
+                hover_log("[tray] 左键双击 → 打开主界面");
+            }
+            HoverMsg::Ready => {
+                // 页面就绪：若鼠标仍悬停在托盘上（pending_pos 存在），补一次定位 + 淡入。
+                // 这是"首次悬停事件丢失"的最终兜底，不依赖任何窗口可见性猜测。
+                if let Some(pos) = self.pending_pos {
+                    hover_log("[hover_card] 页面就绪 (hover_ready) → 补显");
+                    self.do_show(app, pos);
+                }
+            }
+            HoverMsg::MenuHide => {
+                // 菜单项点击：仅隐藏，不进入点击冷却（保持与原行为一致）
+                self.phase = Phase::Hidden;
+                self.pending_pos = None;
+                self.do_hide_instant(app);
+                hover_log("[hover_card] Menu 点击 → 立即隐藏卡片");
+            }
+        }
+    }
+
+    /// 定时任务到点（由 recv_timeout 触发）：驱动延迟显示 / 看门狗 / 淡出兜底 / 重发。
+    fn on_timeout(&mut self, app: &AppHandle) {
+        let now = Instant::now();
+        // 复制阶段标记，避免长期借用 self.phase 阻碍调用其他方法
+        let is_pending = matches!(self.phase, Phase::Pending { .. });
+        let is_shown = matches!(self.phase, Phase::Shown { .. });
+        let is_fading = matches!(self.phase, Phase::Shown { fading: true, .. });
+        // 复制定时字段
+        let show_at = if let Phase::Pending { show_at } = &self.phase {
+            Some(*show_at)
+        } else {
+            None
+        };
+        let fade_deadline = if let Phase::Shown { fade_deadline, .. } = &self.phase {
+            *fade_deadline
+        } else {
+            None
+        };
+
+        if is_pending {
+            if let Some(sa) = show_at {
+                if now >= sa {
+                    // 到点：校验仍停留且不在冷却期才显示
+                    if !self.in_click_cooldown() {
+                        if let Ok(cur) = app.cursor_position() {
+                            if self.mouse_near_tray(app, cur) {
+                                let anchor = self.pending_pos.unwrap_or(cur);
+                                self.do_show(app, anchor);
+                                return;
+                            }
+                        }
+                    }
+                    // 条件不满足：取消待显
+                    self.phase = Phase::Hidden;
+                    self.pending_pos = None;
+                }
+            }
+            return;
+        }
+
+        if is_shown {
+            if is_fading {
+                // 淡出兜底：到点强制隐藏窗口
+                if let Some(d) = fade_deadline {
+                    if now >= d {
+                        if let Some(w) = app.get_webview_window("hover_card") {
+                            let _ = w.hide();
+                        }
+                        self.phase = Phase::Hidden;
+                        self.card_rect = None;
+                        self.retry_base = None;
+                        hover_log("[hover_card] fade 兜底强制隐藏");
+                    }
+                }
+                // 淡出中不轮询看门狗、不重发 hover_show
+                return;
+            }
+            // 看门狗：轮询鼠标是否仍在活动区域，连续 2 次离开才隐藏（去抖）
+            match app.cursor_position() {
+                Ok(pos) => {
+                    if self.mouse_in_active_region(app, pos) {
+                        self.gone_polls = 0;
+                    } else {
+                        self.gone_polls += 1;
+                        if self.gone_polls >= 2 {
+                            hover_log(&format!(
+                                "[hover_card] 看门狗: 鼠标持续移出 ({:.0},{:.0})，强制隐藏",
+                                pos.x, pos.y
+                            ));
+                            self.do_hide(app);
+                            self.gone_polls = 0;
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // 取不到光标位置时不动作，避免误隐藏
+                    self.gone_polls = 0;
+                }
+            }
+            // 分档重发 hover_show（覆盖页面冷启动加载期）
+            if let Some(base) = self.retry_base {
+                if self.retry_idx < RETRY_DELAYS.len() {
+                    let t = base + Duration::from_millis(RETRY_DELAYS[self.retry_idx]);
+                    if now >= t {
+                        if let Some(w) = app.get_webview_window("hover_card") {
+                            let _ = w.emit("hover_show", ());
+                        }
+                        self.retry_idx += 1;
+                    }
+                } else {
+                    self.retry_base = None;
+                }
+            }
+        }
+    }
+
+    /// 计算下次唤醒的超时：None 表示空闲（阻塞等待事件）；Some 为最近定时任务时刻。
+    fn next_wakeup(&self) -> Option<Duration> {
+        match &self.phase {
+            Phase::Hidden => None,
+            Phase::Pending { show_at } => {
+                Some(show_at.saturating_duration_since(Instant::now()))
+            }
+            Phase::Shown { fading, fade_deadline } => {
+                let mut min = Duration::from_millis(WATCHDOG_INTERVAL_MS);
+                if *fading {
+                    if let Some(d) = fade_deadline {
+                        min = min.min(d.saturating_duration_since(Instant::now()));
+                    }
+                }
+                if let Some(base) = self.retry_base {
+                    if self.retry_idx < RETRY_DELAYS.len() {
+                        let t = base + Duration::from_millis(RETRY_DELAYS[self.retry_idx]);
+                        min = min.min(t.saturating_duration_since(Instant::now()));
+                    }
+                }
+                Some(min)
+            }
+        }
     }
 }
 
-/// 创建托盘图标、菜单（hover_card 窗口改为首次悬停时懒创建，
-/// 启动路径不再创建额外 WebView2 窗口，杜绝阻塞主窗口渲染）
+/// 启动悬停卡片工作线程（actor）：独占 HoverController，统一裁决所有定时任务。
+/// 通道断开（所有发送端释放）时退出。
+fn spawn_hover_worker(app: AppHandle, rx: mpsc::Receiver<HoverMsg>) {
+    std::thread::spawn(move || {
+        let mut ctrl = HoverController::default();
+        hover_log("[hover_card] 工作线程已启动");
+        loop {
+            match ctrl.next_wakeup() {
+                None => {
+                    // 空闲：阻塞等待事件，无空转
+                    match rx.recv() {
+                        Ok(msg) => ctrl.handle(msg, &app),
+                        Err(_) => break, // 通道关闭
+                    }
+                }
+                Some(timeout) => match rx.recv_timeout(timeout) {
+                    Ok(msg) => ctrl.handle(msg, &app),
+                    Err(mpsc::RecvTimeoutError::Timeout) => ctrl.on_timeout(&app),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+            }
+        }
+    });
+}
+
+/// 创建托盘图标、菜单；悬停卡片窗口首次悬停时懒创建（启动路径不创建额外窗口）。
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "主界面", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新工作日", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&settings, &refresh, &quit])?;
 
-    // 页面就绪握手：hover_card.html 加载完成后 emit "hover_ready"，
-    // 若鼠标仍悬停在托盘上，则补一次定位与淡入（页面加载耗时不定，
-    // 不依赖事件恰好送达的时序，也不用 visibilitychange 猜测窗口状态）
-    let apph = app.handle().clone();
+    let (tx, rx) = mpsc::channel::<HoverMsg>();
+
+    // 前端页面就绪握手：hover_card.html 加载完成后 emit "hover_ready"，
+    // 转发给工作线程补一次定位与淡入
+    let tx_ready = tx.clone();
     let _ = app.listen("hover_ready", move |_event| {
-        hover_log("[hover_card] 页面就绪 (hover_ready)");
-        let pos = *HOVER_PENDING_POS.lock().unwrap();
-        if let Some(pos) = pos {
-            position_hover_card(&apph, pos);
-        }
+        let _ = tx_ready.send(HoverMsg::Ready);
     });
-    // 前端脚本错误上报（hover_card.html 的 window.onerror/unhandledrejection）
+    // 前端脚本错误上报，便于排查"不显示"类问题
     let _ = app.listen("hover_error", |e| {
-        let msg = e.payload();
-        hover_log(&format!("[hover_card] 前端错误: {msg}"));
+        hover_log(&format!("[hover_card] 前端错误: {}", e.payload()));
     });
+
+    // 启动工作线程（Actor）：独自持有全部状态与定时逻辑
+    spawn_hover_worker(app.handle().clone(), rx);
+
+    let tx_menu = tx.clone();
+    let tx_tray = tx.clone();
 
     let icon = static_icon();
     let tray = TrayIconBuilder::with_id("main")
         .icon(icon)
         .tooltip("牛马计时器启动中…")
         .menu(&menu)
-        // Windows 平台默认左键点击也弹菜单（show_menu_on_left_click=true），
-        // 导致左键双击直接弹出右键菜单而非打开主界面。显式关闭后，
-        // 左键只产生 Click/DoubleClick 事件，右键仍正常弹菜单
+        // Windows 默认左键点击也弹菜单，导致左键双击直接弹右键菜单而非打开主界面。
+        // 显式关闭后左键只产生 Click/DoubleClick，右键仍正常弹菜单
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            // 点击任意菜单项时立即收掉悬停卡片，双保险防止卡片残留
-            hide_hover_card_instant(app);
+        .on_menu_event(move |app, event| {
+            // 点击任意菜单项立即收掉悬停卡片（双保险），不进入点击冷却
+            let _ = tx_menu.send(HoverMsg::MenuHide);
             if event.id == MenuId::new("settings") {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.unminimize();
@@ -167,106 +597,29 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 app.exit(0);
             }
         })
-        .on_tray_icon_event(|tray, event| match event {
-            // 进入托盘：延迟一段时间后（鼠标仍停留）才显示卡片，
-            // 模仿系统原生 tooltip 的延迟出现行为，避免划过托盘就弹窗
+        .on_tray_icon_event(move |_tray, event| match event {
+            // 进入托盘：延迟一段时间（鼠标仍停留）才显示，模仿系统原生 tooltip
             TrayIconEvent::Enter { position, .. } => {
-                hover_log(&format!(
-                    "[hover_card] Enter 托盘 pos=({:.0},{:.0})",
-                    position.x, position.y
-                ));
-                // 点击冷却期：刚点过托盘（可能弹出了系统右键菜单），
-                // 抑制自动显示，防止卡片重新弹出遮挡菜单
-                if in_click_cooldown() {
-                    hover_log("[hover_card] Enter 在点击冷却期内，抑制显示");
-                    SHOW_PENDING.store(false, Ordering::Relaxed);
-                    return;
-                }
-                let apph = tray.app_handle().clone();
-                // 记录进入位置（延迟计时器到点时若鼠标仍在，用它定位）
-                *HOVER_PENDING_POS.lock().unwrap() = Some(tray_anchor(tray, position));
-                SHOW_PENDING.store(true, Ordering::Relaxed);
-                // 仅启动一个延迟计时器，避免 Move/Enter 高频事件反复起线程
-                if !SHOW_TIMER_ACTIVE.swap(true, Ordering::SeqCst) {
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(HOVER_SHOW_DELAY_MS));
-                        let app2 = apph.clone();
-                        // 到点时校验：仍待显示、不在点击冷却期、且鼠标停留在托盘范围内才弹出
-                        if SHOW_PENDING.load(Ordering::Relaxed)
-                            && !in_click_cooldown()
-                        {
-                            let cur = app2.cursor_position().unwrap_or_default();
-                            if mouse_near_tray(&app2, cur) {
-                                let anchor =
-                                    HOVER_PENDING_POS.lock().unwrap().unwrap_or(cur);
-                                position_hover_card(&app2, anchor);
-                            }
-                        }
-                        SHOW_TIMER_ACTIVE.store(false, Ordering::Relaxed);
-                    });
-                }
+                let _ = tx_tray.send(HoverMsg::Enter(position));
             }
-            // 鼠标在托盘内移动：卡片已可见时【只刷新实时数据】，绝不再
-            // set_position / 重触发淡入——卡片锚定在托盘正上方（固定位置，
-            // 不跟随光标），对透明分层窗口反复重定位会在移动（尤其向左移出）
-            // 时造成抖动；未显示期间只更新待显位置，真正的显示由延迟计时器统一处理
+            // 托盘内移动：已可见只刷数据，未显示只更新待显位置
             TrayIconEvent::Move { position, .. } => {
-                let app = tray.app_handle();
-                if let Some(w) = app.get_webview_window("hover_card") {
-                    if w.is_visible().unwrap_or(false) {
-                        let st =
-                            crate::get_status(app.state::<crate::AppState>().inner());
-                        let _ = w.emit("hover_data", st);
-                    } else {
-                        *HOVER_PENDING_POS.lock().unwrap() =
-                            Some(tray_anchor(tray, position));
-                    }
-                }
+                let _ = tx_tray.send(HoverMsg::Move(position));
             }
+            // 离开托盘：仅取消待显，真正隐藏交给看门狗去抖
             TrayIconEvent::Leave { .. } => {
-                hover_log("[hover_card] Leave 托盘");
-                // 取消待显示的延迟任务，避免离开后卡片又弹出。
-                // 此处【不】立即隐藏：Windows 托盘边缘偶发 Enter/Leave 高频抖动
-                // （左右滑出时尤甚），若 Leave 立即隐藏、紧接着边缘回弹的 Enter
-                // 又触发显示，会出现闪烁。统一交给看门狗（带去抖）裁决隐藏。
-                SHOW_PENDING.store(false, Ordering::Relaxed);
+                let _ = tx_tray.send(HoverMsg::Leave);
             }
-            // 左键双击：收起悬停卡片并弹出主界面
-            // （show_menu_on_left_click(false) 后左键不再弹菜单，事件可正常收到）
+            // 左键双击：淡出 + 打开主界面
             TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
             } => {
-                hover_log("[tray] 左键双击 → 打开主界面");
-                LAST_CLICK_MS.store(now_ms(), Ordering::Relaxed);
-                hide_hover_card(tray.app_handle());
-                if let Some(w) = tray.app_handle().get_webview_window("main") {
-                    // 最小化状态下 show() 无效，必须先 unminimize 还原窗口
-                    let _ = w.unminimize();
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    // 延迟再抢一次焦点：绕过 Windows 前台锁定（SetForegroundWindow
-                    // 对后台进程首次调用可能被拒绝，焦点最终仍落在托盘/explorer）
-                    let w2 = w.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(300));
-                        let _ = w2.set_focus();
-                    });
-                }
+                let _ = tx_tray.send(HoverMsg::DoubleClick);
             }
-            // 单击（右键弹菜单 / 左键单击）：【立即】隐藏悬停卡片（不走淡出动画），
-            // 与系统原生 tooltip 在点击托盘时瞬间消失的行为保持一致。
-            // 不走淡出是为了避免：淡出动画进行中弹出的原生右键菜单与半透明卡片
-            // 争抢 always_on_top 顶层，造成"抖一下"的闪烁。
-            TrayIconEvent::Click { button, .. } => {
-                hover_log(&format!(
-                    "[hover_card] Click({button:?}) → 立即隐藏卡片（与系统 tooltip 一致）"
-                ));
-                // 记录点击时间，进入冷却期（抑制菜单弹出后卡片再次显示）
-                LAST_CLICK_MS.store(now_ms(), Ordering::Relaxed);
-                // 取消待显，避免点击后延迟计时器又把卡片弹出来
-                SHOW_PENDING.store(false, Ordering::Relaxed);
-                hide_hover_card_instant(tray.app_handle());
+            // 单击（右键菜单 / 左键单击）：立即隐藏
+            TrayIconEvent::Click { .. } => {
+                let _ = tx_tray.send(HoverMsg::Click);
             }
             _ => {}
         })
@@ -274,15 +627,11 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     Ok(tray)
 }
 
-/// 懒创建 hover_card 窗口（首次悬停托盘时才创建，且发生在托盘事件线程，
-/// 不影响主窗口启动渲染；创建失败仅禁用悬停卡片，不影响主程序）
-fn ensure_hover_card(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+/// 懒创建 hover_card 窗口（首次悬停时才创建，发生在工作线程，不影响主窗口渲染；
+/// 创建失败仅禁用悬停卡片，不影响主程序）。调用方唯一（worker），无需并发保护。
+fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     if let Some(w) = app.get_webview_window("hover_card") {
         return Some(w);
-    }
-    // 并发保护：托盘事件可能同时触发（Enter/Move），只允许一个创建流程
-    if HOVER_CREATING.swap(true, Ordering::SeqCst) {
-        return None;
     }
     let created = WebviewWindowBuilder::new(
         app,
@@ -299,7 +648,6 @@ fn ensure_hover_card(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     .resizable(false)
     .visible(false)
     .build();
-    HOVER_CREATING.store(false, Ordering::SeqCst);
     match created {
         Ok(w) => {
             hover_log("[hover_card] 窗口已创建");
@@ -314,236 +662,17 @@ fn ensure_hover_card(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     }
 }
 
-/// 托盘悬停：显示/移动彩色卡片到鼠标旁
-fn position_hover_card(app: &AppHandle, pos: PhysicalPosition<f64>) {
-    let on = app
+/// 更新托盘的 tooltip / 悬停卡片
+/// - 彩色卡片开启：清空系统 tooltip（避免双显），卡片可见时每秒推送实时数据
+/// - 彩色卡片关闭：恢复系统原生 tooltip
+/// 直接查询窗口可见性，不依赖任何全局状态。
+pub fn update_tray(app: &AppHandle, status: &DayStatus) {
+    let cfg = app
         .state::<crate::AppState>()
         .config
         .lock()
         .unwrap()
-        .tray_hover_card;
-    if !on {
-        return;
-    }
-    // 记录悬停位置（供页面就绪后的 hover_ready 补显）
-    *HOVER_PENDING_POS.lock().unwrap() = Some(pos);
-
-    let Some(w) = ensure_hover_card(app) else {
-        return;
-    };
-    // 用户已重新进入托盘，取消待隐藏状态，避免兜底线程误关卡片
-    HIDE_PENDING.store(false, Ordering::Relaxed);
-
-    // 卡片水平居中于托盘图标正上方（x 对齐锚点中心，y 在锚点上方留间隙）。
-    // 参考：Windows 11 系统原生 tooltip 底部距任务栏约 10px，
-    // 这里留 24px，比系统默认再高一点，视觉更透气
-    let mut x = pos.x - HOVER_CARD_W / 2.0;
-    let mut y = pos.y - HOVER_CARD_H - 24.0;
-
-    // 防溢出屏幕（按主屏粗略钳制；任务栏在顶部时改为鼠标下方）
-    if let Ok(Some(m)) = app.primary_monitor() {
-        let size = m.size();
-        let sw = size.width as f64;
-        let sh = size.height as f64;
-        if y < 8.0 {
-            y = pos.y + 18.0;
-        }
-        if x < 8.0 {
-            x = 8.0;
-        }
-        if x + HOVER_CARD_W > sw - 8.0 {
-            x = sw - HOVER_CARD_W - 8.0;
-        }
-        if y + HOVER_CARD_H > sh - 8.0 {
-            y = sh - HOVER_CARD_H - 8.0;
-        }
-        if y < 8.0 {
-            y = 8.0;
-        }
-    }
-
-    // 记录卡片当前屏幕矩形（供"鼠标是否仍在卡片上"判断，防移入卡片时闪烁）
-    let new_rect = (x, y, HOVER_CARD_W, HOVER_CARD_H);
-    let prev = *HOVER_CARD_RECT.lock().unwrap();
-    *HOVER_CARD_RECT.lock().unwrap() = Some(new_rect);
-
-    let was_visible = w.is_visible().unwrap_or(false);
-    // 位置未变则不重定位：避免对透明分层窗口反复 set_position 引发抖动/重绘闪烁
-    if prev != Some(new_rect) {
-        let _ = w.set_position(PhysicalPosition::new(x, y));
-    }
-    if !was_visible {
-        hover_log(&format!("[hover_card] show() pos=({x:.0},{y:.0})"));
-        // show() 不抢焦点（Windows SW_SHOW），避免干扰用户操作
-        let _ = w.show();
-        // 启动看门狗：Leave 事件偶发丢失时轮询鼠标位置兜底隐藏
-        start_hover_watchdog(app);
-    }
-    // 立即推送一帧数据（此后由 update_tray 每秒续推）
-    let st = crate::get_status(app.state::<crate::AppState>().inner());
-    let _ = w.emit("hover_data", st);
-    // 淡入事件：立即 + 分档重试，覆盖页面首次加载期（JS 端幂等，重复无副作用）；
-    // 页面加载超过重试窗口时，由 hover_ready 握手兜底补显
-    let w2 = w.clone();
-    std::thread::spawn(move || {
-        // 分档重试覆盖 WebView2 首次冷启动加载期（可达 1s+）；
-        // 超过窗口期仍未就绪时，由 hover_ready 握手 + 前端 visibilitychange 自治兜底
-        for (idx, delay) in [0u64, 200, 500, 1000, 1800].iter().enumerate() {
-            if HIDE_PENDING.load(Ordering::Relaxed) {
-                break;
-            }
-            if *delay > 0 {
-                std::thread::sleep(Duration::from_millis(*delay));
-            }
-            let _ = w2.emit("hover_show", ());
-            let _ = idx; // 保留 enumerate 以备调试
-        }
-    });
-}
-
-/// 鼠标离开托盘：播放淡出动画，动画结束后由页面自行隐藏窗口
-fn hide_hover_card(app: &AppHandle) {
-    // 卡片即将隐藏，清除其矩形记录（下次显示时由 position_hover_card 重新写入）
-    HOVER_CARD_RECT.lock().unwrap().take();
-    if let Some(w) = app.get_webview_window("hover_card") {
-        if w.is_visible().unwrap_or(false) {
-            HIDE_PENDING.store(true, Ordering::Relaxed);
-            let _ = w.emit("hover_hide", ());
-            // 兜底：页面动画异常（如 transition 未触发）时强制隐藏；
-            // 若期间用户重新进入托盘，HIDE_PENDING 被重置，不会误关
-            let app2 = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(450));
-                if HIDE_PENDING.load(Ordering::Relaxed) {
-                    if let Some(w) = app2.get_webview_window("hover_card") {
-                        let _ = w.hide();
-                    }
-                    HIDE_PENDING.store(false, Ordering::Relaxed);
-                }
-            });
-        }
-    }
-}
-
-/// 立即隐藏悬停卡片（不走淡出动画）：点击托盘（右键弹菜单/左键单击）时调用，
-/// 与系统原生 tooltip 点击即消失的行为一致。直接 hide() 窗口，避免淡出动画
-/// 与弹出的原生右键菜单争抢 always_on_top 顶层造成闪烁。
-fn hide_hover_card_instant(app: &AppHandle) {
-    HOVER_CARD_RECT.lock().unwrap().take();
-    // 取消任何进行中的淡出兜底线程，避免它二次 hide
-    HIDE_PENDING.store(false, Ordering::Relaxed);
-    if let Some(w) = app.get_webview_window("hover_card") {
-        // 通知前端重置 shown 标志并移除 visible 类（下次显示时可正常淡入）
-        let _ = w.emit("hover_hide", ());
-        // 立即隐藏窗口——无动画、无争层
-        let _ = w.hide();
-    }
-}
-
-/// 启动悬停卡片看门狗（常驻线程，仅首次调用时启动一次）。
-/// 每 150ms 检查一次：卡片可见但鼠标已离开"托盘图标 + 卡片"活动区域 → 强制隐藏。
-/// 这解决 Windows 托盘 Leave 事件偶发丢失导致的"卡片残留"，并通过连续 2 次
-/// （约 300ms）确认离开的去抖逻辑，过滤边缘 Enter/Leave 高频抖动造成的闪烁。
-fn start_hover_watchdog(app: &AppHandle) {
-    if WATCHDOG_RUNNING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        hover_log("[hover_card] 看门狗已启动");
-        let mut gone_polls: u32 = 0;
-        loop {
-            std::thread::sleep(Duration::from_millis(150));
-            let Some(w) = app2.get_webview_window("hover_card") else {
-                gone_polls = 0;
-                continue;
-            };
-            // 卡片不可见 → 无需检查
-            if !w.is_visible().unwrap_or(false) {
-                gone_polls = 0;
-                continue;
-            }
-            match app2.cursor_position() {
-                Ok(pos) => {
-                    if mouse_in_active_region(&app2, pos) {
-                        // 仍在活动区域（托盘图标内 或 悬停卡片上）→ 保持显示
-                        gone_polls = 0;
-                    } else {
-                        // 离开活动区域：需连续 2 次轮询（约 300ms）确认才隐藏，
-                        // 过滤边缘抖动 / 瞬时误判，避免卡片闪烁
-                        gone_polls += 1;
-                        if gone_polls >= 2 {
-                            hover_log(&format!(
-                                "[hover_card] 看门狗: 鼠标持续移出 ({:.0},{:.0})，强制隐藏",
-                                pos.x, pos.y
-                            ));
-                            hide_hover_card(&app2);
-                            gone_polls = 0;
-                        }
-                    }
-                }
-                Err(_) => {
-                    // 取不到光标位置时不动作，避免误隐藏
-                    gone_polls = 0;
-                }
-            }
-        }
-    });
-}
-
-/// 鼠标是否在"保持卡片可见"的活动区域内：托盘图标范围内，或悬停卡片矩形内
-/// （均带余量）。用于看门狗与 Leave 判断，避免鼠标移入卡片上时被误隐藏（闪烁）。
-fn mouse_in_active_region(app: &AppHandle, pos: PhysicalPosition<f64>) -> bool {
-    if mouse_near_tray(app, pos) {
-        return true;
-    }
-    if let Some((cx, cy, cw, ch)) = *HOVER_CARD_RECT.lock().unwrap() {
-        const PAD: f64 = 12.0;
-        return pos.x >= cx - PAD
-            && pos.x <= cx + cw + PAD
-            && pos.y >= cy - PAD
-            && pos.y <= cy + ch + PAD;
-    }
-    false
-}
-
-/// 鼠标是否仍在托盘图标范围内（带 12px 余量防边缘抖动）。
-/// 图标 rect 拿不到时退回悬停锚点 ±40px 假设范围；完全未知时返回 true（不误隐藏）。
-fn mouse_near_tray(app: &AppHandle, pos: PhysicalPosition<f64>) -> bool {
-    const PAD: f64 = 12.0;
-    if let Some(tray) = app.tray_by_id("main") {
-        if let Ok(Some(r)) = tray.rect() {
-            let (rx, ry, rw, rh) = match (r.position, r.size) {
-                (tauri::Position::Physical(p), tauri::Size::Physical(s)) => {
-                    (p.x as f64, p.y as f64, s.width as f64, s.height as f64)
-                }
-                (tauri::Position::Logical(p), tauri::Size::Logical(s)) => {
-                    (p.x, p.y, s.width, s.height)
-                }
-                (tauri::Position::Physical(p), tauri::Size::Logical(s)) => {
-                    (p.x as f64, p.y as f64, s.width, s.height)
-                }
-                (tauri::Position::Logical(p), tauri::Size::Physical(s)) => {
-                    (p.x, p.y, s.width as f64, s.height as f64)
-                }
-            };
-            return pos.x >= rx - PAD
-                && pos.x <= rx + rw + PAD
-                && pos.y >= ry - PAD
-                && pos.y <= ry + rh + PAD;
-        }
-    }
-    if let Some(a) = *HOVER_PENDING_POS.lock().unwrap() {
-        return (pos.x - a.x).abs() <= 40.0 && (pos.y - a.y).abs() <= 40.0;
-    }
-    true
-}
-
-/// 更新托盘的 tooltip / 悬停卡片
-/// - 彩色卡片开启：清空系统 tooltip（避免双显），卡片可见时每秒推送实时数据
-/// - 彩色卡片关闭：恢复系统原生 tooltip
-pub fn update_tray(app: &AppHandle, status: &DayStatus) {
-    let cfg = app.state::<crate::AppState>().config.lock().unwrap().clone();
+        .clone();
     if let Some(tray) = app.tray_by_id("main") {
         if cfg.tray_hover_card {
             let _ = tray.set_tooltip::<&str>(None);
