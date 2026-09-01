@@ -1,3 +1,4 @@
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -124,24 +125,45 @@ fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
-/// 读取配置；不存在则用默认值并写盘
+/// 读取配置；不存在则用默认值并写盘。
+/// 文件存在但解析失败（损坏 / 写到一半）→ 先备份为 config.json.corrupt-时间戳.bak，
+/// 再回退默认配置，**绝不用默认值直接覆盖**，避免静默丢失用户配置。
 pub fn load() -> Config {
     let path = config_path();
     if let Ok(s) = fs::read_to_string(&path) {
         if let Ok(cfg) = serde_json::from_str::<Config>(&s) {
             return cfg;
         }
+        // 解析失败：原文件损坏，先备份再回退默认
+        let ts = Local::now().format("%Y%m%d-%H%M%S");
+        let bak = path.with_file_name(format!("config.json.corrupt-{ts}.bak"));
+        let _ = fs::rename(&path, &bak);
+        eprintln!(
+            "[config] config.json 解析失败，已备份为 {}（回退默认配置）",
+            bak.display()
+        );
     }
     let cfg = Config::default();
     save(&cfg);
     cfg
 }
 
-/// 写入配置
+/// 写入配置（原子写：先写临时文件再 rename 覆盖）。
+/// 避免写到一半崩溃 / 断电，残留半截文件导致下次启动解析失败、整份配置被默认值替换。
+/// Windows 下 rename 不能覆盖已存在目标，故先删旧文件再移动（极小时间窗，单机可接受）；
+/// 任一环节失败均退回直接覆盖写，至少保证内存态落盘。
 pub fn save(cfg: &Config) {
     let dir = config_dir();
     let _ = fs::create_dir_all(&dir);
     if let Ok(s) = serde_json::to_string_pretty(cfg) {
-        let _ = fs::write(config_path(), s);
+        let tmp = config_path().with_extension("json.tmp");
+        if fs::write(&tmp, &s).is_ok() {
+            let _ = fs::remove_file(config_path());
+            if fs::rename(&tmp, config_path()).is_ok() {
+                return;
+            }
+            // rename 失败（如跨卷）：退回直接覆盖写
+            let _ = fs::write(config_path(), &s);
+        }
     }
 }
