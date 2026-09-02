@@ -141,7 +141,15 @@ pub fn compute(
     let pm_s = to_min(&cfg.pm_start);
     let pm_e = to_min(&cfg.pm_end);
 
-    let worked_min = overlap(now_min, am_s, am_e) + overlap(now_min, pm_s, pm_e);
+    // 休息日不计时、不计薪：周末与法定节假日即使程序开着，也不该显示「今日已赚 /
+    // 已工作」——那会让人以为休息日也在赚钱。补班日（holiday type=2）由
+    // main::get_status 判定为 is_workday=true，仍走正常计时路径。
+    // 注意 hourly_rate / rate_per_min 不受影响：时薪是固定属性，休息日也照常展示。
+    let worked_min = if is_workday {
+        overlap(now_min, am_s, am_e) + overlap(now_min, pm_s, pm_e)
+    } else {
+        0.0
+    };
     let worked_h = worked_min / 60.0;
 
     let off_work = is_workday && now_min >= pm_e;
@@ -157,7 +165,12 @@ pub fn compute(
     let days_to_pay = days_to_payday(now.date_naive(), cfg.payday);
 
     let fmt = &cfg.duration_format;
-    let worked_str = format_duration(worked_min, fmt);
+    // 休息日不展示「已工作 0秒」，用占位符代替（to_off_str 已是「今天休息」）
+    let worked_str = if is_workday {
+        format_duration(worked_min, fmt)
+    } else {
+        "—".into()
+    };
     let to_off_str = if !is_workday {
         "今天休息".into()
     } else if now_min >= pm_e {
@@ -297,5 +310,29 @@ mod tests {
         assert!(!st.off_work);
         assert!(approx(st.to_off_h, 0.0));
         assert_eq!(st.to_off_str, "今天休息");
+        // 休息日即便处在上班时段内，也不计时、不计薪；已工作用占位符展示
+        assert!(approx(st.worked_h, 0.0));
+        assert!(approx(st.earned, 0.0));
+        assert_eq!(st.worked_str, "—");
+        // 时薪是固定属性，休息日照常计算（托盘 tooltip 的「赚钱速率」要用）
+        assert!(st.hourly_rate > 0.0);
+        assert!(st.rate_per_min > 0.0);
+    }
+
+    #[test]
+    fn compute_mandatory_workday_counts() {
+        // 调休补班日：日期是周六，但 holiday type=2 判定 is_workday=true，
+        // 应走正常计时计薪路径，不能被「周末」误伤
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
+        let now = Local
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(10, 0, 0).unwrap()))
+            .single()
+            .unwrap();
+        let st = compute(&cfg, true, 22, now);
+        assert!(st.is_workday);
+        assert!(approx(st.worked_h, 1.0));
+        assert!(st.earned > 0.0);
+        assert_eq!(st.worked_str, "1小时0分0秒");
     }
 }

@@ -160,7 +160,10 @@
       // 数据由 Rust 端每秒 emit "hover_data" 推送
       function render(s) {
         document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
-        document.getElementById("worked").textContent = fmtDur(s.worked_h);
+        // 休息日与主界面保持一致：不展示「已工作 0秒」（后端 worked_str 同为占位符）
+        document.getElementById("worked").textContent = s.is_workday
+          ? fmtDur(s.worked_h)
+          : "—";
         document.getElementById("toff").textContent = s.is_workday
           ? s.off_work ? "已下班" : fmtDur(s.to_off_h)
           : "休息中";
