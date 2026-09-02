@@ -5,8 +5,11 @@
 //! - 键盘：总按键次数 + 高频按键 Top 榜（按虚拟键码细分）
 //!
 //! 设计要点：
-//! - 钩子回调完全锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
-//!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击/键盘一律走原子）；
+//! - 钩子回调只做「采集」：鼠标走原子 +1；键盘把 (vk, time) 打包进 SPSC 环形队列后
+//!   立刻返回，打点 / 开关判断 / 去重 / 计数 / 明细累加全部交给 keyq_worker 线程
+//!   （回调里不留任何原子读改写——fetch_add 走 lock 指令，是输入路径上最贵的一类操作）；
+//! - 其余状态一律锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
+//!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击一律走原子）；
 //! - 常驻合并线程每 10 秒把原子累计值刷进当天的 24 个「小时桶」并落盘 SQLite；
 //! - 数据落盘到 niuma.db 的 act_hourly / act_keys 表（WAL 模式，崩溃安全）；
 //! - 启动时自动从 SQLite 加载当天数据恢复统计，程序/电脑重启后接着计数，不归零；
@@ -16,7 +19,7 @@
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计）。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -185,6 +188,94 @@ fn key_pending() -> &'static [AtomicU64; 256] {
     ARR.get_or_init(|| std::array::from_fn(|_| AtomicU64::new(0)))
 }
 
+// ---------------------------------------------------------------------------
+// 键盘事件队列：回调只采集入队，去重与计数交给工作线程
+// ---------------------------------------------------------------------------
+
+/// 队列容量（2 的幂，便于用掩码取模，省一次除法）。1024 个按键增量对统计用途
+/// 绰绰有余；工作线程每 20ms 排空一轮，正常打字速率下不可能堆积到溢出。
+const KEYQ_CAP: usize = 1024;
+const KEYQ_MASK: usize = KEYQ_CAP - 1;
+
+/// 工作线程排空间隔（毫秒）。按键增量最迟 20ms 后进入统计，远小于 10 秒合并周期。
+const KEYQ_DRAIN_MS: u64 = 20;
+
+/// 单元素打包：低 8 位放虚拟键码，高 32 位放毫秒时间戳，一个 u64 装下，
+/// 入队只需一次原子写（回调里最便宜的形态）。
+#[inline(always)]
+fn pack_key(vk: u32, time: u32) -> u64 {
+    ((time as u64) << 8) | ((vk & 0xff) as u64)
+}
+#[inline(always)]
+fn unpack_key(v: u64) -> (u32, u32) {
+    ((v & 0xff) as u32, (v >> 8) as u32)
+}
+
+/// SPSC 环形队列：生产者只有钩子线程、消费者只有 keyq_worker，故无需加锁。
+/// 用 OnceLock 延迟初始化 1024 长度的原子数组（AtomicU64 非 Copy，
+/// 不能用数组重复表达式直接构造，与上面 key_last_time / key_pending 同一手法）。
+static KEYQ: OnceLock<[AtomicU64; KEYQ_CAP]> = OnceLock::new();
+fn keyq() -> &'static [AtomicU64; KEYQ_CAP] {
+    KEYQ.get_or_init(|| std::array::from_fn(|_| AtomicU64::new(0)))
+}
+static KEYQ_HEAD: AtomicUsize = AtomicUsize::new(0);
+static KEYQ_TAIL: AtomicUsize = AtomicUsize::new(0);
+
+/// 入队（钩子回调调用）：队列满时直接丢弃——统计用途宁可丢数据，
+/// 也绝不让输入路径等待或重试。
+fn keyq_push(vk: u32, time: u32) {
+    let h = KEYQ_HEAD.load(Ordering::Relaxed);
+    let t = KEYQ_TAIL.load(Ordering::Acquire);
+    if h.wrapping_sub(t) >= KEYQ_CAP {
+        return;
+    }
+    keyq()[h & KEYQ_MASK].store(pack_key(vk, time), Ordering::Relaxed);
+    KEYQ_HEAD.store(h.wrapping_add(1), Ordering::Release);
+}
+
+/// 出队（仅 keyq_worker 调用）：SPSC 要求单一消费者，故用 load/store 而非 CAS。
+fn keyq_pop() -> Option<(u32, u32)> {
+    let t = KEYQ_TAIL.load(Ordering::Relaxed);
+    if t == KEYQ_HEAD.load(Ordering::Acquire) {
+        return None;
+    }
+    let v = keyq()[t & KEYQ_MASK].load(Ordering::Relaxed);
+    KEYQ_TAIL.store(t.wrapping_add(1), Ordering::Release);
+    Some(unpack_key(v))
+}
+
+/// 键盘事件工作线程：消费队列里的按键增量，做打点 / 去重 / 计数 / 明细累加。
+///
+/// 原来这些逻辑内联在 kb_proc 里（每次按键都要跑三次原子 fetch_add：
+/// note_input 的 INPUT_SEQ、C_KEYS、key_pending[vk]，全部走 lock 指令），
+/// 现在全部移到这里。回调已把数据放好，这里慢一点也完全不影响输入路径。
+fn keyq_worker() {
+    loop {
+        // 批量排空：把本轮积累的按键一次处理完
+        while let Some((vk, time)) = keyq_pop() {
+            // 输入活跃度打点（原在回调里）。挂机判定用的是 5 分钟阈值，
+            // 延后 20ms 打点毫无影响，却能从每次按键省掉一次原子读改写。
+            note_input();
+            if !ENABLED.load(Ordering::Relaxed) {
+                continue;
+            }
+            let vk = vk as usize;
+            if vk < 256 {
+                let last = key_last_time()[vk].load(Ordering::Relaxed);
+                // 按住自动重复间隔极短（~33ms），正常打字 ≥50ms，据此过滤重复计数
+                if time.wrapping_sub(last) >= 50 {
+                    C_KEYS.fetch_add(1, Ordering::Relaxed);
+                    key_pending()[vk].fetch_add(1, Ordering::Relaxed);
+                }
+                key_last_time()[vk].store(time, Ordering::Relaxed);
+            } else {
+                C_KEYS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(KEYQ_DRAIN_MS));
+    }
+}
+
 /// 当天累计状态（24 小时桶 + 当天按键全量明细）。
 /// 仅用于从旧 JSON 迁移时的反序列化（db.rs），正常读写走 SQLite。
 #[derive(Deserialize)]
@@ -339,6 +430,8 @@ pub fn start() {
     }
     // 先恢复当天已落盘数据，再开始累加，重启不归零
     load_today();
+    // 键盘事件工作线程：消费钩子回调入队的按键增量（去重 / 计数 / 明细累加）
+    std::thread::spawn(keyq_worker);
     // 钩子线程：SetWindowsHookExW 后必须进入消息循环才能收到钩子消息
     std::thread::spawn(|| unsafe { hook_thread() });
     // 合并线程：每 10 秒把原子计数刷入当天小时桶并落盘
@@ -351,6 +444,9 @@ pub fn start() {
 /// 程序退出前调用：把原子计数器里的最后增量刷进小时桶并落盘。
 /// 正常退出（托盘退出 / 系统关闭）最多再丢 0 秒数据。
 pub fn shutdown() {
+    // 键盘增量现在走队列：先给工作线程一点时间排空再落盘，否则最后 ≤20ms 的
+    // 按键会留在队列里被丢掉（旧实现在回调里同步计数，不存在这个窗口）。
+    std::thread::sleep(Duration::from_millis(KEYQ_DRAIN_MS * 2));
     flush_pending();
 }
 
@@ -463,29 +559,15 @@ unsafe extern "system" fn kb_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) ->
         if crate::lock_monitor::is_away() {
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
-        // 键盘事件同样视为活跃输入
-        note_input();
-        if !ENABLED.load(Ordering::Relaxed) {
-            return CallNextHookEx(None, ncode, wparam, lparam);
-        }
         if wparam.0 as u32 == WM_KEYDOWN {
             let p = lparam.0 as *const KBDLLHOOKSTRUCT;
             if !p.is_null() {
                 let info = &*p;
-                let vk = info.vkCode as usize;
-                // vkCode 越界（罕见扩展键）→ 仅计总数，不做去重/明细
-                if vk < 256 {
-                    let now = info.time;
-                    let last = key_last_time()[vk].load(Ordering::Relaxed);
-                    // 按住自动重复间隔极短（~33ms），正常打字 ≥50ms，据此过滤重复计数
-                    if now.wrapping_sub(last) >= 50 {
-                        C_KEYS.fetch_add(1, Ordering::Relaxed);
-                        key_pending()[vk].fetch_add(1, Ordering::Relaxed);
-                    }
-                    key_last_time()[vk].store(now, Ordering::Relaxed);
-                } else {
-                    C_KEYS.fetch_add(1, Ordering::Relaxed);
-                }
+                // 只做「采集」：读出 vkCode 与 time，打包进队列后立刻返回。
+                // 打点(note_input) / 开关判断 / 去重(50ms) / 计数 / 明细累加
+                // 全部交给 keyq_worker —— 回调里不留任何原子读改写
+                // （fetch_add 走 lock 指令，是输入路径上最贵的一类操作）。
+                keyq_push(info.vkCode, info.time);
             }
         }
     }
