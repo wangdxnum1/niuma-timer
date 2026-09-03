@@ -425,7 +425,8 @@ fn main() {
             // 启动锁屏监听线程（Windows session notification）
             lock_monitor::start();
 
-            // 按配置初始化三个监控开关（关闭的线程空转不计数）
+            // 按配置初始化三个监控开关。活动监控关闭时会真正卸载全局钩子
+            // （而非回调里空转），故必须在 activity::start() 之前调用。
             apply_monitor_switches(&app.state::<AppState>().config.lock().unwrap().clone());
 
             // 启动鼠标/键盘活动统计（全局低级钩子，常驻托盘即持续统计）

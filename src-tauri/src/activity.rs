@@ -10,6 +10,9 @@
 //!   （回调里不留任何原子读改写——fetch_add 走 lock 指令，是输入路径上最贵的一类操作）；
 //! - 挂机判定不复打点：直接问系统的 GetLastInputInfo，钩子回调零额外开销，
 //!   且覆盖面优于自造时钟（详见 last_input_ms 注释）；
+//! - 关闭活动监控 = 真正卸载钩子，而非「回调里不计数」：LL 钩子挂在系统输入
+//!   分发链上，只要钩子还在，每次按键都要跨线程往返一次，输入延迟（尤其 IME）
+//!   就照样存在。故停用即 Unhook、启用即重装（详见 ENABLED 与 hook_thread 注释）；
 //! - 其余状态一律锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
 //!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击一律走原子）；
 //! - 常驻合并线程每 10 秒把原子累计值刷进当天的 24 个「小时桶」并落盘 SQLite；
@@ -30,12 +33,14 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
+    CallNextHookEx, PostThreadMessageW, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,13 +136,41 @@ static C_KEYS: AtomicU64 = AtomicU64::new(0);
 static HOOK_OK: AtomicBool = AtomicBool::new(false);
 static HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// 活动监控总开关（设置页可切换）。关闭时钩子仍挂着（便于随时重开），
-/// 但回调只刷新「最后输入时间」供挂机判定用，不再计数。
+/// 钩子线程 ID，供停用时投递 `WM_QUIT` 唤醒阻塞在消息循环里的线程。
+/// 0 = 线程尚未运行（此时根本没装钩子，无需唤醒）。
+static HOOK_TID: AtomicU32 = AtomicU32::new(0);
+
+/// 活动监控总开关（设置页可切换）。
+///
+/// 关闭时**必须真正卸载钩子**，而不能只是「回调里不计数」：
+/// `WH_MOUSE_LL` / `WH_KEYBOARD_LL` 挂在系统输入分发链上，只要钩子还在，
+/// 每次按键 / 移动都要跨线程往返到本模块的钩子线程，输入延迟（尤其 IME）
+/// 就照样存在。故停用 = 卸载，启用 = 重装，由钩子线程按本标志循环切换。
 pub static ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// 运行时切换活动监控（立即生效）
 pub fn set_enabled(v: bool) {
-    ENABLED.store(v, Ordering::SeqCst);
+    let prev = ENABLED.swap(v, Ordering::SeqCst);
+    if prev == v {
+        return;
+    }
+    if !v {
+        // 停用：唤醒钩子线程使其退出消息循环，守卫 Drop 即卸载钩子。
+        // 若线程还没进入消息循环（TID 仍为 0），投递失败也无害——
+        // 它在循环顶部就会看到 ENABLED=false，压根不会装钩。
+        request_hook_stop();
+    }
+    // 启用：无需额外动作，钩子线程最多 200ms 后醒来重新装钩
+}
+
+/// 请求钩子线程退出消息循环（投递 WM_QUIT）。
+fn request_hook_stop() {
+    let tid = HOOK_TID.load(Ordering::SeqCst);
+    if tid == 0 {
+        return;
+    }
+    // 失败（线程已退出 / 无消息队列）可安全忽略：线程结束必然已卸钩
+    let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
 }
 
 /// 当前毫秒时间戳（自 Unix 纪元）
@@ -454,38 +487,60 @@ pub fn start() {
 /// 程序退出前调用：把原子计数器里的最后增量刷进小时桶并落盘。
 /// 正常退出（托盘退出 / 系统关闭）最多再丢 0 秒数据。
 pub fn shutdown() {
-    // 键盘增量现在走队列：先给工作线程一点时间排空再落盘，否则最后 ≤20ms 的
+    // 先卸掉钩子：退出流程里不再接收输入，队列随之停止增长
+    request_hook_stop();
+    // 键盘增量走队列：给工作线程一点时间排空再落盘，否则最后 ≤20ms 的
     // 按键会留在队列里被丢掉（旧实现在回调里同步计数，不存在这个窗口）。
     std::thread::sleep(Duration::from_millis(KEYQ_DRAIN_MS * 2));
     flush_pending();
 }
 
+/// 钩子线程主循环：按 ENABLED 开关循环执行「装钩 → 消息循环 → 卸钩」。
+///
+/// 线程本身常驻不退出（避免反复 spawn 带来的竞态：新线程还没跑到装钩，
+/// 停用请求就已经发出），只在停用期间空转；钩子则严格随开关装卸——
+/// 停用期间系统输入分发链上没有本模块的钩子，输入延迟彻底消失。
 unsafe fn hook_thread() {
-    // 用 RAII 守卫持有钩子：无论后续成功 / 失败 / 退出，离开作用域都会自动
-    // UnhookWindowsHookEx，彻底消除「装鼠标成功、装键盘失败漏卸鼠标」的分支泄漏。
-    // 下划线前缀仅为抑制「未读取」警告；绑定仍活到本函数结束，钩子在整个
-    // 消息循环期间保持安装，结束后才 Drop 卸载。
-    let _mouse = match crate::win::LowLevelHook::install(WH_MOUSE_LL, Some(mouse_proc), "mouse") {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("[activity] 鼠标钩子安装失败: {e}");
-            HOOK_OK.store(false, Ordering::SeqCst);
-            return;
+    // 记录线程 ID：set_enabled(false) / shutdown 靠它投递 WM_QUIT 唤醒下面的消息循环
+    HOOK_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
+    loop {
+        if !ENABLED.load(Ordering::SeqCst) {
+            // 已停用：此时钩子必然是卸载状态（上一轮的守卫已离开作用域），
+            // 空转等待重新启用。开关切换是手动低频操作，200ms 轮询可忽略。
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
         }
-    };
-    let _keyboard =
-        match crate::win::LowLevelHook::install(WH_KEYBOARD_LL, Some(kb_proc), "keyboard") {
+        // 用 RAII 守卫持有钩子：无论后续成功 / 失败 / 退出消息循环，离开作用域都会
+        // 自动 UnhookWindowsHookEx，彻底消除「装鼠标成功、装键盘失败漏卸鼠标」的
+        // 分支泄漏。下划线前缀仅为抑制「未读取」警告。
+        let _mouse = match crate::win::LowLevelHook::install(WH_MOUSE_LL, Some(mouse_proc), "mouse") {
             Ok(h) => h,
             Err(e) => {
-                // _mouse 在此处随函数返回自动 Drop → 卸载已成功的鼠标钩子，无残留
-                eprintln!("[activity] 键盘钩子安装失败: {e}");
+                eprintln!("[activity] 鼠标钩子安装失败: {e}");
                 HOOK_OK.store(false, Ordering::SeqCst);
                 return;
             }
         };
-    HOOK_OK.store(true, Ordering::SeqCst);
-    crate::win::run_message_loop();
-    // _mouse / _keyboard 离开作用域自动 Drop，无需手写 UnhookWindowsHookEx
+        let _keyboard =
+            match crate::win::LowLevelHook::install(WH_KEYBOARD_LL, Some(kb_proc), "keyboard") {
+                Ok(h) => h,
+                Err(e) => {
+                    // _mouse 在此处随函数返回自动 Drop → 卸载已成功的鼠标钩子，无残留
+                    eprintln!("[activity] 键盘钩子安装失败: {e}");
+                    HOOK_OK.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+        HOOK_OK.store(true, Ordering::SeqCst);
+        // 阻塞直到本线程收到 WM_QUIT（由 set_enabled(false) / shutdown 投递）。
+        // 这是 WH_*_LL 钩子的硬性要求：回调靠线程消息队列驱动，必须有消息循环。
+        // 边界：200ms 内快速「关→开」时，队列里可能残留一个多余的 WM_QUIT，
+        // 会在下一轮装钩后被立即取出——只多一次装/卸循环，随后自愈，无害。
+        crate::win::run_message_loop();
+        // 收到 WM_QUIT：_mouse / _keyboard 在本轮块结束时 Drop → 钩子卸载，
+        // 系统输入分发链上不再有本模块的钩子。回到循环顶部按 ENABLED 重新决策。
+        HOOK_OK.store(false, Ordering::SeqCst);
+    }
 }
 
 unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
