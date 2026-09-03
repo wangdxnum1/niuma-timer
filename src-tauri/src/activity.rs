@@ -6,8 +6,10 @@
 //!
 //! 设计要点：
 //! - 钩子回调只做「采集」：鼠标走原子 +1；键盘把 (vk, time) 打包进 SPSC 环形队列后
-//!   立刻返回，打点 / 开关判断 / 去重 / 计数 / 明细累加全部交给 keyq_worker 线程
+//!   立刻返回，开关判断 / 去重 / 计数 / 明细累加全部交给 keyq_worker 线程
 //!   （回调里不留任何原子读改写——fetch_add 走 lock 指令，是输入路径上最贵的一类操作）；
+//! - 挂机判定不复打点：直接问系统的 GetLastInputInfo，钩子回调零额外开销，
+//!   且覆盖面优于自造时钟（详见 last_input_ms 注释）；
 //! - 其余状态一律锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
 //!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击一律走原子）；
 //! - 常驻合并线程每 10 秒把原子累计值刷进当天的 24 个「小时桶」并落盘 SQLite；
@@ -27,7 +29,10 @@ use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_XBUTTONDOWN, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
@@ -135,10 +140,6 @@ pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
 
-/// 最近一次输入的时刻（毫秒时间戳）。供 app_usage 判断「是否挂机」：
-/// 前台窗口属于白名单应用，但超过阈值无输入 → 视为挂机，不计使用时长。
-static LAST_INPUT_MS: AtomicU64 = AtomicU64::new(0);
-
 /// 当前毫秒时间戳（自 Unix 纪元）
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -147,20 +148,31 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 钩子回调内调用：记录一次真实输入。为减少热路径上的 `SystemTime::now()` 系统调用，
-/// 每 500 次事件才真正读一次时钟——挂机判定用 5 分钟阈值，亚秒级精度完全无影响。
-/// （鼠标/键盘事件每秒可达数百次，逐次读时钟会在系统输入路径上放大开销）
-static INPUT_SEQ: AtomicU64 = AtomicU64::new(0);
-fn note_input() {
-    let n = INPUT_SEQ.fetch_add(1, Ordering::Relaxed);
-    if n % 500 == 0 {
-        LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
-    }
-}
-
-/// 查询最近一次输入时刻（毫秒）。app_usage 用它判断挂机阈值。
+/// 查询最近一次「真实输入」的墙钟时刻（毫秒）。app_usage 用它判断挂机阈值：
+/// 前台窗口属于白名单应用，但超过阈值无输入 → 视为挂机，不计使用时长。
+///
+/// 直接问系统要，而不是让钩子回调自己打点维护——Windows 内核本就为每个登录会话
+/// 维护了最后输入时刻（`GetLastInputInfo`），覆盖面与精度都好过自造时钟：
+/// 自造版有两个硬伤：① 计数器初值为 0，启动后恒判挂机，要攒够 500 次输入才正常；
+/// ② 为避免在输入路径上读时钟，每 500 次事件才刷新一次，慢速打字时时间戳可陈旧
+/// 数百秒、直接越过 5 分钟挂机阈值，把真实使用当成挂机丢掉。
+/// 系统版还顺带覆盖了钩子看不到的输入（部分全屏程序的原始输入），且钩子回调里
+/// 不再有任何打点开销。
+///
+/// 调用频率极低（仅 app_usage 每 10 秒结算一次），系统调用开销无关紧要。
 pub fn last_input_ms() -> u64 {
-    LAST_INPUT_MS.load(Ordering::Relaxed)
+    let mut lii = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    // 失败极罕见；退化成「此刻刚有输入」——宁可多记一段，也别把真实使用判成挂机
+    if !unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
+        return now_ms();
+    }
+    // dwTime 与 GetTickCount 同为 u32 毫秒计数，约 49.7 天回绕一次；
+    // wrapping_sub 保证跨回绕点依然算得出正确差值
+    let idle_ms = unsafe { GetTickCount() }.wrapping_sub(lii.dwTime) as u64;
+    now_ms().saturating_sub(idle_ms)
 }
 
 /// 鼠标上次位置（首次移动只记录、不累计距离）。
@@ -244,18 +256,16 @@ fn keyq_pop() -> Option<(u32, u32)> {
     Some(unpack_key(v))
 }
 
-/// 键盘事件工作线程：消费队列里的按键增量，做打点 / 去重 / 计数 / 明细累加。
+/// 键盘事件工作线程：消费队列里的按键增量，做开关判断 / 去重 / 计数 / 明细累加。
 ///
 /// 原来这些逻辑内联在 kb_proc 里（每次按键都要跑三次原子 fetch_add：
-/// note_input 的 INPUT_SEQ、C_KEYS、key_pending[vk]，全部走 lock 指令），
-/// 现在全部移到这里。回调已把数据放好，这里慢一点也完全不影响输入路径。
+/// INPUT_SEQ 打点、C_KEYS、key_pending[vk]，全部走 lock 指令），现在全部移到这里。
+/// 回调已把数据放好，这里慢一点也完全不影响输入路径。
+/// 注：输入活跃度打点已彻底取消，挂机判定改由 last_input_ms() 问系统要。
 fn keyq_worker() {
     loop {
         // 批量排空：把本轮积累的按键一次处理完
         while let Some((vk, time)) = keyq_pop() {
-            // 输入活跃度打点（原在回调里）。挂机判定用的是 5 分钟阈值，
-            // 延后 20ms 打点毫无影响，却能从每次按键省掉一次原子读改写。
-            note_input();
             if !ENABLED.load(Ordering::Relaxed) {
                 continue;
             }
@@ -484,8 +494,6 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
         if crate::lock_monitor::is_away() {
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
-        // 任意鼠标事件都刷新「最后输入时间」（移动/按键/滚轮均算活跃）
-        note_input();
         if !ENABLED.load(Ordering::Relaxed) {
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
@@ -564,9 +572,9 @@ unsafe extern "system" fn kb_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) ->
             if !p.is_null() {
                 let info = &*p;
                 // 只做「采集」：读出 vkCode 与 time，打包进队列后立刻返回。
-                // 打点(note_input) / 开关判断 / 去重(50ms) / 计数 / 明细累加
-                // 全部交给 keyq_worker —— 回调里不留任何原子读改写
-                // （fetch_add 走 lock 指令，是输入路径上最贵的一类操作）。
+                // 开关判断 / 去重(50ms) / 计数 / 明细累加全部交给 keyq_worker，
+                // 回调里不留任何原子读改写（fetch_add 走 lock 指令，
+                // 是输入路径上最贵的一类操作）。
                 keyq_push(info.vkCode, info.time);
             }
         }
@@ -709,5 +717,26 @@ fn vk_name(vk: u32) -> String {
         0xDD => "]".into(),
         0xDE => "'".into(),
         _ => format!("VK{:#X}", vk),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `last_input_ms` 必须返回**墙钟毫秒**，且落在合理区间内。
+    ///
+    /// 这条断言主要兜两类实现错误：① 忘了设 `LASTINPUTINFO::cbSize` 导致 API 失败
+    /// （会退化成返回 now_ms()，仍应通过）；② 误把 u32 tick count 当墙钟返回
+    /// （tick count 上限约 4.29e9，远小于 1.7e12 这条下限，必被抓出）。
+    #[test]
+    fn last_input_ms_is_sane_wall_clock() {
+        let now = now_ms();
+        let t = last_input_ms();
+        // 1_700_000_000_000 ms ≈ 2023-11，墙钟毫秒必然大于它
+        assert!(t > 1_700_000_000_000, "返回值不像墙钟毫秒: {t}");
+        assert!(t <= now + 1_000, "最后输入时刻晚于当前时刻: {t} > {now}");
+        // 上限取 u32 tick count 的回绕周期 49.7 天，留足余量
+        assert!(now.saturating_sub(t) <= 50 * 24 * 3600 * 1000);
     }
 }
