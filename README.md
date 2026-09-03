@@ -26,7 +26,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Auto holiday data** — fetches the official China holiday schedule (days off + make-up workdays) from a CDN, caches locally; falls back to Mon–Fri when offline
 - **No runtime dependency** — the release `.exe` is self-contained (WebView2 Runtime is the only system prerequisite, pre-installed on Win10/11)
 - **Overtime tracking** — when you lock the screen after the workday, it records your leave time and computes overtime pay + meal allowance; view/edit/delete records per day
-- **Activity monitoring** — global low-level mouse/keyboard hooks count clicks, scrolls, keystrokes, movement, and bucket activity per hour with a top-keys leaderboard
+- **Activity monitoring** — Raw Input (`WM_INPUT`) captures mouse/keyboard: clicks, scrolls, keystrokes, movement, bucketed per hour with a top-keys leaderboard (no input lag, even with IME)
 - **App usage monitoring** — foreground-window hook measures time spent per application (whitelist-based, e.g. WeChat)
 - **Media playback monitoring** — audio-session peak polling measures playback time per app
 - **Local persistence** — all history (overtime, activity, app/audio usage) is stored in a WAL SQLite database; config & holiday cache remain JSON
@@ -132,7 +132,7 @@ cargo tauri build
 | Single instance | `tauri-plugin-single-instance` |
 | Tray icon | Runtime pixel rendering with a built-in 5×7 dot-matrix font |
 | Persistence | SQLite (`rusqlite`, WAL mode) |
-| Windows APIs | `windows` crate 0.61 — WTS lock-screen events, audio-session polling, DPI-aware window icon, global low-level input hooks |
+| Windows APIs | `windows` crate 0.61 — WTS lock-screen events, audio-session polling, DPI-aware window icon, Raw Input (WM_INPUT) for mouse/keyboard |
 | Holiday data | GitHub-hosted JSON via jsDelivr CDN, with local cache fallback |
 
 ## Known limitations
@@ -157,7 +157,7 @@ niuma-timer/
 │   │   ├── db.rs           # SQLite layer (WAL) + legacy JSON migration
 │   │   ├── overtime.rs     # Overtime records: calc + persistence
 │   │   ├── lock_monitor.rs # Windows lock-screen listener (WTS session change)
-│   │   ├── activity.rs     # Global mouse/keyboard hooks + hourly buckets + top keys
+│   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
 │   │   └── audio_usage.rs  # Audio-session media playback tracking
 │   ├── Cargo.toml

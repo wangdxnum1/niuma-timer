@@ -26,7 +26,7 @@
 - **节假日自动获取**——从 CDN 拉取国务院放假安排（含调休补班），本地缓存；断网时按周一到周五兜底
 - **无运行时依赖**——release 产物自包含（系统只需 WebView2 Runtime，Win10/11 一般自带）
 - **加班追踪**——下班后锁屏离开，自动记录离开时刻并算加班费 + 饭补；支持按天查看/增/删/改
-- **键鼠活动监控**——全局低级鼠标/键盘钩子，统计点击、滚轮、按键、移动，逐小时活跃桶 + 高频按键榜
+- **键鼠活动监控**——Raw Input（`WM_INPUT`）旁路采集键鼠，统计点击、滚轮、按键、移动，逐小时活跃桶 + 高频按键榜（输入法零延迟）
 - **应用使用监控**——前台窗口钩子，按应用统计使用时长（白名单，如微信）
 - **媒体播放监控**——音频会话峰值轮询，按软件统计播放时长
 - **本地持久化**——所有历史（加班、活动、应用/媒体使用）存 WAL 模式 SQLite；配置与节假日缓存仍为 JSON
@@ -130,7 +130,7 @@ cargo tauri build
 | 单例模式 | `tauri-plugin-single-instance` |
 | 托盘图标 | 运行时像素绘制，内置 5×7 点阵字体 |
 | 持久化 | SQLite（`rusqlite`，WAL 模式） |
-| Windows API | `windows` crate 0.61——WTS 锁屏事件、音频会话轮询、按 DPI 设置窗口图标、全局低级输入钩子 |
+| Windows API | `windows` crate 0.61——WTS 锁屏事件、音频会话轮询、按 DPI 设置窗口图标、Raw Input（`WM_INPUT`）键鼠采集 |
 | 节假日数据 | GitHub 托管 JSON 经 jsDelivr CDN，本地缓存兜底 |
 
 ## 已知边界
@@ -155,7 +155,7 @@ niuma-timer/
 │   │   ├── db.rs           # SQLite 层（WAL）+ 旧 JSON 一次性迁移
 │   │   ├── overtime.rs     # 加班记录：计算 + 持久化
 │   │   ├── lock_monitor.rs # Windows 锁屏监听（WTS 会话变更）
-│   │   ├── activity.rs     # 全局键鼠钩子 + 逐小时桶 + 高频按键榜
+│   │   ├── activity.rs     # Raw Input 键鼠采集 + 逐小时桶 + 高频按键榜
 │   │   ├── app_usage.rs    # 前台窗口应用使用时长监控（白名单）
 │   │   └── audio_usage.rs  # 音频会话媒体播放监控
 │   ├── Cargo.toml

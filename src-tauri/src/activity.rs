@@ -1,19 +1,26 @@
 //! 打工人活动统计模块。
 //!
-//! 通过 Windows 全局低级钩子（WH_MOUSE_LL + WH_KEYBOARD_LL）统计：
+//! 通过 Windows Raw Input（`RegisterRawInputDevices` + message-only 窗口的 `WM_INPUT`）
+//! 统计：
 //! - 鼠标：移动次数 / 累计移动像素 / 左键单击 / 双击 / 右键 / 滚轮(次数+格数) / 中键 / 侧键
 //! - 键盘：总按键次数 + 高频按键 Top 榜（按虚拟键码细分）
 //!
+//! 为什么用 Raw Input 而不是低级钩子（WH_MOUSE_LL / WH_KEYBOARD_LL）：
+//! 低级钩子是「系统拦截」模型——每次按键系统先跨线程派发到钩子回调、等它返回才继续
+//! 把按键投递给目标程序，路径本身就会引入输入延迟（尤其 IME 卡顿），瘦回调也救不了。
+//! Raw Input 是「旁路投递」：系统把原始输入额外投递到本程序窗口的 `WM_INPUT`，
+//! 主输入路径（键盘→IME→目标程序）完全不被阻塞，输入法零延迟；同时仍能逐键统计。
+//!
 //! 设计要点：
-//! - 钩子回调只做「采集」：鼠标走原子 +1；键盘把 (vk, time) 打包进 SPSC 环形队列后
+//! - `WM_INPUT` 回调只做「采集」：鼠标走原子 +1；键盘把 (vk, time) 打包进 SPSC 环形队列后
 //!   立刻返回，开关判断 / 去重 / 计数 / 明细累加全部交给 keyq_worker 线程
 //!   （回调里不留任何原子读改写——fetch_add 走 lock 指令，是输入路径上最贵的一类操作）；
-//! - 挂机判定不复打点：直接问系统的 GetLastInputInfo，钩子回调零额外开销，
+//! - 挂机判定不复打点：直接问系统的 GetLastInputInfo，回调零额外开销，
 //!   且覆盖面优于自造时钟（详见 last_input_ms 注释）；
-//! - 关闭活动监控 = 真正卸载钩子，而非「回调里不计数」：LL 钩子挂在系统输入
-//!   分发链上，只要钩子还在，每次按键都要跨线程往返一次，输入延迟（尤其 IME）
-//!   就照样存在。故停用即 Unhook、启用即重装（详见 ENABLED 与 hook_thread 注释）；
-//! - 其余状态一律锁无关（原子 +1 / 节流时钟），绝不阻塞（LL 钩子跑在系统输入路径，
+//! - 关闭活动监控 = 真正注销 Raw Input 设备，而非「回调里不计数」：只要设备还注册着，
+//!   每次输入仍会旁路投递到本窗口的 WndProc 并跑一遍判定。故停用即 RIDEV_REMOVE、
+//!   启用即重注册（详见 ENABLED 与 raw_thread 注释）；
+//! - 其余状态一律锁无关（原子 +1 / 节流时钟），绝不阻塞（Raw Input 走系统输入旁路，
 //!   热路径任何锁/系统调用都会放大卡顿与鼠标漂移，故鼠标位置/双击一律走原子）；
 //! - 常驻合并线程每 10 秒把原子累计值刷进当天的 24 个「小时桶」并落盘 SQLite；
 //! - 数据落盘到 niuma.db 的 act_hourly / act_keys 表（WAL 模式，崩溃安全）；
@@ -31,16 +38,17 @@ use std::time::Duration;
 use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO,
+use windows::Win32::UI::Input::{
+    RAWINPUT, RAWKEYBOARD, RAWMOUSE, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, PostThreadMessageW, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
-    KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
+    DefWindowProcW, GetCursorPos, GetMessageTime, PostThreadMessageW, RI_KEY_BREAK,
+    RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_LEFT_BUTTON_DOWN,
+    RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_WHEEL, WM_INPUT, WM_QUIT,
 };
 
 // ---------------------------------------------------------------------------
@@ -133,19 +141,19 @@ static C_XBTN: AtomicU64 = AtomicU64::new(0);
 static C_KEYS: AtomicU64 = AtomicU64::new(0);
 
 /// 钩子安装结果（供前端展示「统计是否生效」）
-static HOOK_OK: AtomicBool = AtomicBool::new(false);
-static HOOK_STARTED: AtomicBool = AtomicBool::new(false);
+static RAW_OK: AtomicBool = AtomicBool::new(false);
+static RAW_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// 钩子线程 ID，供停用时投递 `WM_QUIT` 唤醒阻塞在消息循环里的线程。
 /// 0 = 线程尚未运行（此时根本没装钩子，无需唤醒）。
-static HOOK_TID: AtomicU32 = AtomicU32::new(0);
+static RAW_TID: AtomicU32 = AtomicU32::new(0);
 
 /// 活动监控总开关（设置页可切换）。
 ///
-/// 关闭时**必须真正卸载钩子**，而不能只是「回调里不计数」：
-/// `WH_MOUSE_LL` / `WH_KEYBOARD_LL` 挂在系统输入分发链上，只要钩子还在，
-/// 每次按键 / 移动都要跨线程往返到本模块的钩子线程，输入延迟（尤其 IME）
-/// 就照样存在。故停用 = 卸载，启用 = 重装，由钩子线程按本标志循环切换。
+/// 关闭时**必须真正注销 Raw Input 设备**，而不能只是「回调里不计数」：
+/// 只要设备还注册着，`WM_INPUT` 仍会旁路投递到本窗口的 WndProc，每次输入
+/// 都要跑一遍采集判定（虽不阻塞主输入路径，仍是不必要的开销与潜在延迟源）。
+/// 故停用 = `RIDEV_REMOVE` 注销，启用 = 重注册，由原始输入线程按本标志循环切换。
 pub static ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// 运行时切换活动监控（立即生效）
@@ -155,21 +163,21 @@ pub fn set_enabled(v: bool) {
         return;
     }
     if !v {
-        // 停用：唤醒钩子线程使其退出消息循环，守卫 Drop 即卸载钩子。
+        // 停用：唤醒原始输入线程使其退出消息循环，随后注销 Raw Input 设备 + 销毁窗口。
         // 若线程还没进入消息循环（TID 仍为 0），投递失败也无害——
-        // 它在循环顶部就会看到 ENABLED=false，压根不会装钩。
-        request_hook_stop();
+        // 它在循环顶部就会看到 ENABLED=false，压根不会注册设备。
+        request_stop();
     }
-    // 启用：无需额外动作，钩子线程最多 200ms 后醒来重新装钩
+    // 启用：无需额外动作，原始输入线程最多 200ms 后醒来重新注册设备
 }
 
-/// 请求钩子线程退出消息循环（投递 WM_QUIT）。
-fn request_hook_stop() {
-    let tid = HOOK_TID.load(Ordering::SeqCst);
+/// 请求原始输入线程退出消息循环（投递 WM_QUIT）。
+fn request_stop() {
+    let tid = RAW_TID.load(Ordering::SeqCst);
     if tid == 0 {
         return;
     }
-    // 失败（线程已退出 / 无消息队列）可安全忽略：线程结束必然已卸钩
+    // 失败（线程已退出 / 无消息队列）可安全忽略：线程结束必然已注销设备
     let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
 }
 
@@ -291,8 +299,9 @@ fn keyq_pop() -> Option<(u32, u32)> {
 
 /// 键盘事件工作线程：消费队列里的按键增量，做开关判断 / 去重 / 计数 / 明细累加。
 ///
-/// 原来这些逻辑内联在 kb_proc 里（每次按键都要跑三次原子 fetch_add：
-/// INPUT_SEQ 打点、C_KEYS、key_pending[vk]，全部走 lock 指令），现在全部移到这里。
+/// 原来这些逻辑内联在低级钩子的 kb_proc 里（每次按键都要跑三次原子 fetch_add：
+/// INPUT_SEQ 打点、C_KEYS、key_pending[vk]，全部走 lock 指令），现在全部移到这里；
+/// Raw Input 的键盘分支（on_raw_keyboard）同样只做采集、把数据丢进队列后即返回。
 /// 回调已把数据放好，这里慢一点也完全不影响输入路径。
 /// 注：输入活跃度打点已彻底取消，挂机判定改由 last_input_ms() 问系统要。
 fn keyq_worker() {
@@ -463,20 +472,20 @@ pub fn load_day_from_db(date: &str) -> (Vec<HourBucket>, BTreeMap<u32, u64>) {
 }
 
 // ---------------------------------------------------------------------------
-// 全局钩子（Windows 低级钩子，需跑在带消息循环的线程上）
+// Raw Input（message-only 窗口的 WM_INPUT，需跑在带消息循环的线程上）
 // ---------------------------------------------------------------------------
 
-/// 启动统计：恢复当天历史 → 安装钩子线程 + 常驻合并线程。幂等，仅首次生效。
+/// 启动统计：恢复当天历史 → 拉起原始输入线程 + 常驻合并线程。幂等，仅首次生效。
 pub fn start() {
-    if HOOK_STARTED.swap(true, Ordering::SeqCst) {
+    if RAW_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
     // 先恢复当天已落盘数据，再开始累加，重启不归零
     load_today();
-    // 键盘事件工作线程：消费钩子回调入队的按键增量（去重 / 计数 / 明细累加）
+    // 键盘事件工作线程：消费 WM_INPUT 键盘分支入队的按键增量（去重 / 计数 / 明细累加）
     std::thread::spawn(keyq_worker);
-    // 钩子线程：SetWindowsHookExW 后必须进入消息循环才能收到钩子消息
-    std::thread::spawn(|| unsafe { hook_thread() });
+    // 原始输入线程：注册 Raw Input 后必须进入消息循环才能收到 WM_INPUT
+    std::thread::spawn(|| unsafe { raw_thread() });
     // 合并线程：每 10 秒把原子计数刷入当天小时桶并落盘
     std::thread::spawn(|| loop {
         std::thread::sleep(Duration::from_secs(10));
@@ -487,154 +496,179 @@ pub fn start() {
 /// 程序退出前调用：把原子计数器里的最后增量刷进小时桶并落盘。
 /// 正常退出（托盘退出 / 系统关闭）最多再丢 0 秒数据。
 pub fn shutdown() {
-    // 先卸掉钩子：退出流程里不再接收输入，队列随之停止增长
-    request_hook_stop();
+    // 先注销 Raw Input：退出流程里不再接收输入，队列随之停止增长
+    request_stop();
     // 键盘增量走队列：给工作线程一点时间排空再落盘，否则最后 ≤20ms 的
     // 按键会留在队列里被丢掉（旧实现在回调里同步计数，不存在这个窗口）。
     std::thread::sleep(Duration::from_millis(KEYQ_DRAIN_MS * 2));
     flush_pending();
 }
 
-/// 钩子线程主循环：按 ENABLED 开关循环执行「装钩 → 消息循环 → 卸钩」。
+/// 原始输入线程主循环：按 ENABLED 开关循环执行「建窗口+注册 Raw Input → 消息循环 → 注销」。
 ///
-/// 线程本身常驻不退出（避免反复 spawn 带来的竞态：新线程还没跑到装钩，
-/// 停用请求就已经发出），只在停用期间空转；钩子则严格随开关装卸——
-/// 停用期间系统输入分发链上没有本模块的钩子，输入延迟彻底消失。
-unsafe fn hook_thread() {
+/// 线程本身常驻不退出（避免反复 spawn 带来的竞态：新线程还没跑到注册设备，
+/// 停用请求就已经发出），只在停用期间空转；Raw Input 设备严格随开关注册/注销——
+/// 停用期间系统输入旁路不再投递到本窗口，输入零额外开销。
+unsafe fn raw_thread() {
     // 记录线程 ID：set_enabled(false) / shutdown 靠它投递 WM_QUIT 唤醒下面的消息循环
-    HOOK_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
+    RAW_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
+    let class = raw_wnd_class();
     loop {
         if !ENABLED.load(Ordering::SeqCst) {
-            // 已停用：此时钩子必然是卸载状态（上一轮的守卫已离开作用域），
+            // 已停用：此时设备必然是注销状态（上一轮末尾已调用 RIDEV_REMOVE），
             // 空转等待重新启用。开关切换是手动低频操作，200ms 轮询可忽略。
             std::thread::sleep(Duration::from_millis(200));
             continue;
         }
-        // 用 RAII 守卫持有钩子：无论后续成功 / 失败 / 退出消息循环，离开作用域都会
-        // 自动 UnhookWindowsHookEx，彻底消除「装鼠标成功、装键盘失败漏卸鼠标」的
-        // 分支泄漏。下划线前缀仅为抑制「未读取」警告。
-        let _mouse = match crate::win::LowLevelHook::install(WH_MOUSE_LL, Some(mouse_proc), "mouse") {
+        // 建 message-only 窗口 + 注册 Raw Input（键+鼠，RIDEV_INPUTSINK）：
+        // 即使本窗口不是前台窗口也能收到全局输入；绝不加 RIDEV_NOLEGACY，
+        // 否则会禁用别的程序的 WM_KEYDOWN，变成劫持键盘。
+        let hwnd = match crate::win::create_message_window(&class, Some(raw_wndproc)) {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("[activity] 鼠标钩子安装失败: {e}");
-                HOOK_OK.store(false, Ordering::SeqCst);
+                eprintln!("[activity] Raw Input 窗口创建失败: {e}");
+                RAW_OK.store(false, Ordering::SeqCst);
                 return;
             }
         };
-        let _keyboard =
-            match crate::win::LowLevelHook::install(WH_KEYBOARD_LL, Some(kb_proc), "keyboard") {
-                Ok(h) => h,
-                Err(e) => {
-                    // _mouse 在此处随函数返回自动 Drop → 卸载已成功的鼠标钩子，无残留
-                    eprintln!("[activity] 键盘钩子安装失败: {e}");
-                    HOOK_OK.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
-        HOOK_OK.store(true, Ordering::SeqCst);
+        if let Err(e) = crate::win::register_raw_input(hwnd) {
+            eprintln!("[activity] Raw Input 注册失败: {e}");
+            let _ = crate::win::destroy_message_window(hwnd);
+            RAW_OK.store(false, Ordering::SeqCst);
+            return;
+        }
+        RAW_OK.store(true, Ordering::SeqCst);
         // 阻塞直到本线程收到 WM_QUIT（由 set_enabled(false) / shutdown 投递）。
-        // 这是 WH_*_LL 钩子的硬性要求：回调靠线程消息队列驱动，必须有消息循环。
+        // 这是 Raw Input 的硬性要求：WM_INPUT 靠线程消息队列驱动，必须有消息循环。
         // 边界：200ms 内快速「关→开」时，队列里可能残留一个多余的 WM_QUIT，
-        // 会在下一轮装钩后被立即取出——只多一次装/卸循环，随后自愈，无害。
+        // 会在下一轮注册后被立即取出——只多一次注册/注销循环，随后自愈，无害。
         crate::win::run_message_loop();
-        // 收到 WM_QUIT：_mouse / _keyboard 在本轮块结束时 Drop → 钩子卸载，
-        // 系统输入分发链上不再有本模块的钩子。回到循环顶部按 ENABLED 重新决策。
-        HOOK_OK.store(false, Ordering::SeqCst);
+        // 收到 WM_QUIT：注销设备 + 销毁窗口，系统输入旁路不再有本模块。
+        let _ = crate::win::unregister_raw_input(hwnd);
+        let _ = crate::win::destroy_message_window(hwnd);
+        RAW_OK.store(false, Ordering::SeqCst);
     }
 }
 
-unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if ncode >= 0 {
-        // 锁屏离开后不统计活动，避免解锁输入污染活动数据
-        if crate::lock_monitor::is_away() {
-            return CallNextHookEx(None, ncode, wparam, lparam);
+/// 原始输入窗口类名（null 结尾的 UTF-16）。本进程内唯一，窗口类只注册一次。
+fn raw_wnd_class() -> Vec<u16> {
+    "NiumaRawInputWnd\0".encode_utf16().collect()
+}
+
+/// 把 `WM_INPUT` 的原始鼠标数据解析为统计。
+///
+/// 位置一律取自 `GetCursorPos`：Raw Input 的 `RAWMOUSE` 只给相对位移（且是设备 mickey，
+/// 非屏幕像素），而双击判定需要屏幕绝对坐标；`GetCursorPos` 与旧 `MSLLHOOKSTRUCT.pt`
+/// 同源（系统光标位置），既准又统一。移动距离 = 相邻两次 `WM_INPUT` 间的光标位移，
+/// 与旧实现语义一致。
+fn on_raw_mouse(m: &RAWMOUSE) {
+    let bf = unsafe { m.Anonymous.Anonymous.usButtonFlags };
+    // 移动：只要有相对/绝对移动标志或位移非零，就记一次 moves 并累加光标位移像素。
+    // 绝对模式（触控板/笔）下 lLastX/Y 为绝对坐标，仍用 GetCursorPos 算位移，跨设备一致。
+    let moved = m.usFlags.0 == 0 || m.usFlags.0 == 1; // MOVE_RELATIVE(0) / MOVE_ABSOLUTE(1)
+    if moved || m.lLastX != 0 || m.lLastY != 0 {
+        let mut pt = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt).is_ok() } {
+            let (x, y) = (pt.x, pt.y);
+            C_MOVES.fetch_add(1, Ordering::Relaxed);
+            let (px, py) = (LAST_X.load(Ordering::Relaxed), LAST_Y.load(Ordering::Relaxed));
+            if px != i32::MIN && py != i32::MIN {
+                let (dx, dy) = (x - px, y - py);
+                if dx != 0 || dy != 0 {
+                    let dist = ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64).sqrt() as u64;
+                    C_PIXELS.fetch_add(dist, Ordering::Relaxed);
+                }
+            }
+            LAST_X.store(x, Ordering::Relaxed);
+            LAST_Y.store(y, Ordering::Relaxed);
         }
-        if !ENABLED.load(Ordering::Relaxed) {
-            return CallNextHookEx(None, ncode, wparam, lparam);
+    }
+    // 按键（usButtonFlags 的 *_DOWN 位各自独立，可同时出现，故分别判断）
+    if bf & RI_MOUSE_LEFT_BUTTON_DOWN as u16 != 0 {
+        C_LEFT.fetch_add(1, Ordering::Relaxed);
+        // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px（位置取自真实光标）
+        let mut pt = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt).is_ok() } {
+            let now = GetMessageTime() as u32;
+            let (lt, lx, ly) = (
+                LAST_LBTN_TIME.load(Ordering::Relaxed),
+                LAST_LBTN_X.load(Ordering::Relaxed),
+                LAST_LBTN_Y.load(Ordering::Relaxed),
+            );
+            let dt = now.wrapping_sub(lt);
+            let (dx, dy) = ((pt.x - lx).abs(), (pt.y - ly).abs());
+            if dt > 0 && dt < GetDoubleClickTime() && dx <= 5 && dy <= 5 {
+                C_DBL.fetch_add(1, Ordering::Relaxed);
+            }
+            LAST_LBTN_TIME.store(now, Ordering::Relaxed);
+            LAST_LBTN_X.store(pt.x, Ordering::Relaxed);
+            LAST_LBTN_Y.store(pt.y, Ordering::Relaxed);
         }
-        let p = lparam.0 as *const MSLLHOOKSTRUCT;
-        if !p.is_null() {
-            let info = &*p;
-            let msg = wparam.0 as u32;
-            match msg {
-                WM_MOUSEMOVE => {
-                    C_MOVES.fetch_add(1, Ordering::Relaxed);
-                    // 锁无关：原子读旧坐标 → 算距离 → 原子写新坐标（钩子线程独占，无并发，
-                    // 比 Mutex 更快且绝不会在输入路径上引入任何锁等待）。
-                    let (x, y) = (info.pt.x, info.pt.y);
-                    let (px, py) =
-                        (LAST_X.load(Ordering::Relaxed), LAST_Y.load(Ordering::Relaxed));
-                    if px != i32::MIN && py != i32::MIN {
-                        let (dx, dy) = (x - px, y - py);
-                        if dx != 0 || dy != 0 {
-                            let dist = ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64)
-                                .sqrt() as u64;
-                            C_PIXELS.fetch_add(dist, Ordering::Relaxed);
+    }
+    if bf & RI_MOUSE_RIGHT_BUTTON_DOWN as u16 != 0 {
+        C_RIGHT.fetch_add(1, Ordering::Relaxed);
+    }
+    if bf & RI_MOUSE_MIDDLE_BUTTON_DOWN as u16 != 0 {
+        C_MID.fetch_add(1, Ordering::Relaxed);
+    }
+    if bf & RI_MOUSE_BUTTON_4_DOWN as u16 != 0 || bf & RI_MOUSE_BUTTON_5_DOWN as u16 != 0 {
+        C_XBTN.fetch_add(1, Ordering::Relaxed);
+    }
+    if bf & RI_MOUSE_WHEEL as u16 != 0 || bf & RI_MOUSE_HWHEEL as u16 != 0 {
+        C_WHEEL.fetch_add(1, Ordering::Relaxed);
+        // 滚轮增量在 usButtonData（i16，符号表示方向，绝对值通常为 120 的整数倍）。
+        // 与旧实现一致：直接累加绝对值（每格 120），前端按需 /120 展示。
+        let data = unsafe { m.Anonymous.Anonymous.usButtonData } as i16;
+        C_WHEEL_TICKS.fetch_add(data.unsigned_abs() as u64, Ordering::Relaxed);
+    }
+}
+
+/// 把 `WM_INPUT` 的原始键盘数据解析为统计。
+///
+/// `RAWKEYBOARD.Flags` 的 `RI_KEY_BREAK` 位表示「键抬起」；无此位即「按下」。
+/// 只做采集：把虚拟键码 + 消息时间打包入 SPSC 队列，去重（50ms 间隔自动重复）/
+/// 计数 / 明细累加交给 keyq_worker（与旧钩子同分工）。
+/// `GetMessageTime()` 与旧 `KBDLLHOOKSTRUCT.time` 同域（GetTickCount 毫秒），等价。
+fn on_raw_keyboard(k: &RAWKEYBOARD) {
+    if k.Flags & RI_KEY_BREAK as u16 != 0 {
+        return; // 键抬起：不计
+    }
+    keyq_push(k.VKey as u32, GetMessageTime() as u32);
+}
+
+/// Raw Input 窗口过程：仅处理 `WM_INPUT`，其余消息交 `DefWindowProcW`。
+///
+/// 在 raw_thread 的消息循环里被 `DispatchMessageW` 调用。锁屏离开 / 停用时直接放行，
+/// 不污染活动数据（与旧钩子回调同语义）。`WM_INPUT` 的 `lParam` 是 `HRAWINPUT`，
+/// 经 `win::read_raw_input` 取回原始数据后按键盘 / 鼠标分流。
+unsafe extern "system" fn raw_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_INPUT {
+        if !crate::lock_monitor::is_away() && ENABLED.load(Ordering::Relaxed) {
+            if let Some(buf) = crate::win::read_raw_input(lparam) {
+                if buf.len() >= std::mem::size_of::<RAWINPUT>() {
+                    // RAWINPUT 必存在；按其 dwType 分流键盘/鼠标
+                    let raw = &*(buf.as_ptr() as *const RAWINPUT);
+                    match raw.header.dwType {
+                        t if t == RIM_TYPEMOUSE.0 => {
+                            let m = unsafe { raw.data.mouse };
+                            on_raw_mouse(&m);
                         }
+                        t if t == RIM_TYPEKEYBOARD.0 => {
+                            let k = unsafe { raw.data.keyboard };
+                            on_raw_keyboard(&k);
+                        }
+                        _ => {}
                     }
-                    LAST_X.store(x, Ordering::Relaxed);
-                    LAST_Y.store(y, Ordering::Relaxed);
                 }
-                WM_LBUTTONDOWN => {
-                    C_LEFT.fetch_add(1, Ordering::Relaxed);
-                    // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px。锁无关（原子读三段 + 写三段）。
-                    let now = info.time;
-                    let (lt, lx, ly) = (
-                        LAST_LBTN_TIME.load(Ordering::Relaxed),
-                        LAST_LBTN_X.load(Ordering::Relaxed),
-                        LAST_LBTN_Y.load(Ordering::Relaxed),
-                    );
-                    let dt = now.wrapping_sub(lt);
-                    let dx = (info.pt.x - lx).abs();
-                    let dy = (info.pt.y - ly).abs();
-                    if dt > 0 && dt < GetDoubleClickTime() && dx <= 5 && dy <= 5 {
-                        C_DBL.fetch_add(1, Ordering::Relaxed);
-                    }
-                    LAST_LBTN_TIME.store(now, Ordering::Relaxed);
-                    LAST_LBTN_X.store(info.pt.x, Ordering::Relaxed);
-                    LAST_LBTN_Y.store(info.pt.y, Ordering::Relaxed);
-                }
-                WM_RBUTTONDOWN => {
-                    C_RIGHT.fetch_add(1, Ordering::Relaxed);
-                }
-                WM_MBUTTONDOWN => {
-                    C_MID.fetch_add(1, Ordering::Relaxed);
-                }
-                WM_XBUTTONDOWN => {
-                    C_XBTN.fetch_add(1, Ordering::Relaxed);
-                }
-                WM_MOUSEWHEEL => {
-                    C_WHEEL.fetch_add(1, Ordering::Relaxed);
-                    let ticks = ((info.mouseData as i32) >> 16).unsigned_abs() as u64;
-                    C_WHEEL_TICKS.fetch_add(ticks.max(1), Ordering::Relaxed);
-                }
-                _ => {}
             }
         }
     }
-    // LL 钩子必须继续传递，否则系统输入会中断
-    CallNextHookEx(None, ncode, wparam, lparam)
-}
-
-unsafe extern "system" fn kb_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if ncode >= 0 {
-        // 锁屏离开后不统计活动，避免解锁输入污染活动数据
-        if crate::lock_monitor::is_away() {
-            return CallNextHookEx(None, ncode, wparam, lparam);
-        }
-        if wparam.0 as u32 == WM_KEYDOWN {
-            let p = lparam.0 as *const KBDLLHOOKSTRUCT;
-            if !p.is_null() {
-                let info = &*p;
-                // 只做「采集」：读出 vkCode 与 time，打包进队列后立刻返回。
-                // 开关判断 / 去重(50ms) / 计数 / 明细累加全部交给 keyq_worker，
-                // 回调里不留任何原子读改写（fetch_add 走 lock 指令，
-                // 是输入路径上最贵的一类操作）。
-                keyq_push(info.vkCode, info.time);
-            }
-        }
-    }
-    CallNextHookEx(None, ncode, wparam, lparam)
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 // ---------------------------------------------------------------------------
@@ -723,7 +757,7 @@ pub fn summary() -> ActivitySummary {
         totals,
         top_keys,
         active_hours,
-        hook_ok: HOOK_OK.load(Ordering::SeqCst),
+        hook_ok: RAW_OK.load(Ordering::SeqCst),
     }
 }
 
