@@ -8,8 +8,11 @@
 //!   内存 + 磁盘（config_dir/icons/）双缓存，只提取一次；
 //! - 活跃判定：复用 activity 模块的「最后输入时间戳」，超过 5 分钟无输入视为挂机，
 //!   挂机时段不计入使用时长；
-//! - 结算：常驻线程每 10 秒按「距上次结算的真实时间差」累加，写入 SQLite 两张表
-//!   （app_usage 天级汇总 + app_usage_hourly 小时分布）。
+//! - 结算：**切换驱动，而非 tick 驱动**。前台一切换先把上一段时长结给「切走前」的
+//!   应用，常驻线程的 10 秒 tick 只负责切段兜底。若只在 tick 时按时间差累加，
+//!   两次 tick 之间切走的那一整段会被错记给切换后的应用（微信看 8 秒再切走 →
+//!   Chrome 白得 10 秒）。最终写入 SQLite 两张表（app_usage 天级汇总 +
+//!   app_usage_hourly 小时分布）。
 //!
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计），跳过自身进程。
 
@@ -18,7 +21,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -153,7 +156,22 @@ struct CurApp {
     exe_path: String,
 }
 
-static CUR_APP: Mutex<Option<CurApp>> = Mutex::new(None);
+/// 当前前台应用 + 「本段」起始时刻。
+///
+/// 关键不变量：**时长归属由前台切换驱动，而不是只靠 10 秒 tick**。
+/// 旧实现只在 tick 时把整个 delta 记给「此刻」的前台应用，于是两次 tick 之间
+/// 切换应用会把整段时间错记给切换后的那个（微信看 8 秒再切走 → Chrome 白得 10 秒）。
+/// 现在前台一切换就先把上一段结给「切走前」的应用，tick 只负责切段兜底。
+struct CurState {
+    app: Option<CurApp>,
+    /// 本段起始时刻（毫秒）。0 = 尚未建立基准（首次只建基准、不计秒）
+    since_ms: u64,
+}
+
+static CUR: Mutex<CurState> = Mutex::new(CurState {
+    app: None,
+    since_ms: 0,
+});
 
 /// 「显示名 → exe 路径」映射：前台切换时填充，供 summary() 查询路径懒提取图标，
 /// 覆盖「仅短暂前台、tick 来不及提取」的边界情况，避免明细里出现首字占位图标。
@@ -163,8 +181,9 @@ fn app_exe_map() -> &'static Mutex<HashMap<String, String>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 上次结算时刻（毫秒），用于按真实时间差累加
-static LAST_TICK_MS: AtomicU64 = AtomicU64::new(0);
+/// 单段最长计入时长（毫秒）：系统睡眠/休眠醒来后 now 会大幅跳变，
+/// 此时最多补记 60 秒，避免把整段睡眠时长记成应用使用时长。
+const MAX_SEGMENT_MS: u64 = 60_000;
 
 static WATCH_STARTED: AtomicBool = AtomicBool::new(false);
 static WATCH_OK: AtomicBool = AtomicBool::new(false);
@@ -205,7 +224,7 @@ pub fn refresh_foreground() {
     unsafe {
         let fg = GetForegroundWindow();
         if !fg.is_invalid() {
-            update_cur_app(fg);
+            switch_foreground(fg);
         }
     }
 }
@@ -494,17 +513,17 @@ fn process_info_of(hwnd: HWND) -> Option<(String, String)> {
 /// 更新当前前台应用（全量：任何前台窗口都记录，跳过自身进程）
 fn update_cur_app(hwnd: HWND) {
     let Some((exe_path, exe_name)) = process_info_of(hwnd) else {
-        *CUR_APP.lock().unwrap() = None;
+        CUR.lock().unwrap().app = None;
         return;
     };
     if exe_name == SELF_EXE {
-        *CUR_APP.lock().unwrap() = None;
+        CUR.lock().unwrap().app = None;
         return;
     }
     let display = display_name_of(&exe_path, &exe_name);
-    // 白名单过滤：开启且不在名单内 → 不纳入统计（CUR_APP 置空，tick 不会累加该时段）
+    // 白名单过滤：开启且不在名单内 → 不纳入统计（app 置空，结算时不会累加该时段）
     if !in_whitelist(&display) {
-        *CUR_APP.lock().unwrap() = None;
+        CUR.lock().unwrap().app = None;
         return;
     }
     // 注意：图标不再在这里（前台切换回调，热路径）同步提取，改为在 tick() 后台线程懒提取，
@@ -514,7 +533,16 @@ fn update_cur_app(hwnd: HWND) {
         .lock()
         .unwrap()
         .insert(display.clone(), exe_path.clone());
-    *CUR_APP.lock().unwrap() = Some(CurApp { display, exe_path });
+    CUR.lock().unwrap().app = Some(CurApp { display, exe_path });
+}
+
+/// 前台应用切换的统一入口：**先把上一段时长结给「切走前」的应用，再记录新的前台应用**。
+///
+/// 顺序不能反——反了就会把上一段时长记到新应用头上，正是本修复要消除的问题。
+/// 图标提取在此关掉（前台切换回调是热路径），由 10 秒 tick 后台补齐。
+fn switch_foreground(hwnd: HWND) {
+    settle(now_ms(), false);
+    update_cur_app(hwnd);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +559,7 @@ unsafe extern "system" fn win_event_proc(
     _time: u32,
 ) {
     if event == EVENT_SYSTEM_FOREGROUND && ENABLED.load(Ordering::Relaxed) {
-        update_cur_app(hwnd);
+        switch_foreground(hwnd);
     }
 }
 
@@ -554,10 +582,10 @@ unsafe fn watch_thread() {
         return;
     }
     WATCH_OK.store(true, Ordering::SeqCst);
-    // 启动时初始化：若此刻正有前台窗口，立即进入统计
+    // 启动时初始化：若此刻正有前台窗口，立即进入统计（此刻段起点为 0，只建基准不计秒）
     let fg = GetForegroundWindow();
     if !fg.is_invalid() {
-        update_cur_app(fg);
+        switch_foreground(fg);
     }
     crate::win::run_message_loop();
     let _ = UnhookWinEvent(h);
@@ -567,34 +595,64 @@ unsafe fn watch_thread() {
 // 结算与查询
 // ---------------------------------------------------------------------------
 
-/// 每 10 秒结算：若前台有应用且未挂机，按真实时间差累加秒数。
-fn tick() {
-    let now = now_ms();
-    let last = LAST_TICK_MS.swap(now, Ordering::Relaxed);
-    if last == 0 {
-        return; // 首个 tick 只建立基准
+/// 取出「上一段」并推进段起点：返回该段归属的前台应用与应计入的整秒数。
+///
+/// 段起点只推进 `secs * 1000`（而不是直接跳到 now）：不足 1 秒的零头留到下一段，
+/// 否则高频切换时每段零头都被抹掉（切 1000 次 × 0.9 秒 → 一天凭空丢 15 分钟）。
+/// 只有时间跳变（睡眠/休眠）时才把起点直接推到 now，把超限部分丢弃。
+fn take_segment(now: u64) -> (Option<CurApp>, u64) {
+    let mut g = CUR.lock().unwrap();
+    let since = g.since_ms;
+    if since == 0 {
+        g.since_ms = now; // 首次只建立基准
+        return (None, 0);
     }
-    let delta = (now - last).min(60_000) / 1000;
-    if delta < 1 {
+    let raw = now.saturating_sub(since);
+    if raw > MAX_SEGMENT_MS {
+        g.since_ms = now; // 时间跳变：最多补记一段，其余丢弃
+        return (g.app.clone(), MAX_SEGMENT_MS / 1000);
+    }
+    let secs = raw / 1000;
+    g.since_ms = since + secs * 1000;
+    (g.app.clone(), secs)
+}
+
+/// 结算上一段：把「自上次结算以来」的真实时长记给该段的前台应用。
+///
+/// 由两处调用：前台切换回调（切走前先结账）与 10 秒 tick（切段兜底）。
+///
+/// `with_icon` 为 false 时跳过图标提取——前台切换回调是热路径，绝不能在那里做
+/// GDI 提取 + PNG 编码 + 落盘（毫秒级）；图标统一由 10 秒 tick 在后台补齐。
+///
+/// 留在回调里做的是 SQLite 写入，量级完全不同：WAL + synchronous=NORMAL 下一次
+/// upsert 几十微秒、不做 fsync，而 Windows 对事件回调的容忍在数百毫秒级，
+/// 即便疯狂切窗口也不会触发系统弃用回调，故不必为此再引入一层队列。
+fn settle(now: u64, with_icon: bool) {
+    // 段已取出、段起点已推进：下面任何一道门控命中都只是「丢弃这一段」，
+    // 不会造成基准滞留（解锁 / 重开监控后从当前时刻起算，无跳变）。
+    let (app, secs) = take_segment(now);
+    if secs == 0 {
         return;
     }
-    // 锁屏离开后不统计应用使用时间（基准已在上面刷新，解锁后从当前时刻起算，无跳变）
+    let Some(cur) = app else {
+        return; // 无前台 / 自身进程 / 不在白名单内
+    };
+    // 锁屏离开期间不统计应用使用时间
     if crate::lock_monitor::is_away() {
         return;
     }
-    // 关闭期间不累计（基准已在上面刷新，重开时从当前时刻起算，无跳变）
+    // 关闭期间不累计
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let Some(cur) = CUR_APP.lock().unwrap().clone() else {
-        return;
-    };
-    // 懒提取当前前台应用图标（后台线程，非热路径）：首次命中时 GDI+PNG 一次，之后走缓存。
-    ensure_icon(&cur.display, &cur.exe_path);
     // 挂机判定：距最后一次输入超过阈值 → 整段不算
     let idle = now.saturating_sub(crate::activity::last_input_ms());
     if idle > IDLE_THRESHOLD_MS {
         return;
+    }
+    if with_icon {
+        // 懒提取当前应用图标（后台线程，非热路径）：首次命中时 GDI+PNG 一次，之后走缓存
+        ensure_icon(&cur.display, &cur.exe_path);
     }
     let now_dt = Local::now();
     let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
@@ -603,13 +661,19 @@ fn tick() {
     let _ = g.execute(
         "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
          ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-        params![date, cur.display, delta as i64],
+        params![date, cur.display, secs as i64],
     );
     let _ = g.execute(
         "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-        params![date, hour, cur.display, delta as i64],
+        params![date, hour, cur.display, secs as i64],
     );
+}
+
+/// 每 10 秒结算一次：把自上次结算以来的时长结给当前前台应用。
+/// 正常无切换时等价旧行为；有切换时由切换回调先结过账，这里只切段兜底。
+fn tick() {
+    settle(now_ms(), true);
 }
 
 /// 启动监控：前台事件钩子线程 + 10 秒结算线程。幂等，仅首次生效。
@@ -710,5 +774,95 @@ pub fn summary() -> AppUsageSummary {
         apps,
         hourly,
         watch_ok: WATCH_OK.load(Ordering::SeqCst),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `CUR` 是全局状态，而 cargo test 默认多线程并发跑用例，故访问它的用例先抢这把锁。
+    /// 容忍中毒：单个用例断言失败不应把其余用例连坐成 panic。
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    fn lock_cur() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 段切分的三条关键性质。
+    ///
+    /// 必须写在**同一个**测试函数里顺序执行：三步共用同一个段起点，拆开会互相覆盖。
+    ///
+    /// 第三条尤其重要：时间跳变（睡眠/休眠）封顶后「必须把段起点推到 now」——
+    /// 若只按整秒推进，多出来的 3540 秒会变成补记债，接下来几十次结算每次再送 60 秒。
+    #[test]
+    fn take_segment_advances_baseline_correctly() {
+        let _g = lock_cur();
+        // ① 首次调用只建立基准，不计秒
+        {
+            let mut g = CUR.lock().unwrap();
+            g.app = None;
+            g.since_ms = 0;
+        }
+        let (_, secs) = take_segment(1_000_000);
+        assert_eq!(secs, 0, "首次调用只建基准，不应计秒");
+        assert_eq!(CUR.lock().unwrap().since_ms, 1_000_000);
+
+        // ② 正常段：返回整秒数，起点只按整秒推进 → 不足 1 秒的零头留到下一段
+        let (_, secs) = take_segment(1_010_900);
+        assert_eq!(secs, 10, "10.9 秒应只计 10 秒");
+        assert_eq!(
+            CUR.lock().unwrap().since_ms,
+            1_010_000,
+            "零头 900ms 必须留给下一段，而不是被抹掉"
+        );
+        // 紧接着再切一次，零头与上一段的 900ms 合并成 1 秒
+        let (_, secs) = take_segment(1_011_000);
+        assert_eq!(secs, 1, "上一段零头 900ms + 本段 100ms 应合计 1 秒");
+        assert_eq!(CUR.lock().unwrap().since_ms, 1_011_000);
+
+        // ③ 时间跳变：封顶 60 秒，且起点直接推到 now（不留补记债）
+        let (_, secs) = take_segment(1_011_000 + 3_600_000);
+        assert_eq!(secs, 60, "睡眠 1 小时最多只补记 60 秒");
+        assert_eq!(
+            CUR.lock().unwrap().since_ms,
+            1_011_000 + 3_600_000,
+            "封顶后起点必须推到 now，否则残留时间会被反复补记"
+        );
+        // 跳变之后回到正常切段：不得把残留的 3540 秒分批补记出来
+        let (_, secs) = take_segment(1_011_000 + 3_600_000 + 10_000);
+        assert_eq!(secs, 10, "跳变之后应回到正常切段，而不是继续补记");
+    }
+
+    /// 切走前先结账：切换后上一应用的时长不得记到新应用头上。
+    /// 只验证「段归属取的是切换前的 app 快照」这一契约，不碰数据库。
+    #[test]
+    fn segment_is_attributed_to_outgoing_app() {
+        let _g = lock_cur();
+        let old = CurApp {
+            display: "微信".into(),
+            exe_path: "C:/WeChat.exe".into(),
+        };
+        {
+            let mut g = CUR.lock().unwrap();
+            g.app = Some(old.clone());
+            g.since_ms = 2_000_000;
+        }
+        // 模拟「微信用了 9 秒后切走」：先取段（此时 app 仍是微信）
+        let (app, secs) = take_segment(2_009_000);
+        assert_eq!(secs, 9);
+        assert_eq!(
+            app.map(|a| a.display),
+            Some("微信".into()),
+            "9 秒必须记给切走前的微信"
+        );
+        // 再更新为新应用
+        CUR.lock().unwrap().app = Some(CurApp {
+            display: "Chrome".into(),
+            exe_path: "C:/chrome.exe".into(),
+        });
+        // 之后的时长才归 Chrome
+        let (app, secs) = take_segment(2_010_000);
+        assert_eq!(secs, 1);
+        assert_eq!(app.map(|a| a.display), Some("Chrome".into()));
     }
 }
