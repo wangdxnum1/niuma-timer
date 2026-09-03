@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, Timelike};
 use rusqlite::params;
@@ -27,17 +27,38 @@ use windows::Win32::Media::Audio::{
     MMDeviceEnumerator,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-/// 轮询间隔（秒）：每 5 秒结算一次
+/// 会话枚举周期（秒）：每 5 秒重新枚举一次音频会话（含进程名解析，开销在大头）
 const POLL_INTERVAL_SECS: u64 = 5;
 
-/// 发声判定阈值：会话峰值 > 该值视为正在播放（0.0~1.0 归一化）
+/// 峰值采样间隔（毫秒）：枚举周期内按此节奏反复读各会话峰值。
+///
+/// 为什么不能像旧实现那样「一个枚举周期只读一次」：`GetPeakValue` 返回的是
+/// **上一个设备周期**（典型 10ms 级）的峰值快照，不是自上次调用以来的累积值
+/// （MSDN 原文：peak value is recorded over one device period and made available
+/// during the subsequent device period）。5 秒读一次等于拿 10 毫秒的瞬时值代表
+/// 5 秒——0.2 秒的提示音只有 4% 概率被采到，一旦命中就白送 5 秒。
+/// 密采样后每个采样点只代表一个很短的真实间隔，短音不再被放大成长时长。
+const SAMPLE_INTERVAL_MS: u64 = 200;
+
+/// 发声判定阈值：会话峰值 > 该值视为正在播放（0.0~1.0 归一化）。
+///
+/// 取 0 是有意的：峰值是设备周期内的最大值，只要那个周期里有声音就会 > 0，
+/// 真正的静音会话返回 0.0。抬阈值只会误杀小声播放（听歌音量低、远距离语音），
+/// 却拦不住提示音——提示音恰恰是响的。抗提示音靠的是密采样，不是阈值。
 const PEAK_THRESHOLD: f32 = 0.0;
+
+/// 各应用「未满 1 秒」的播放余量（毫秒），跨枚举周期结转。
+/// 密采样后单个采样点只有 200ms，不足 1 秒；不结转的话短促提示音会被反复抹零。
+fn pending_ms() -> &'static Mutex<HashMap<String, u64>> {
+    static MAP: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// 播放中的「显示名 → exe 路径」映射：collect_playing 轮询时填充，
 /// 供 summary() 在查询路径懒提取图标（不再于 5 秒热轮询里同步做 GDI+PNG）。
@@ -78,21 +99,15 @@ fn exe_path_of(pid: u32) -> Option<String> {
     None
 }
 
-/// 轮询一轮：枚举音频会话，返回正在发声的应用显示名（已跳过自身、已按应用去重）。
-fn playing_apps() -> Vec<String> {
-    unsafe {
-        // COM 初始化（本线程每轮 init/uninit 成对；S_FALSE=已初始化也照常配对）
-        // HRESULT::ok() 将负值视为错误，S_OK/S_FALSE 均视为成功
-        if CoInitializeEx(None, COINIT_MULTITHREADED).ok().is_err() {
-            return Vec::new();
-        }
-        let r = collect_playing();
-        CoUninitialize();
-        r
-    }
-}
-
-unsafe fn collect_playing() -> Vec<String> {
+/// 枚举一轮音频会话，返回「应用显示名 → 该会话的峰值计」，供本轮密集采样复用。
+///
+/// 返回值刻意保留**全部**会话（含此刻静音的）：会话可能在本轮采样途中才开始发声，
+/// 枚举时按峰值过滤会把它们提前排除掉。进程名解析 / 软件名映射只在这里做一次
+/// （每个枚举周期一次），采样期间不再碰任何进程 API。
+///
+/// 调用方需自行完成本线程的 COM 初始化——返回的峰值计要跨整个采样周期持有，
+/// 不能在枚举函数内部 CoUninitialize。
+unsafe fn playing_meters() -> Vec<(String, IAudioMeterInformation)> {
     let Ok(enumerator) =
         CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
     else {
@@ -112,21 +127,15 @@ unsafe fn collect_playing() -> Vec<String> {
         return Vec::new();
     };
 
-    let mut found = HashSet::new();
+    let mut found: Vec<(String, IAudioMeterInformation)> = Vec::new();
     for i in 0..count {
         let Ok(session) = sessions.GetSession(i) else {
             continue;
         };
-        // 1) 会话峰值 > 阈值才可能计入（峰值取自上一个设备周期，周期为毫秒级，不影响 5 秒轮询）
+        // 1) 会话峰值计：本轮采样期间反复读取（峰值是设备周期快照，必须密采样）
         let Ok(meter) = session.cast::<IAudioMeterInformation>() else {
             continue;
         };
-        let Ok(peak) = meter.GetPeakValue() else {
-            continue;
-        };
-        if peak <= PEAK_THRESHOLD {
-            continue;
-        }
         // 2) 会话 → 进程 → exe 路径 → 软件名（复用 app_usage 的命名与图标逻辑）
         let Ok(ctrl2) = session.cast::<IAudioSessionControl2>() else {
             continue;
@@ -144,39 +153,111 @@ unsafe fn collect_playing() -> Vec<String> {
         let display = crate::app_usage::display_name_of(&exe_path, &exe_name);
         // 不再于热轮询里同步提取图标：只记录「显示名→exe路径」，留给 summary() 懒提取
         playing_exe().lock().unwrap().insert(display.clone(), exe_path);
-        found.insert(display);
+        found.push((display, meter));
     }
-    found.into_iter().collect()
+    found
 }
 
-/// 结算线程：每 5 秒把「发声中的应用」各 +5 秒（按应用去重后）
-fn tick_loop() {
-    loop {
-        std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+/// 在一个枚举周期内密集采样各会话峰值，返回「应用 → 有声毫秒数」。
+///
+/// 同一应用有多个会话（如浏览器多标签）时按应用去重：任一会话有声即计为该应用
+/// 有声，绝不叠加，否则开两个标签页播放时长就翻倍。
+///
+/// 记账单位用**真实经过时间**而非名义间隔：`sleep(200ms)` 的实际睡眠受系统计时器
+/// 分辨率（默认 15.6ms）与调度影响，按名义值记会引入系统性偏差。
+/// 但单次间隔要封顶——系统休眠/长时间卡顿醒来时 dt 可达数千秒，
+/// 而休眠期间声卡并不输出声音，按名义间隔记才不会把休眠时长算成播放时长。
+fn sample_round(meters: &[(String, IAudioMeterInformation)]) -> HashMap<String, u64> {
+    let mut acc: HashMap<String, u64> = HashMap::new();
+    let deadline = Duration::from_secs(POLL_INTERVAL_SECS);
+    let start = Instant::now();
+    let mut last = start;
+    while start.elapsed() < deadline {
+        std::thread::sleep(Duration::from_millis(SAMPLE_INTERVAL_MS));
         if !ENABLED.load(Ordering::Relaxed) {
-            continue; // 已停用：跳过枚举与落盘，纯休眠
+            break; // 采样途中被停用：立即收尾，已采到的部分照常记账
         }
-        let apps = playing_apps();
-        if apps.is_empty() {
+        let now = Instant::now();
+        let dt = ((now - last).as_millis() as u64).min(SAMPLE_INTERVAL_MS * 2);
+        last = now;
+
+        // 先判定再累加：保证同一应用有多个会话时本轮只记一次 dt
+        let mut heard: HashSet<&str> = HashSet::new();
+        for (app, meter) in meters {
+            // 会话中途消失（应用关闭）时 GetPeakValue 会失败，按静音处理即可——
+            // 下一轮枚举自会拿到最新的会话列表
+            if let Ok(peak) = unsafe { meter.GetPeakValue() } {
+                if peak > PEAK_THRESHOLD {
+                    heard.insert(app.as_str());
+                }
+            }
+        }
+        for app in heard {
+            *acc.entry(app.to_string()).or_insert(0) += dt;
+        }
+    }
+    acc
+}
+
+/// 把本轮采样到的「各应用有声毫秒」记入数据库：满 1 秒才落盘，余量跨轮结转。
+fn credit(played_ms: &HashMap<String, u64>) {
+    let mut pending = pending_ms().lock().unwrap();
+    let mut due: Vec<(String, i64)> = Vec::new();
+    for (app, ms) in played_ms {
+        let total = pending.entry(app.clone()).or_insert(0);
+        *total += ms;
+        let secs = *total / 1000;
+        if secs > 0 {
+            *total -= secs * 1000;
+            due.push((app.clone(), secs as i64));
+        }
+    }
+    drop(pending); // 先放锁再碰数据库
+    if due.is_empty() {
+        return;
+    }
+    let now_dt = Local::now();
+    let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
+    let hour = now_dt.hour().min(23) as i64;
+    let g = crate::db::conn().lock().unwrap();
+    for (app, secs) in due {
+        let _ = g.execute(
+            "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+            params![date, app, secs],
+        );
+        let _ = g.execute(
+            "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+            params![date, hour, app, secs],
+        );
+    }
+}
+
+/// 枚举 + 采样 + 落盘的主循环。
+fn tick_loop() {
+    unsafe {
+        // COM 在本线程只初始化一次：采样期间要跨整个枚举周期持有 IAudioMeterInformation，
+        // 不能像旧实现那样每轮 init/uninit 成对——CoUninitialize 会把 COM 对象一起带走。
+        // 线程常驻不退出，故无需配对的 CoUninitialize。
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    loop {
+        if !ENABLED.load(Ordering::Relaxed) {
+            // 已停用：跳过枚举与落盘，纯休眠，完全不碰 Core Audio API
+            std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+            continue;
+        }
+        // 枚举本身即计时器：sample_round 内的密集采样已经把这一轮的时间走完，
+        // 不再额外 sleep，否则每轮都有一半时间处于「没在采样」的空窗。
+        let meters = unsafe { playing_meters() };
+        if meters.is_empty() {
+            std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
             continue;
         }
         WATCH_OK.store(true, Ordering::SeqCst);
-        let now_dt = Local::now();
-        let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
-        let hour = now_dt.hour().min(23) as i64;
-        let g = crate::db::conn().lock().unwrap();
-        for app in apps {
-            let _ = g.execute(
-                "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-                params![date, app, POLL_INTERVAL_SECS as i64],
-            );
-            let _ = g.execute(
-                "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-                params![date, hour, app, POLL_INTERVAL_SECS as i64],
-            );
-        }
+        let played = sample_round(&meters);
+        credit(&played);
     }
 }
 
