@@ -26,7 +26,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::{Local, Timelike};
+use chrono::{Local, TimeZone, Timelike};
 use rusqlite::params;
 use serde::Serialize;
 use windows::core::{PCWSTR, PWSTR};
@@ -687,20 +687,92 @@ fn settle(now_mono: u64, with_icon: bool) {
         // 懒提取当前应用图标（后台线程，非热路径）：首次命中时 GDI+PNG 一次，之后走缓存
         ensure_icon(&cur.display, &cur.exe_path);
     }
-    let now_dt = Local::now();
-    let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
-    let hour = now_dt.hour().min(23) as i64;
+    // 本段覆盖的墙钟区间：时长 `secs` 取自单调时钟（准确），结束时刻取结算瞬间的墙钟。
+    // 段长恰为 secs 秒（不足 1 秒的零头留给下一段），故按 [end - secs*1000, end) 还原。
+    // 注意：零头会让整段位置有 <1 秒的偏移，仅影响边界处 1 秒的归属，可接受——
+    // 相比旧行为「整段（最长 60 秒）被吞并到边界后的桶」，误差小了两个数量级。
+    let end_wall = now_ms();
+    let start_wall = end_wall.saturating_sub(secs.saturating_mul(1000));
+    // 按整点 / 跨天边界切分后分桶记账，避免整段被吞并到结算时刻所在的那个桶（A5）。
+    let parts = split_by_hour(start_wall, end_wall, secs);
     let g = crate::db::conn().lock().unwrap();
-    let _ = g.execute(
-        "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-        params![date, cur.display, secs as i64],
-    );
-    let _ = g.execute(
-        "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-        params![date, hour, cur.display, secs as i64],
-    );
+    for (date, hour, s) in parts {
+        let _ = g.execute(
+            "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+            params![date, cur.display, s],
+        );
+        let _ = g.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+            params![date, hour, cur.display, s],
+        );
+    }
+}
+
+/// 把一段墙钟区间按「整点（含跨天）」边界切分，供落库时分桶记账。
+///
+/// 背景（A5）：原实现按**结算时刻**所在的 date/hour 把整段 `secs` 全记进去，
+/// 于是 23:59:55 → 00:00:05 这 10 秒会整段落到「新一天的 0 点」桶，
+/// 前一个小时 / 前一天被白白吞掉。这里先按边界把段切开，各归各桶。
+///
+/// 返回值是 `(date, hour, seconds)` 列表，**总和恒等于传入的 `secs`**：
+/// 切分产生的不足 1 秒零头会补给最后一个子段，既不丢秒也不重复记。
+///
+/// 注意这里必须写 `chrono::Duration` 全路径——本文件已导入 `std::time::Duration`，
+/// 两者同名，直接写 `Duration` 会拿到 std 的版本而编译失败。
+fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64)> {
+    let mut out: Vec<(String, i64, i64)> = Vec::new();
+    if secs == 0 || end_ms <= start_ms {
+        return out;
+    }
+    let mut remaining = secs;
+    let mut cur = start_ms;
+    while cur < end_ms && remaining > 0 {
+        let dt = match Local.timestamp_millis_opt(cur as i64).single() {
+            Some(d) => d,
+            None => break, // 时间戳越界：放弃切分，走下面的保底分支
+        };
+        // 本子段所属小时桶的结束时刻（下一个整点）；chrono 自动处理跨天
+        let next_ms = (dt + chrono::Duration::hours(1))
+            .with_minute(0)
+            .and_then(|d| d.with_second(0))
+            .and_then(|d| d.with_nanosecond(0))
+            .map(|d| d.timestamp_millis().max(0) as u64)
+            .unwrap_or(end_ms);
+        let seg_end = next_ms.min(end_ms);
+        if seg_end <= cur {
+            break; // 防御：时钟异常时不要死循环
+        }
+        let sub_secs = (seg_end.saturating_sub(cur) / 1000).min(remaining);
+        if sub_secs > 0 {
+            out.push((
+                dt.date_naive().format("%Y-%m-%d").to_string(),
+                dt.hour().min(23) as i64,
+                sub_secs as i64,
+            ));
+            remaining -= sub_secs;
+        }
+        cur = seg_end;
+    }
+    // 各子段按整秒取整后若有残留（每段不足 1 秒的零头），补给最后一个子段；
+    // 若一个子段都没切出来（整段不足 1 秒 / 时间戳越界），整段记到起点所属桶。
+    if remaining > 0 {
+        if let Some(last) = out.last_mut() {
+            last.2 += remaining as i64;
+        } else {
+            let dt = Local
+                .timestamp_millis_opt(start_ms as i64)
+                .single()
+                .unwrap_or_else(Local::now);
+            out.push((
+                dt.date_naive().format("%Y-%m-%d").to_string(),
+                dt.hour().min(23) as i64,
+                secs as i64,
+            ));
+        }
+    }
+    out
 }
 
 /// 每 10 秒结算一次：把自上次结算以来的时长结给当前前台应用。
@@ -913,5 +985,76 @@ mod tests {
         let (app, secs) = take_segment(2_010_000);
         assert_eq!(secs, 1);
         assert_eq!(app.map(|a| a.display), Some("Chrome".into()));
+    }
+
+    /// 跨小时 / 跨天必须按边界分桶，且切分前后总秒数守恒（A5）。
+    ///
+    /// 不碰 `CUR`，无需抢 TEST_LOCK。
+    #[test]
+    fn split_by_hour_splits_across_hour_and_day() {
+        // ① 同一小时内：不切分，整段归该小时
+        let start = Local
+            .with_ymd_and_hms(2026, 9, 3, 10, 0, 0)
+            .unwrap()
+            .timestamp_millis() as u64;
+        let parts = split_by_hour(start, start + 10_000, 10);
+        assert_eq!(parts.len(), 1, "同一小时内不该切分");
+        assert_eq!(parts[0].1, 10);
+        assert_eq!(parts[0].2, 10);
+
+        // ② 跨小时不跨天：10:59:55 起的 10 秒 → 10 点 5 秒 + 11 点 5 秒
+        let start = Local
+            .with_ymd_and_hms(2026, 9, 3, 10, 59, 55)
+            .unwrap()
+            .timestamp_millis() as u64;
+        let parts = split_by_hour(start, start + 10_000, 10);
+        assert_eq!(parts.len(), 2, "跨整点必须切成两段");
+        assert_eq!(parts[0].1, 10);
+        assert_eq!(parts[0].2, 5);
+        assert_eq!(parts[1].1, 11);
+        assert_eq!(parts[1].2, 5);
+
+        // ③ 跨天：23:59:55 起的 10 秒 → 当天 23 点 5 秒 + 次日 0 点 5 秒，日期必须不同
+        let start = Local
+            .with_ymd_and_hms(2026, 9, 3, 23, 59, 55)
+            .unwrap()
+            .timestamp_millis() as u64;
+        let parts = split_by_hour(start, start + 10_000, 10);
+        assert_eq!(parts.len(), 2, "跨天必须切成两段");
+        assert_eq!(parts[0].1, 23);
+        assert_eq!(parts[0].2, 5);
+        assert_eq!(parts[1].1, 0);
+        assert_eq!(parts[1].2, 5);
+        assert_ne!(parts[0].0, parts[1].0, "跨天后两段应落在不同日期");
+
+        // ④ 无论怎么切，总秒数必须守恒（不丢秒也不重复记）
+        let cases = [
+            (
+                Local
+                    .with_ymd_and_hms(2026, 9, 3, 10, 59, 55)
+                    .unwrap()
+                    .timestamp_millis() as u64,
+                10u64,
+            ),
+            (
+                Local
+                    .with_ymd_and_hms(2026, 9, 3, 23, 59, 59)
+                    .unwrap()
+                    .timestamp_millis() as u64,
+                60u64,
+            ),
+            (
+                Local
+                    .with_ymd_and_hms(2026, 9, 3, 8, 0, 0)
+                    .unwrap()
+                    .timestamp_millis() as u64,
+                1u64,
+            ),
+        ];
+        for (start, secs) in cases {
+            let parts = split_by_hour(start, start + secs * 1000, secs);
+            let sum: i64 = parts.iter().map(|p| p.2).sum();
+            assert_eq!(sum, secs as i64, "切分后总秒数必须守恒: {parts:?}");
+        }
     }
 }
