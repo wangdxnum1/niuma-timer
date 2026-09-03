@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{Local, Timelike};
@@ -164,7 +164,8 @@ struct CurApp {
 /// 现在前台一切换就先把上一段结给「切走前」的应用，tick 只负责切段兜底。
 struct CurState {
     app: Option<CurApp>,
-    /// 本段起始时刻（毫秒）。0 = 尚未建立基准（首次只建基准、不计秒）
+    /// 本段起始时刻（**单调**毫秒，取自 `mono_ms`，不是墙钟）。
+    /// 0 = 尚未建立基准（首次只建基准、不计秒）
     since_ms: u64,
 }
 
@@ -229,11 +230,36 @@ pub fn refresh_foreground() {
     }
 }
 
+/// 墙钟毫秒（自 Unix 纪元）。
+///
+/// 只用于需要与「墙钟时刻」比较的场合：目前是挂机判定——
+/// `activity::last_input_ms()` 返回的也是墙钟毫秒，两者必须同域才能相减。
+///
+/// 本项目三种时间各司其职，不可混用：
+/// - 段时长 → 单调时钟 `mono_ms()`（免疫回拨，只关心间距）；
+/// - 挂机判定 → 墙钟 `now_ms()`（与 `last_input_ms()` 同域）；
+/// - 落库的 `date` / `hour` → `chrono::Local::now()`（要的是日历日期）。
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 单调毫秒：进程启动后经过的毫秒数（带 `+1` 偏移）。
+///
+/// 基于 `Instant`，**不受系统时间回拨 / NTP 校正 / 手动改时间影响**，
+/// 专供计算时间差（段时长这类「只关心间距」的量）。
+///
+/// 为什么段时长必须用单调时钟：墙钟一旦回拨，`now < since` 会让 `saturating_sub`
+/// 得 0，段被丢弃的同时段起点也不推进——此后在墙钟追上 `since` 之前，
+/// 应用使用时长会**永久停记**。单调时钟不会回退，从根上消除这类滞留。
+///
+/// `+1` 是为了避开 `CurState.since_ms == 0` 这个「尚未建立基准」的哨兵值：
+/// `Instant` 起算时可能正好返回 0，撞上哨兵会被误判成「首次调用」而白丢第一段。
+fn mono_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +567,7 @@ fn update_cur_app(hwnd: HWND) {
 /// 顺序不能反——反了就会把上一段时长记到新应用头上，正是本修复要消除的问题。
 /// 图标提取在此关掉（前台切换回调是热路径），由 10 秒 tick 后台补齐。
 fn switch_foreground(hwnd: HWND) {
-    settle(now_ms(), false);
+    settle(mono_ms(), false);
     update_cur_app(hwnd);
 }
 
@@ -597,9 +623,14 @@ unsafe fn watch_thread() {
 
 /// 取出「上一段」并推进段起点：返回该段归属的前台应用与应计入的整秒数。
 ///
+/// `now` 是**单调**毫秒（取自 `mono_ms`），不是墙钟：段时长只关心间距，用单调时钟
+/// 可免疫系统时间回拨 / NTP 校正 / 手动改时间。用墙钟时，一旦回拨导致 `now < since`，
+/// `saturating_sub` 得 0，段被丢弃的同时段起点也不推进——在墙钟追上 `since` 之前，
+/// 应用使用时长会**永久停记**。单调时钟不回退，从根上消除这种滞留。
+///
 /// 段起点只推进 `secs * 1000`（而不是直接跳到 now）：不足 1 秒的零头留到下一段，
 /// 否则高频切换时每段零头都被抹掉（切 1000 次 × 0.9 秒 → 一天凭空丢 15 分钟）。
-/// 只有时间跳变（睡眠/休眠）时才把起点直接推到 now，把超限部分丢弃。
+/// 只有长时间未结算（睡眠 / 休眠）时才把起点直接推到 now，把超限部分丢弃。
 fn take_segment(now: u64) -> (Option<CurApp>, u64) {
     let mut g = CUR.lock().unwrap();
     let since = g.since_ms;
@@ -627,10 +658,10 @@ fn take_segment(now: u64) -> (Option<CurApp>, u64) {
 /// 留在回调里做的是 SQLite 写入，量级完全不同：WAL + synchronous=NORMAL 下一次
 /// upsert 几十微秒、不做 fsync，而 Windows 对事件回调的容忍在数百毫秒级，
 /// 即便疯狂切窗口也不会触发系统弃用回调，故不必为此再引入一层队列。
-fn settle(now: u64, with_icon: bool) {
+fn settle(now_mono: u64, with_icon: bool) {
     // 段已取出、段起点已推进：下面任何一道门控命中都只是「丢弃这一段」，
     // 不会造成基准滞留（解锁 / 重开监控后从当前时刻起算，无跳变）。
-    let (app, secs) = take_segment(now);
+    let (app, secs) = take_segment(now_mono);
     if secs == 0 {
         return;
     }
@@ -645,8 +676,10 @@ fn settle(now: u64, with_icon: bool) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    // 挂机判定：距最后一次输入超过阈值 → 整段不算
-    let idle = now.saturating_sub(crate::activity::last_input_ms());
+    // 挂机判定：距最后一次输入超过阈值 → 整段不算。
+    // 这里必须用墙钟 `now_ms()`：`activity::last_input_ms()` 返回的也是墙钟毫秒，
+    // 只有同域相减才有意义（段时长已改用单调时钟，两者不可混用）。
+    let idle = now_ms().saturating_sub(crate::activity::last_input_ms());
     if idle > IDLE_THRESHOLD_MS {
         return;
     }
@@ -673,7 +706,7 @@ fn settle(now: u64, with_icon: bool) {
 /// 每 10 秒结算一次：把自上次结算以来的时长结给当前前台应用。
 /// 正常无切换时等价旧行为；有切换时由切换回调先结过账，这里只切段兜底。
 fn tick() {
-    settle(now_ms(), true);
+    settle(mono_ms(), true);
 }
 
 /// 启动监控：前台事件钩子线程 + 10 秒结算线程。幂等，仅首次生效。
@@ -786,6 +819,22 @@ mod tests {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     fn lock_cur() -> std::sync::MutexGuard<'static, ()> {
         TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 单调时钟必须真前进，且永不返回 0。
+    ///
+    /// 这两条正是 A4 的核心不变量：
+    /// ① 段时长改用 `Instant` 后不回退，系统时间回拨 / NTP 校正不会让段起点滞留；
+    /// ② 0 是 `since_ms` 的「尚未建立基准」哨兵，`mono_ms()` 一旦返回 0，
+    ///    首次建立基准就会被误判成「还没建过」，白丢第一段。
+    #[test]
+    fn mono_ms_is_monotonic_and_nonzero() {
+        let a = mono_ms();
+        assert!(a > 0, "mono_ms 不得返回 0，会撞上 since_ms 的未初始化哨兵");
+        std::thread::sleep(Duration::from_millis(20));
+        let b = mono_ms();
+        assert!(b > a, "单调时钟必须随时间前进: {a} -> {b}");
+        assert!(b - a >= 15, "睡了 20ms，差值不应明显偏小: {}", b - a);
     }
 
     /// 段切分的三条关键性质。
