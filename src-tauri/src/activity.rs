@@ -589,7 +589,7 @@ fn on_raw_mouse(m: &RAWMOUSE) {
         // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px（位置取自真实光标）
         let mut pt = POINT { x: 0, y: 0 };
         if unsafe { GetCursorPos(&mut pt).is_ok() } {
-            let now = GetMessageTime() as u32;
+            let now = unsafe { GetMessageTime() } as u32;
             let (lt, lx, ly) = (
                 LAST_LBTN_TIME.load(Ordering::Relaxed),
                 LAST_LBTN_X.load(Ordering::Relaxed),
@@ -597,7 +597,7 @@ fn on_raw_mouse(m: &RAWMOUSE) {
             );
             let dt = now.wrapping_sub(lt);
             let (dx, dy) = ((pt.x - lx).abs(), (pt.y - ly).abs());
-            if dt > 0 && dt < GetDoubleClickTime() && dx <= 5 && dy <= 5 {
+            if dt > 0 && dt < unsafe { GetDoubleClickTime() } && dx <= 5 && dy <= 5 {
                 C_DBL.fetch_add(1, Ordering::Relaxed);
             }
             LAST_LBTN_TIME.store(now, Ordering::Relaxed);
@@ -633,7 +633,7 @@ fn on_raw_keyboard(k: &RAWKEYBOARD) {
     if k.Flags & RI_KEY_BREAK as u16 != 0 {
         return; // 键抬起：不计
     }
-    keyq_push(k.VKey as u32, GetMessageTime() as u32);
+    keyq_push(k.VKey as u32, unsafe { GetMessageTime() } as u32);
 }
 
 /// Raw Input 窗口过程：仅处理 `WM_INPUT`，其余消息交 `DefWindowProcW`。

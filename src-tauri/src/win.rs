@@ -22,8 +22,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::{
-    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS,
-    RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE,
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+    RIDEV_INPUTSINK, RIDEV_REMOVE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, RegisterClassW,
@@ -62,7 +62,7 @@ unsafe fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: match GetModuleHandleW(None) {
-            Ok(h) => h,
+            Ok(h) => h.into(),
             Err(_) => return,
         },
         hIcon: Default::default(),
@@ -93,7 +93,7 @@ pub unsafe fn create_message_window(class_name: &[u16], wndproc: WNDPROC) -> win
         0,
         Some(HWND_MESSAGE),
         None,
-        Some(GetModuleHandleW(None)?),
+        Some(GetModuleHandleW(None)?.into()),
         None,
     )?;
     Ok(hwnd)
