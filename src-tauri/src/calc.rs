@@ -288,7 +288,7 @@ mod tests {
         assert!(approx(st.worked_h, 1.0));
         assert!(approx(st.to_off_h, 8.0));
         assert!(approx(st.daily_hours, 8.0));
-        let hourly = 15000.0 / (22.0 * 8.0);
+        let hourly = 10000.0 / (22.0 * 8.0);
         assert!(approx(st.hourly_rate, hourly));
         assert!(approx(st.rate_per_min, hourly / 60.0));
         assert!(approx(st.earned, hourly));

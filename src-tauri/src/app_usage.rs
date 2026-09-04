@@ -42,11 +42,10 @@ use windows::Win32::System::Threading::{
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
-use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, GetForegroundWindow, GetIconInfo, GetWindowThreadProcessId, DI_NORMAL,
-    EVENT_SYSTEM_FOREGROUND, HICON, ICONINFO, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    DestroyIcon, DrawIconEx, GetIconInfo, GetWindowThreadProcessId, DI_NORMAL, EVENT_SYSTEM_FOREGROUND,
+    HICON, ICONINFO,
 };
 
 /// 挂机阈值：距最后一次真实输入超过该时长（毫秒）→ 前台窗口不算使用中
@@ -182,11 +181,8 @@ fn in_whitelist(display: &str) -> bool {
 
 /// 重新开启监控时调用：把当前前台窗口立即纳入统计，无需等下次窗口切换
 pub fn refresh_foreground() {
-    unsafe {
-        let fg = GetForegroundWindow();
-        if !fg.is_invalid() {
-            switch_foreground(fg);
-        }
+    if let Some(fg) = crate::win::foreground_window() {
+        switch_foreground(fg);
     }
 }
 
@@ -549,32 +545,26 @@ unsafe extern "system" fn win_event_proc(
     }
 }
 
-unsafe fn watch_thread() {
-    let h = SetWinEventHook(
-        EVENT_SYSTEM_FOREGROUND,
-        EVENT_SYSTEM_FOREGROUND,
-        None,
-        Some(win_event_proc),
-        0,
-        0,
-        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-    );
-    if h.is_invalid() {
+fn watch_thread() {
+    // RAII 守卫持有钩子：本线程无论正常退出还是 panic，Drop 都会 UnhookWinEvent，
+    // 不会再出现「提前 return 漏卸载」的手工配对问题（收口于 win::WinEventHookGuard）。
+    let Some(_hook) = crate::win::WinEventHookGuard::install_foreground_hook(Some(win_event_proc))
+    else {
         eprintln!(
             "[app_usage] 前台窗口事件钩子安装失败: {}",
             windows::core::Error::from_win32()
         );
         WATCH_OK.store(false, Ordering::SeqCst);
         return;
-    }
+    };
     WATCH_OK.store(true, Ordering::SeqCst);
     // 启动时初始化：若此刻正有前台窗口，立即进入统计（此刻段起点为 0，只建基准不计秒）
-    let fg = GetForegroundWindow();
-    if !fg.is_invalid() {
+    if let Some(fg) = crate::win::foreground_window() {
         switch_foreground(fg);
     }
-    crate::win::run_message_loop();
-    let _ = UnhookWinEvent(h);
+    // SAFETY：OUTOFCONTEXT 钩子的回调投递到本线程，必须跑消息循环才能收到事件
+    // （见 win.rs 顶部不变量）。
+    unsafe { crate::win::run_message_loop() };
 }
 
 // ---------------------------------------------------------------------------
@@ -746,7 +736,7 @@ pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(|| unsafe { watch_thread() });
+    std::thread::spawn(watch_thread);
     std::thread::spawn(|| loop {
         std::thread::sleep(Duration::from_secs(10));
         tick();

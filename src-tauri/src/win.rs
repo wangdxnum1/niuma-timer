@@ -22,14 +22,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::{
+    HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent, WINEVENTPROC,
+};
 use windows::Win32::UI::Input::{
     GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
     RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, RegisterClassW,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC, MSG,
+    CreateWindowExW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
+    GetForegroundWindow, GetMessageW, HWND_MESSAGE, RegisterClassW, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, MSG,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -218,6 +223,67 @@ pub fn raw_input_len_ok(dw_type: u32, dw_size: u32) -> bool {
     (dw_size as usize) >= need
 }
 
+// ---------------------------------------------------------------------------
+// 前台窗口事件钩子（SetWinEventHook）
+// ---------------------------------------------------------------------------
+
+/// `SetWinEventHook` 句柄的 RAII 守卫：Drop 时自动 `UnhookWinEvent`。
+///
+/// 以前调用方手工「安装 → 消息循环 → 卸载」三段配对，任何提前 return / panic
+/// 都会漏掉卸载；守卫把配对交给类型系统——钩子生命周期 == 守卫生命周期。
+pub struct WinEventHookGuard(HWINEVENTHOOK);
+
+impl WinEventHookGuard {
+    /// 安装前台窗口切换事件钩子（`EVENT_SYSTEM_FOREGROUND`）。
+    ///
+    /// 标志位固定为 `WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS`：
+    /// - `OUTOFCONTEXT`：回调投递到安装线程（**该线程随后必须进入
+    ///   `run_message_loop()`**，否则一个事件都收不到——见本文件顶部不变量）；
+    /// - `SKIPOWNPROCESS`：不收自己进程的事件（本程序切自己的窗口不该记账）。
+    ///
+    /// 安装失败（系统返回无效句柄）返回 `None`。
+    pub fn install_foreground_hook(callback: WINEVENTPROC) -> Option<Self> {
+        // SAFETY：SetWinEventHook 本身线程安全；OUTOFCONTEXT 模式下回调跑在
+        // 安装线程的消息循环上，「安装线程随后进入消息循环」是本函数的调用契约。
+        let h = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                callback,
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if h.is_invalid() {
+            None
+        } else {
+            Some(Self(h))
+        }
+    }
+}
+
+impl Drop for WinEventHookGuard {
+    fn drop(&mut self) {
+        // SAFETY：句柄来自 SetWinEventHook，且只在这里卸载一次。
+        unsafe {
+            let _ = UnhookWinEvent(self.0);
+        }
+    }
+}
+
+/// 当前前台窗口（安全封装）。无前台窗口 / 句柄无效时返回 `None`。
+pub fn foreground_window() -> Option<HWND> {
+    // SAFETY：纯查询，无副作用。
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.is_invalid() {
+        None
+    } else {
+        Some(fg)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +320,29 @@ mod tests {
             assert!(!raw_input_len_ok(RIM_TYPEMOUSE.0, kb));
         }
         assert!(!raw_input_len_ok(RIM_TYPEHID.0, ms));
+    }
+
+    unsafe extern "system" fn noop_win_event_proc(
+        _: HWINEVENTHOOK,
+        _: u32,
+        _: HWND,
+        _: i32,
+        _: i32,
+        _: u32,
+        _: u32,
+    ) {
+    }
+
+    /// RAII 配对回归：安装成功 → drop（内部 Unhook）→ 立即重装仍成功。
+    /// 若 Drop 漏卸载或重复卸载，第二次安装大概率失败 / 行为未定义。
+    #[test]
+    fn foreground_hook_guard_installs_drops_and_reinstalls() {
+        let guard = WinEventHookGuard::install_foreground_hook(Some(noop_win_event_proc));
+        assert!(guard.is_some(), "SetWinEventHook 安装失败（OUTOFCONTEXT 钩子无需窗口）");
+        drop(guard);
+        assert!(
+            WinEventHookGuard::install_foreground_hook(Some(noop_win_event_proc)).is_some(),
+            "卸载后重装失败：WinEventHookGuard 的 Drop 没有正确 UnhookWinEvent"
+        );
     }
 }
