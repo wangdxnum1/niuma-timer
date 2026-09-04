@@ -1,10 +1,15 @@
 //! 加班记录：数据结构、费用计算、SQLite 持久化（ot_records 表）。
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Weekday};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+
+/// 记录来源：自动（锁屏离开时生成）。可被后续自动记录覆盖。
+pub const SOURCE_AUTO: i32 = 0;
+/// 记录来源：手动录入。优先级最高，自动路径**不得**覆盖（见 `upsert_auto`）。
+pub const SOURCE_MANUAL: i32 = 1;
 
 /// 单日加班记录
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +30,12 @@ pub struct OvertimeRecord {
     pub meal: f64,
     /// 当日合计（元）
     pub total: f64,
+    /// 来源：`SOURCE_AUTO`(0) 自动 / `SOURCE_MANUAL`(1) 手动。
+    /// 自动 upsert 只覆盖自动记录，手改过的记录不会被当晚的锁屏数据顶掉。
+    /// `serde(default)` 是必需的：旧版 `overtime.json` 没有这个字段，
+    /// 缺默认值会让 `db::migrate_ot_json` 反序列化历史归档直接失败。
+    #[serde(default)]
+    pub source: i32,
 }
 
 /// 月度加班记录集合（持久化结构体，只存原始 records）
@@ -165,6 +176,7 @@ fn compute_record(
         fee,
         meal,
         total,
+        source: SOURCE_AUTO, // 计算出来的记录一律是自动来源，手改由 save_manual 改写
     })
 }
 
@@ -244,7 +256,8 @@ pub fn save_manual(
     }
     let rec = compute_record(date, lock_dt, ot_start_str, cfg)
         .ok_or_else(|| "无法生成加班记录".to_string())?;
-    upsert_record(rec.clone());
+    // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
+    upsert_manual(rec.clone());
     Ok(rec)
 }
 
@@ -267,13 +280,32 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
 
 // ---- 持久化（SQLite） ----
 
-/// 添加或更新某天的加班记录（date 主键，同日覆盖）
-pub fn upsert_record(record: OvertimeRecord) {
-    let g = crate::db::conn().lock().unwrap();
-    let _ = g.execute(
-        "INSERT OR REPLACE INTO ot_records \
-         (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+/// 写入一条加班记录到指定连接（date 主键，同日按 `force` 决定是否覆盖）。
+///
+/// 只写 `?` 参数化的 UPSERT，**不用 `INSERT OR REPLACE`**：后者的语义是
+/// 「冲突时先 DELETE 再 INSERT」，无法附加条件，做不到「手改的记录不让自动覆盖」。
+///
+/// - `force = true`（手动路径）：无条件覆盖同名日期行；
+/// - `force = false`（自动路径）：`WHERE ot_records.source = 0` 只在既有行**也是自动
+///   来源**时才覆盖，手动记录（`source = 1`）原样保留，一次锁屏不会顶掉用户的手改值。
+///
+/// 抽出「接受 `&Connection`」这一层是为了让单测能在 in-memory 库上直接验证覆盖语义，
+/// 不必碰真实的 `%APPDATA%/niuma-timer/niuma.db`。
+fn upsert_into(g: &Connection, record: &OvertimeRecord, force: bool) -> rusqlite::Result<()> {
+    g.execute(
+        "INSERT INTO ot_records \
+         (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+         ON CONFLICT(date) DO UPDATE SET \
+           lock_time   = excluded.lock_time, \
+           ot_start    = excluded.ot_start, \
+           raw_hours   = excluded.raw_hours, \
+           valid_hours = excluded.valid_hours, \
+           fee         = excluded.fee, \
+           meal        = excluded.meal, \
+           total       = excluded.total, \
+           source      = excluded.source \
+         WHERE ?10 <> 0 OR ot_records.source = 0",
         params![
             record.date,
             record.lock_time,
@@ -282,9 +314,31 @@ pub fn upsert_record(record: OvertimeRecord) {
             record.valid_hours,
             record.fee,
             record.meal,
-            record.total
+            record.total,
+            record.source,
+            force as i32
         ],
-    );
+    )?;
+    Ok(())
+}
+
+/// **自动**路径 upsert（锁屏离开时调用）。
+///
+/// 关键保护：只覆盖同为自动来源的记录。用户手动改过某天（`source = 1`）之后，
+/// 当晚再次锁屏产生的自动数据不会把手改值顶掉——改之前这个动作是静默发生的。
+pub fn upsert_auto(record: OvertimeRecord) {
+    let mut rec = record;
+    rec.source = SOURCE_AUTO; // 来源由路径决定，不信任调用方传入的值
+    let g = crate::db::conn().lock().unwrap();
+    let _ = upsert_into(&g, &rec, false);
+}
+
+/// **手动**路径 upsert（加班明细页增删改）。手改是用户明确意图，优先级最高，无条件覆盖。
+pub fn upsert_manual(record: OvertimeRecord) {
+    let mut rec = record;
+    rec.source = SOURCE_MANUAL;
+    let g = crate::db::conn().lock().unwrap();
+    let _ = upsert_into(&g, &rec, true);
 }
 
 /// 获取指定月份的加班记录（SQL 按日期前缀过滤，历史月与当月同表，无需归档）。
@@ -292,7 +346,7 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
     let prefix = format!("{:04}-{:02}-", year, month);
     let g = crate::db::conn().lock().unwrap();
     let mut stmt = match g.prepare(
-        "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total \
+        "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
          FROM ot_records WHERE date LIKE ?1 ORDER BY date",
     ) {
         Ok(s) => s,
@@ -308,6 +362,7 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
             fee: r.get(5)?,
             meal: r.get(6)?,
             total: r.get(7)?,
+            source: r.get(8)?,
         })
     });
     match rows {
@@ -439,5 +494,113 @@ mod tests {
         let r = calc_record(date, lock_dt(2026, 8, 19, 20, 0), &cfg).expect("应生成");
         assert_eq!(r.ot_start, "18:00");
         assert!(approx(r.valid_hours, 2.0));
+    }
+
+    // ---- 覆盖语义：手动记录必须保住，不能被自动锁屏记录顶掉 ----
+
+    /// in-memory 库，只建 ot_records 表——避免单测碰真实 `%APPDATA%/niuma-timer/niuma.db`
+    fn mem_db() -> Connection {
+        let db = Connection::open_in_memory().expect("打开 in-memory 库");
+        db.execute_batch(crate::db::CREATE_OT_RECORDS)
+            .expect("建 ot_records 表");
+        db
+    }
+
+    /// 构造一条记录（默认自动来源）
+    fn rec_at(date: &str, lock_time: &str, valid_hours: f64) -> OvertimeRecord {
+        OvertimeRecord {
+            date: date.into(),
+            lock_time: lock_time.into(),
+            ot_start: "18:00".into(),
+            raw_hours: valid_hours,
+            valid_hours,
+            fee: valid_hours * 20.0,
+            meal: 20.0,
+            total: valid_hours * 20.0 + 20.0,
+            source: SOURCE_AUTO,
+        }
+    }
+
+    fn query_one(db: &Connection, date: &str) -> OvertimeRecord {
+        db.query_row(
+            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
+             FROM ot_records WHERE date = ?1",
+            params![date],
+            |r| {
+                Ok(OvertimeRecord {
+                    date: r.get(0)?,
+                    lock_time: r.get(1)?,
+                    ot_start: r.get(2)?,
+                    raw_hours: r.get(3)?,
+                    valid_hours: r.get(4)?,
+                    fee: r.get(5)?,
+                    meal: r.get(6)?,
+                    total: r.get(7)?,
+                    source: r.get(8)?,
+                })
+            },
+        )
+        .expect("应查到记录")
+    }
+
+    #[test]
+    fn auto_upsert_never_overwrites_manual_record() {
+        let db = mem_db();
+        // 用户手动把 8/19 改成 21:30 下班（3.5h）
+        let mut manual = rec_at("2026-08-19", "21:30", 3.5);
+        manual.source = SOURCE_MANUAL;
+        upsert_into(&db, &manual, true).unwrap();
+
+        // 当晚再次锁屏，自动算出 20:00 / 2h —— 绝不能顶掉手改值
+        let auto = rec_at("2026-08-19", "20:00", 2.0);
+        upsert_into(&db, &auto, false).unwrap();
+
+        let got = query_one(&db, "2026-08-19");
+        assert_eq!(got.lock_time, "21:30", "手改记录被自动记录覆盖了");
+        assert!(approx(got.valid_hours, 3.5));
+        assert_eq!(got.source, SOURCE_MANUAL);
+    }
+
+    #[test]
+    fn auto_upsert_overwrites_previous_auto_record() {
+        let db = mem_db();
+        // 同日两次锁屏：后一次为准（自动覆盖自动是允许的）
+        upsert_into(&db, &rec_at("2026-08-19", "20:00", 2.0), false).unwrap();
+        upsert_into(&db, &rec_at("2026-08-19", "21:00", 3.0), false).unwrap();
+        let got = query_one(&db, "2026-08-19");
+        assert_eq!(got.lock_time, "21:00");
+        assert_eq!(got.source, SOURCE_AUTO);
+    }
+
+    #[test]
+    fn manual_upsert_overwrites_anything() {
+        // 手动覆盖手动：手改可以反复改
+        let db = mem_db();
+        for (t, h) in [("21:30", 3.5), ("22:00", 4.0)] {
+            let mut m = rec_at("2026-08-19", t, h);
+            m.source = SOURCE_MANUAL;
+            upsert_into(&db, &m, true).unwrap();
+        }
+        assert_eq!(query_one(&db, "2026-08-19").lock_time, "22:00");
+
+        // 手动覆盖自动：手改发生在自动记录之后也要生效
+        let db2 = mem_db();
+        upsert_into(&db2, &rec_at("2026-08-19", "20:00", 2.0), false).unwrap();
+        let mut m = rec_at("2026-08-19", "22:30", 4.5);
+        m.source = SOURCE_MANUAL;
+        upsert_into(&db2, &m, true).unwrap();
+        let got = query_one(&db2, "2026-08-19");
+        assert_eq!(got.lock_time, "22:30");
+        assert_eq!(got.source, SOURCE_MANUAL);
+    }
+
+    #[test]
+    fn legacy_json_without_source_field_deserializes_as_auto() {
+        // 旧 overtime.json / overtime-YYYY-MM.json 没有 source 字段。
+        // 少了 #[serde(default)]，db::migrate_ot_json 反序列化整批历史归档会直接失败。
+        let json = r#"{"date":"2026-08-19","lock_time":"20:30","ot_start":"18:00",
+            "raw_hours":2.5,"valid_hours":2.5,"fee":50.0,"meal":20.0,"total":70.0}"#;
+        let r: OvertimeRecord = serde_json::from_str(json).expect("旧 JSON 必须能反序列化");
+        assert_eq!(r.source, SOURCE_AUTO);
     }
 }

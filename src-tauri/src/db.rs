@@ -6,7 +6,8 @@
 //! - config.json / holiday_cache.json 保持 JSON（固定体量、一次性读写，迁移无收益）。
 //!
 //! 表结构：
-//! - `ot_records`   加班记录，date 主键（跨月归档自然消失——按年月过滤即可）
+//! - `ot_records`   加班记录，date 主键（跨月归档自然消失——按年月过滤即可），
+//!                  另有 `source` 列区分自动(0)/手动(1)，手动记录不会被自动 upsert 覆盖
 //! - `act_hourly`   活动统计小时桶，(date, hour) 主键
 //! - `act_keys`     活动统计按键明细，(date, vk) 主键
 
@@ -21,8 +22,12 @@ use rusqlite::{params, Connection};
 use crate::activity::DayState;
 use crate::overtime::{MonthlyOvertime, OvertimeRecord};
 
-/// 建表语句（幂等，重复执行无副作用）
-const SCHEMA: &str = r#"
+/// `ot_records` 建表语句。单独拆成常量：overtime 模块的单测要在 in-memory 库上
+/// 按它建表，以免测试碰到真实库 `%APPDATA%/niuma-timer/niuma.db`。
+///
+/// `source`：记录来源，0 = 自动（锁屏生成）、1 = 手动录入。自动 upsert 只覆盖
+/// 自动记录，手改过的记录不会被当晚的锁屏数据顶掉（详见 overtime::upsert_auto）。
+pub(crate) const CREATE_OT_RECORDS: &str = r#"
 CREATE TABLE IF NOT EXISTS ot_records (
     date        TEXT PRIMARY KEY,
     lock_time   TEXT NOT NULL,
@@ -31,9 +36,12 @@ CREATE TABLE IF NOT EXISTS ot_records (
     valid_hours REAL NOT NULL,
     fee         REAL NOT NULL,
     meal        REAL NOT NULL,
-    total       REAL NOT NULL
+    total       REAL NOT NULL,
+    source      INTEGER NOT NULL DEFAULT 0
 );
+"#;
 
+const CREATE_ACT_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS act_hourly (
     date        TEXT NOT NULL,
     hour        INTEGER NOT NULL,
@@ -49,21 +57,27 @@ CREATE TABLE IF NOT EXISTS act_hourly (
     keys        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, hour)
 );
+"#;
 
+const CREATE_ACT_KEYS: &str = r#"
 CREATE TABLE IF NOT EXISTS act_keys (
     date  TEXT NOT NULL,
     vk    INTEGER NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, vk)
 );
+"#;
 
+const CREATE_APP_USAGE: &str = r#"
 CREATE TABLE IF NOT EXISTS app_usage (
     date    TEXT NOT NULL,
     app     TEXT NOT NULL,
     seconds INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, app)
 );
+"#;
 
+const CREATE_APP_USAGE_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS app_usage_hourly (
     date    TEXT NOT NULL,
     hour    INTEGER NOT NULL,
@@ -71,14 +85,18 @@ CREATE TABLE IF NOT EXISTS app_usage_hourly (
     seconds INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, hour, app)
 );
+"#;
 
+const CREATE_AUDIO_USAGE: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_usage (
     date    TEXT NOT NULL,
     app     TEXT NOT NULL,
     seconds INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, app)
 );
+"#;
 
+const CREATE_AUDIO_USAGE_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_usage_hourly (
     date    TEXT NOT NULL,
     hour    INTEGER NOT NULL,
@@ -88,8 +106,26 @@ CREATE TABLE IF NOT EXISTS audio_usage_hourly (
 );
 "#;
 
+/// 全部建表语句（幂等，重复执行无副作用）。
+///
+/// 按表拆开而非常量拼接：`concat!` 只接受字面量、无法组合 `const &str`；
+/// 拆开后单表 DDL（如 `CREATE_OT_RECORDS`）还能被单测复用来建 in-memory 表。
+const TABLE_DDL: &[&str] = &[
+    CREATE_OT_RECORDS,
+    CREATE_ACT_HOURLY,
+    CREATE_ACT_KEYS,
+    CREATE_APP_USAGE,
+    CREATE_APP_USAGE_HOURLY,
+    CREATE_AUDIO_USAGE,
+    CREATE_AUDIO_USAGE_HOURLY,
+];
+
 /// 当前数据库 schema 版本。每次 schema 变更递增，旧库启动时会按版本逐步迁移。
-const CURRENT_DB_VERSION: i32 = 1;
+///
+/// 版本历史：
+/// - v1：初始 7 张表（加班 / 活动 / 应用 / 媒体）；
+/// - v2：`ot_records` 增 `source` 列（0 自动 / 1 手动），用于保护手改记录不被自动覆盖。
+const CURRENT_DB_VERSION: i32 = 2;
 
 /// 按 `user_version` 执行数据库迁移（幂等、可重入）。
 ///
@@ -110,14 +146,20 @@ fn migrate_db(db: &Connection) {
 
     // v0 → v1：建立初始全部数据表（IF NOT EXISTS 保证旧库表已存在时幂等）
     if version < 1 {
-        db.execute_batch(SCHEMA)
-            .expect("初始化数据库表失败");
+        for ddl in TABLE_DDL {
+            db.execute_batch(ddl).expect("初始化数据库表失败");
+        }
     }
-    // 未来迁移示例（取消注释并改版本号即可扩展）：
-    // if version < 2 {
-    //     db.execute_batch("ALTER TABLE ot_records ADD COLUMN xxx REAL")
-    //         .expect("迁移 ot_records 失败");
-    // }
+
+    // v1 → v2：ot_records 增 source 列（0 自动 / 1 手动）。
+    // 带 DEFAULT 的 NOT NULL 列可直接 ALTER，SQLite 会把既有行一律填 0（自动），
+    // 语义正确——升级前不可能有手改记录（那时还没有手动标记）。
+    if version < 2 {
+        db.execute_batch(
+            "ALTER TABLE ot_records ADD COLUMN source INTEGER NOT NULL DEFAULT 0",
+        )
+        .expect("迁移 ot_records 失败");
+    }
 
     db.execute_batch(&format!("PRAGMA user_version = {CURRENT_DB_VERSION}"))
         .expect("设置数据库版本失败");

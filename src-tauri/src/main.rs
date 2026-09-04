@@ -189,7 +189,8 @@ fn maybe_record_overtime_lock(state: &AppState) {
     }
     if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
         if let Some(record) = overtime::calc_record(now.date_naive(), lt, &cfg) {
-            overtime::upsert_record(record);
+            // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
+            overtime::upsert_auto(record);
         }
     }
 }

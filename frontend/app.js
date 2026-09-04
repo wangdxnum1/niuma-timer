@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-01.v13";
+const FE_VER = "2026-09-04.v14";
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -290,11 +290,13 @@ function renderOt(ot) {
   tbody.innerHTML = "";
   if (ot.records.length === 0) {
     tbody.innerHTML =
-      '<tr><td colspan="7" class="ot-empty">暂无加班记录</td></tr>';
+      '<tr><td colspan="8" class="ot-empty">暂无加班记录</td></tr>';
     return;
   }
   for (const r of [...ot.records].reverse()) {
     const tr = document.createElement("tr");
+    // 来源：1 = 手动录入（不会被自动锁屏记录覆盖），0 = 自动
+    const isManual = r.source === 1;
     const cells = [
       r.date.slice(5),
       r.lock_time,
@@ -302,12 +304,16 @@ function renderOt(ot) {
       "¥" + r.fee.toFixed(0),
       r.meal > 0 ? "¥" + r.meal.toFixed(0) : "—",
       "¥" + r.total.toFixed(0),
+      isManual ? "手动" : "自动",
     ];
-    for (const c of cells) {
+    cells.forEach((c, i) => {
       const td = document.createElement("td");
       td.textContent = c;
+      if (i === cells.length - 1) {
+        td.className = isManual ? "ot-src manual" : "ot-src";
+      }
       tr.appendChild(td);
-    }
+    });
     const opTd = document.createElement("td");
     opTd.className = "ot-op";
     const editBtn = document.createElement("button");

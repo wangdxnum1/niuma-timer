@@ -382,6 +382,15 @@ button:hover {
 .ot-op {
   white-space: nowrap;
 }
+/* 加班记录 来源列：手动录入的标记高亮——这类记录不会被自动锁屏数据覆盖 */
+.ot-src {
+  color: #6f7688;
+  font-size: 11px;
+}
+.ot-src.manual {
+  color: #ffb74d;
+  font-weight: 600;
+}
 .btn-sm {
   background: #2a3446;
   border: 1px solid #3b4558;
