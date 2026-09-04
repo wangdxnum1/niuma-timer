@@ -79,6 +79,32 @@ fn install_crash_log() {
     }));
 }
 
+/// 启动致命错误：弹系统消息框（release 无控制台，必须给可见反馈），同时写 panic.log。
+/// 把「双击无反应 / 静默退出」转成可操作的错误提示（尤其是缺 WebView2 的场景）。
+#[cfg(windows)]
+fn show_fatal(msg: &str) {
+    let _ = std::fs::create_dir_all(config::config_dir());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(panic_log_path())
+    {
+        let _ = f.write_all(format!("[fatal] {msg}\n").as_bytes());
+    }
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = "牛马计时器".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(wide.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
 /// 计算当月实际上班天数（手动覆盖 > 缓存 > 兜底周末数）
 fn current_monthly_workdays(cfg: &config::Config, hol: &holiday::HolidayCache) -> u32 {
     if let Some(n) = cfg.workdays_override {
@@ -548,17 +574,33 @@ fn main() {
             write_debug_log
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
     ;
-    trace_startup("app: built, entering run loop");
-    app.run(|_app_handle, event| {
-            // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据
-            if let tauri::RunEvent::Exit = event {
-                activity::shutdown();
-                app_usage::shutdown();
-                audio_usage::shutdown();
-            }
-        });
+    match app {
+        Ok(app) => {
+            trace_startup("app: built, entering run loop");
+            app.run(|_app_handle, event| {
+                // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据
+                if let tauri::RunEvent::Exit = event {
+                    activity::shutdown();
+                    app_usage::shutdown();
+                    audio_usage::shutdown();
+                }
+            });
+        }
+        Err(e) => {
+            // build 失败（最常见：目标机缺 WebView2 运行时）→ 弹窗告知具体原因，
+            // 不再静默退出让用户误以为「双击无反应」。
+            let detail = e.to_string();
+            let hint = if detail.to_lowercase().contains("webview") {
+                "\n\n推测原因：系统缺少 WebView2 运行时（Win11 通常自带；干净/企业精简镜像可能未预装）。\n请到微软官网下载安装「WebView2 Runtime (Evergreen Bootstrapper)」后重试。"
+            } else {
+                ""
+            };
+            let msg = format!("牛马计时器启动失败：\n{detail}{hint}");
+            show_fatal(&msg);
+            std::process::exit(1);
+        }
+    }
     // 前端资源自动重编：build.rs 用 frontend 目录内容指纹注入
     // `cargo:rustc-env=TAURI_FRONTEND_FP`，内容一变即触发本 crate 重编、
     // generate_context! 重跑并重新嵌入最新 HTML/CSS/JS，无需手动改动任何标记。
