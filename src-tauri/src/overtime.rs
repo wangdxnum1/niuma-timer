@@ -32,9 +32,6 @@ pub struct OvertimeRecord {
     pub total: f64,
     /// 来源：`SOURCE_AUTO`(0) 自动 / `SOURCE_MANUAL`(1) 手动。
     /// 自动 upsert 只覆盖自动记录，手改过的记录不会被当晚的锁屏数据顶掉。
-    /// `serde(default)` 是必需的：旧版 `overtime.json` 没有这个字段，
-    /// 缺默认值会让 `db::migrate_ot_json` 反序列化历史归档直接失败。
-    #[serde(default)]
     pub source: i32,
 }
 
@@ -592,15 +589,5 @@ mod tests {
         let got = query_one(&db2, "2026-08-19");
         assert_eq!(got.lock_time, "22:30");
         assert_eq!(got.source, SOURCE_MANUAL);
-    }
-
-    #[test]
-    fn legacy_json_without_source_field_deserializes_as_auto() {
-        // 旧 overtime.json / overtime-YYYY-MM.json 没有 source 字段。
-        // 少了 #[serde(default)]，db::migrate_ot_json 反序列化整批历史归档会直接失败。
-        let json = r#"{"date":"2026-08-19","lock_time":"20:30","ot_start":"18:00",
-            "raw_hours":2.5,"valid_hours":2.5,"fee":50.0,"meal":20.0,"total":70.0}"#;
-        let r: OvertimeRecord = serde_json::from_str(json).expect("旧 JSON 必须能反序列化");
-        assert_eq!(r.source, SOURCE_AUTO);
     }
 }

@@ -104,46 +104,6 @@ const KNOWN_MAP: &[(&str, &str)] = &[
     ("7zfm.exe", "7-Zip"),
 ];
 
-/// 历史数据归一化用的「旧显示名(小写) → 中文名」别名表。
-/// 早期版本库里存的是 exe 版本资源的英文 FileDescription（如 "NetEase Cloud Music"），
-/// 映射表按 exe 名匹配无法反查它们，故单独维护一份别名表供 db::normalize_app_names 迁移。
-const LEGACY_DISPLAY_NAMES: &[(&str, &str)] = &[
-    ("netease cloud music", "网易云音乐"),
-    ("qq music", "QQ音乐"),
-    ("kugou", "酷狗音乐"),
-    ("tencent meeting", "腾讯会议"),
-    ("bilibili", "哔哩哔哩"),
-    ("iqiyi", "爱奇艺"),
-    ("qqlive", "腾讯视频"),
-    ("youku", "优酷"),
-    ("douyin", "抖音"),
-    ("kuaishou", "快手"),
-    ("thunder", "迅雷"),
-    ("baidunetdisk", "百度网盘"),
-    ("dingtalk", "钉钉"),
-    ("wechat", "微信"),
-    ("feishu", "飞书"),
-    ("wps office", "WPS Office"),
-    ("potplayer", "PotPlayer"),
-    ("vlc media player", "VLC"),
-    ("windows media player", "Windows Media Player"),
-    ("spotify", "Spotify"),
-    ("google chrome", "Google Chrome"),
-    ("microsoft edge", "Microsoft Edge"),
-    ("firefox", "Firefox"),
-    ("steam", "Steam"),
-    ("everything", "Everything"),
-];
-
-/// 旧显示名 → 中文名（大小写不敏感），供历史数据迁移使用。
-pub(crate) fn map_legacy_display(app: &str) -> Option<String> {
-    let key = app.to_lowercase();
-    LEGACY_DISPLAY_NAMES
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| v.to_string())
-}
-
 /// 自身进程名：前台窗口是自己时不统计
 pub(crate) const SELF_EXE: &str = "niuma-timer.exe";
 

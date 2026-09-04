@@ -152,7 +152,7 @@ niuma-timer/
 │   │   ├── holiday.rs      # 节假日数据拉取/解析/缓存
 │   │   ├── icon_render.rs  # 托盘图标像素绘制
 │   │   ├── tray.rs         # 托盘图标、菜单、悬停卡片（防抖/看门狗/点击冷却）
-│   │   ├── db.rs           # SQLite 层（WAL）+ 旧 JSON 一次性迁移
+│   │   ├── db.rs           # SQLite 层（WAL），建表初始化
 │   │   ├── overtime.rs     # 加班记录：计算 + 持久化
 │   │   ├── lock_monitor.rs # Windows 锁屏监听（WTS 会话变更）
 │   │   ├── activity.rs     # Raw Input 键鼠采集 + 逐小时桶 + 高频按键榜

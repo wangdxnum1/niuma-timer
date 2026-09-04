@@ -454,15 +454,10 @@ fn main() {
         .manage(AppState::default())
         .setup(|app| {
             trace_startup("setup: enter");
-            // 初始化 SQLite（WAL + 建表）并一次性迁移旧 JSON 数据。
-            // 必须在 activity::start() 之前：start 内部 load_today 要从 SQLite 恢复当天统计。
-            db::migrate_legacy();
-            trace_startup("setup: db migrated");
-
-            // 历史应用名归一化（英文 FileDescription → 中文常用名），
-            // 必须在 app_usage::start() / audio_usage::start() 写入新数据之前。
-            db::normalize_app_names();
-            trace_startup("setup: app names normalized");
+            // SQLite 首次调用 conn() 时建目录 + 开库 + 建表（WAL）。
+            // 程序未发布、无旧库旧 JSON，不做任何迁移；schema 变更直接改 DDL 重建库。
+            db::conn();
+            trace_startup("setup: db ready");
 
             // 载入本地节假日缓存
             {

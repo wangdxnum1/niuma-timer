@@ -154,7 +154,7 @@ niuma-timer/
 │   │   ├── holiday.rs      # Holiday data fetch + parse + cache
 │   │   ├── icon_render.rs  # Tray icon pixel rendering
 │   │   ├── tray.rs         # Tray icon, menu, hover card (debounce/watchdog/click-cooldown)
-│   │   ├── db.rs           # SQLite layer (WAL) + legacy JSON migration
+│   │   ├── db.rs           # SQLite layer (WAL), schema init
 │   │   ├── overtime.rs     # Overtime records: calc + persistence
 │   │   ├── lock_monitor.rs # Windows lock-screen listener (WTS session change)
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
