@@ -16,14 +16,16 @@
 //! 注意：本项目监控仅支持 Windows，跨平台不在范围内。
 
 use core::ffi::c_void;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::{
-    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
-    RIDEV_INPUTSINK, RIDEV_REMOVE,
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+    RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD,
+    RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, RegisterClassW,
@@ -177,7 +179,11 @@ pub unsafe fn read_raw_input(lparam: LPARAM) -> Option<Vec<u8>> {
     if cb == 0 {
         return None;
     }
-    let mut buf = vec![0u8; cb as usize];
+    // 按 cb 与完整 RAWINPUT 的较大者分配、零填充：
+    // 键盘事件系统只填 40 字节（header 24 + RAWKEYBOARD 16），而按 RAWINPUT
+    // （union 取鼠标分支，48 字节）解引用会读到尾部的 8 字节。多分配并置零可保证
+    // 后续 `&*(buf.as_ptr() as *const RAWINPUT)` 无论哪种设备都在合法范围内。
+    let mut buf = vec![0u8; (cb as usize).max(size_of::<RAWINPUT>())];
     // 第二趟：写入缓冲。返回 u32::MAX(-1) 表示失败。
     let ret = GetRawInputData(
         hraw,
@@ -189,5 +195,64 @@ pub unsafe fn read_raw_input(lparam: LPARAM) -> Option<Vec<u8>> {
     if ret == u32::MAX {
         return None;
     }
+    // 注意：Windows 会把实际拷入的字节数写回 cb（键盘 40 / 鼠标 48），
+    // 与 buf 长度（≥48）不一定相等。实际长度以 RAWINPUTHEADER.dwSize 为准，
+    // 由 raw_input_len_ok 校验，不要拿 buf.len() 当数据长度用。
     Some(buf)
+}
+
+/// 校验 `WM_INPUT` 载荷长度是否够按 `dwType` 读取对应的设备结构体。
+///
+/// **这是个踩过的坑，务必保留**：`GetRawInputData` 返回的字节数随设备类型浮动——
+/// 键盘 = header + `RAWKEYBOARD`（x64: 24+16=40），鼠标 = header + `RAWMOUSE`（24+24=48），
+/// 而 `size_of::<RAWINPUT>()` 的 union 取最大分支、恒为 48。
+/// 若拿 `size_of::<RAWINPUT>()` 当门槛，键盘事件（40 < 48）会被**全部静默丢弃**，
+/// 表现为「鼠标统计正常、按键次数恒为 0」——注册是成功的，数据是被门槛吃掉的。
+/// 因此必须按 dwType 分别比对，长度取自系统填好的 `RAWINPUTHEADER.dwSize`。
+pub fn raw_input_len_ok(dw_type: u32, dw_size: u32) -> bool {
+    let need = match dw_type {
+        t if t == RIM_TYPEKEYBOARD.0 => size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>(),
+        t if t == RIM_TYPEMOUSE.0 => size_of::<RAWINPUTHEADER>() + size_of::<RAWMOUSE>(),
+        _ => return false, // HID 等未处理的设备类型：一律不读，避免按错结构体解释
+    };
+    (dw_size as usize) >= need
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // 仅测试用到：正式代码里 HID 走 raw_input_len_ok 的 `_` 分支，故不占顶层 import
+    use windows::Win32::UI::Input::RIM_TYPEHID;
+
+    /// 核心不变量：键盘载荷严格小于完整 RAWINPUT，
+    /// 故「用 size_of::<RAWINPUT>() 当门槛」在结构上就是错的（会丢光键盘事件）。
+    #[test]
+    fn keyboard_payload_is_shorter_than_rawinput() {
+        let kb = size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>();
+        assert!(
+            kb < size_of::<RAWINPUT>(),
+            "键盘载荷 {kb} 应小于 RAWINPUT {}，否则说明 union 布局变了、本文件的门槛也要重估",
+            size_of::<RAWINPUT>()
+        );
+    }
+
+    /// 每种设备类型：刚好够长则通过，短一个字节则拒绝，HID 一律拒绝。
+    /// 用相对 size_of 表达，x64 / x86 都可跑。
+    #[test]
+    fn raw_input_len_ok_checks_per_device_type() {
+        let kb = (size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>()) as u32;
+        assert!(raw_input_len_ok(RIM_TYPEKEYBOARD.0, kb));
+        assert!(raw_input_len_ok(RIM_TYPEKEYBOARD.0, kb + 8));
+        assert!(!raw_input_len_ok(RIM_TYPEKEYBOARD.0, kb - 1));
+
+        let ms = (size_of::<RAWINPUTHEADER>() + size_of::<RAWMOUSE>()) as u32;
+        assert!(raw_input_len_ok(RIM_TYPEMOUSE.0, ms));
+        assert!(!raw_input_len_ok(RIM_TYPEMOUSE.0, ms - 1));
+
+        // 键盘的真实长度（40）拿去当鼠标载荷判：必须拒绝
+        if kb < ms {
+            assert!(!raw_input_len_ok(RIM_TYPEMOUSE.0, kb));
+        }
+        assert!(!raw_input_len_ok(RIM_TYPEHID.0, ms));
+    }
 }

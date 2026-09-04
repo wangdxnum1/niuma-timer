@@ -42,7 +42,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::{
-    RAWINPUT, RAWKEYBOARD, RAWMOUSE, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    RAWINPUT, RAWINPUTHEADER, RAWKEYBOARD, RAWMOUSE, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -650,19 +650,24 @@ unsafe extern "system" fn raw_wndproc(
     if msg == WM_INPUT {
         if !crate::lock_monitor::is_away() && ENABLED.load(Ordering::Relaxed) {
             if let Some(buf) = crate::win::read_raw_input(lparam) {
-                if buf.len() >= std::mem::size_of::<RAWINPUT>() {
-                    // RAWINPUT 必存在；按其 dwType 分流键盘/鼠标
+                // 门槛只需保证 header 可读（缓冲区恒 ≥ size_of::<RAWINPUT>()，见 read_raw_input）；
+                // 载荷够不够按 dwType 判断交给 raw_input_len_ok——**不能**用
+                // `buf.len() >= size_of::<RAWINPUT>()`：键盘载荷只有 40 字节（x64），
+                // 小于 RAWINPUT 的 48，那样会把所有键盘事件静默丢掉（按键次数恒为 0）。
+                if buf.len() >= std::mem::size_of::<RAWINPUTHEADER>() {
                     let raw = &*(buf.as_ptr() as *const RAWINPUT);
-                    match raw.header.dwType {
-                        t if t == RIM_TYPEMOUSE.0 => {
-                            let m = unsafe { raw.data.mouse };
-                            on_raw_mouse(&m);
+                    if crate::win::raw_input_len_ok(raw.header.dwType, raw.header.dwSize) {
+                        match raw.header.dwType {
+                            t if t == RIM_TYPEMOUSE.0 => {
+                                let m = unsafe { raw.data.mouse };
+                                on_raw_mouse(&m);
+                            }
+                            t if t == RIM_TYPEKEYBOARD.0 => {
+                                let k = unsafe { raw.data.keyboard };
+                                on_raw_keyboard(&k);
+                            }
+                            _ => {}
                         }
-                        t if t == RIM_TYPEKEYBOARD.0 => {
-                            let k = unsafe { raw.data.keyboard };
-                            on_raw_keyboard(&k);
-                        }
-                        _ => {}
                     }
                 }
             }
