@@ -3,3 +3,9 @@
 # Windows SDK 资源编译器（tauri-winres 嵌入 exe 图标/版本信息时需要）。
 # 用带 target triple 的变量名，避免依赖 shell PATH，也不影响其他编译目标。
 RC_x86_64-pc-windows-msvc = "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.28000.0\\x64\\rc.exe"
+
+# 静态链接 MSVC CRT（/MT），让发布版 exe 不依赖目标机的「Visual C++ Redistributable」。
+# 否则 cargo build 出的动态 CRT exe 在缺 VC++ 运行库的干净 Win11 上无法启动（表现为双击无反应）。
+# 仅影响 MSVC target；GNU/Mac/Linux 构建忽略此 flag。
+[build]
+rustflags = ["-C", "target-feature=+crt-static"]

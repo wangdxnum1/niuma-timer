@@ -13,6 +13,8 @@ mod overtime;
 mod tray;
 mod win;
 
+use std::io::Write;
+use std::panic;
 use std::sync::Mutex;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
@@ -36,6 +38,45 @@ impl Default for AppState {
             last_lock_seen: Mutex::new(None),
         }
     }
+}
+
+/// 启动崩溃诊断：进程早期（webview 未起）崩溃时前端 debug.log 无效，
+/// 故把 panic 与启动阶段痕迹单独写到 %APPDATA%/niuma-timer/panic.log。
+/// release 无控制台窗口，panic 会静默退出，此文件是排查「双击无反应」的唯一线索。
+fn panic_log_path() -> std::path::PathBuf {
+    config::config_dir().join("panic.log")
+}
+
+/// 追加一行启动阶段痕迹到 panic.log（每次启动先由 install_crash_log 清空重写）。
+fn trace_startup(stage: &str) {
+    let _ = std::fs::create_dir_all(config::config_dir());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(panic_log_path())
+    {
+        let line = format!("[{}] {stage}\n", Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// 安装 panic hook：捕获 main() 启动期任何 panic，写 message + backtrace 到 panic.log，
+/// 让「进程起来又退出」的场景可定位。必须在 main() 最开头调用。
+fn install_crash_log() {
+    let _ = std::fs::create_dir_all(config::config_dir());
+    let _ = std::fs::write(
+        panic_log_path(),
+        format!("[start] {}\n", Local::now().format("%Y-%m-%d %H:%M:%S%.3f")),
+    );
+    panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let line = format!("[panic] {info}\n{bt:?}\n");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(panic_log_path())
+            .and_then(|mut f| f.write_all(line.as_bytes()));
+    }));
 }
 
 /// 计算当月实际上班天数（手动覆盖 > 缓存 > 兜底周末数）
@@ -373,7 +414,8 @@ unsafe fn set_window_icons_from_resource(hwnd: windows::Win32::Foundation::HWND)
 }
 
 fn main() {
-    tauri::Builder::default()
+    install_crash_log();
+    let app = tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
         // 并在回调里把已存在的主窗口显示并置前，自己退出。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -385,13 +427,16 @@ fn main() {
         .append_invoke_initialization_script(INVOKE_SHIM)
         .manage(AppState::default())
         .setup(|app| {
+            trace_startup("setup: enter");
             // 初始化 SQLite（WAL + 建表）并一次性迁移旧 JSON 数据。
             // 必须在 activity::start() 之前：start 内部 load_today 要从 SQLite 恢复当天统计。
             db::migrate_legacy();
+            trace_startup("setup: db migrated");
 
             // 历史应用名归一化（英文 FileDescription → 中文常用名），
             // 必须在 app_usage::start() / audio_usage::start() 写入新数据之前。
             db::normalize_app_names();
+            trace_startup("setup: app names normalized");
 
             // 载入本地节假日缓存
             {
@@ -400,6 +445,7 @@ fn main() {
                     *app.state::<AppState>().holiday.lock().unwrap() = c;
                 }
             }
+            trace_startup("setup: holiday cache loaded");
             // 修复任务栏图标模糊：用 exe 内嵌多尺寸 ico 按 DPI 重新设置窗口图标
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
@@ -407,9 +453,11 @@ fn main() {
                     unsafe { set_window_icons_from_resource(hwnd) };
                 }
             }
+            trace_startup("setup: window icons set");
 
             // 创建托盘
             let _tray = tray::create_tray(app)?;
+            trace_startup("setup: tray created");
 
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
@@ -425,19 +473,24 @@ fn main() {
 
             // 启动锁屏监听线程（Windows session notification）
             lock_monitor::start();
+            trace_startup("setup: lock monitor started");
 
             // 按配置初始化三个监控开关。活动监控关闭时会真正注销 Raw Input 设备
             // （而非回调里空转），故必须在 activity::start() 之前调用。
             apply_monitor_switches(&app.state::<AppState>().config.lock().unwrap().clone());
+            trace_startup("setup: monitor switches applied");
 
             // 启动鼠标/键盘活动统计（Raw Input 旁路采集，常驻托盘即持续统计，输入法零延迟）
             activity::start();
+            trace_startup("setup: activity started");
 
             // 启动应用使用时长监控（前台窗口事件钩子，统计微信等白名单应用）
             app_usage::start();
+            trace_startup("setup: app_usage started");
 
             // 启动媒体播放时长监控（音频会话峰值轮询，统计正在发声的软件）
             audio_usage::start();
+            trace_startup("setup: audio_usage started");
 
             // 窗口关闭仅隐藏，不退出程序
             if let Some(w) = app.get_webview_window("main") {
@@ -475,6 +528,7 @@ fn main() {
                     maybe_record_overtime_lock(state.inner());
                 });
             }
+            trace_startup("setup: done");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -495,7 +549,9 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, event| {
+    ;
+    trace_startup("app: built, entering run loop");
+    app.run(|_app_handle, event| {
             // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据
             if let tauri::RunEvent::Exit = event {
                 activity::shutdown();
