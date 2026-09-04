@@ -90,7 +90,7 @@ fn default_duration_format() -> String {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            monthly_salary: 15000.0,
+            monthly_salary: 10000.0,
             am_start: "09:00".into(),
             am_end: "12:00".into(),
             pm_start: "13:00".into(),
