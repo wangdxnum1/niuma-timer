@@ -154,11 +154,25 @@ fn migrate_db(db: &Connection) {
     // v1 → v2：ot_records 增 source 列（0 自动 / 1 手动）。
     // 带 DEFAULT 的 NOT NULL 列可直接 ALTER，SQLite 会把既有行一律填 0（自动），
     // 语义正确——升级前不可能有手改记录（那时还没有手动标记）。
+    //
+    // 关键：建表 DDL（CREATE_OT_RECORDS）已直接包含 source，全新库一建就是 v2 schema；
+    // 若这里无条件 ALTER，全新库会「重复加列 → duplicate column name」直接 panic
+    // （dev 机因库早已是 v2、迁移被 version>=2 跳过而从不触发，故只在干净机器首跑暴露）。
+    // 故先查列是否存在，仅旧库（无 source 列）才真正 ALTER。
     if version < 2 {
-        db.execute_batch(
-            "ALTER TABLE ot_records ADD COLUMN source INTEGER NOT NULL DEFAULT 0",
-        )
-        .expect("迁移 ot_records 失败");
+        let has_source: i32 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ot_records') WHERE name = 'source'",
+                [],
+                |r| r.get::<_, i32>(0),
+            )
+            .unwrap_or(0);
+        if has_source == 0 {
+            db.execute_batch(
+                "ALTER TABLE ot_records ADD COLUMN source INTEGER NOT NULL DEFAULT 0",
+            )
+            .expect("迁移 ot_records 失败");
+        }
     }
 
     db.execute_batch(&format!("PRAGMA user_version = {CURRENT_DB_VERSION}"))
@@ -423,5 +437,49 @@ fn insert_day_activity(g: &Connection, d: &DayState) {
             "INSERT OR REPLACE INTO act_keys (date, vk, count) VALUES (?1, ?2, ?3)",
             params![d.date, *vk as i64, *cnt as i64],
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{migrate_db, CURRENT_DB_VERSION};
+    use rusqlite::Connection;
+
+    fn has_source(db: &Connection) -> i32 {
+        db.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('ot_records') WHERE name = 'source'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+        .unwrap_or(0)
+    }
+
+    /// 回归：全新库（建表 DDL 已含 source）跑迁移时，v2 分支必须跳过 ALTER，
+    /// 否则会 `duplicate column name: source` panic（干净机器首跑才会触发）。
+    #[test]
+    fn migrate_fresh_db_does_not_duplicate_source() {
+        let db = Connection::open_in_memory().unwrap();
+        migrate_db(&db); // 不应 panic
+        assert_eq!(has_source(&db), 1);
+        let v: i32 = db.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0)).unwrap();
+        assert_eq!(v, CURRENT_DB_VERSION);
+    }
+
+    /// 回归：v1 旧库（无 source 列）升级时必须真正 ALTER 补上 source 列。
+    #[test]
+    fn migrate_v1_db_adds_source() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE ot_records (\
+                date TEXT PRIMARY KEY, lock_time TEXT NOT NULL, ot_start TEXT NOT NULL, \
+                raw_hours REAL NOT NULL, valid_hours REAL NOT NULL, fee REAL NOT NULL, \
+                meal REAL NOT NULL, total REAL NOT NULL)",
+        )
+        .unwrap();
+        db.execute_batch("PRAGMA user_version = 1").unwrap();
+        migrate_db(&db);
+        assert_eq!(has_source(&db), 1);
+        let v: i32 = db.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0)).unwrap();
+        assert_eq!(v, CURRENT_DB_VERSION);
     }
 }
