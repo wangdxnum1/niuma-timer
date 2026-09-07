@@ -19,8 +19,16 @@ use core::ffi::c_void;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
+use windows::Win32::Media::Audio::{
+    eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
+    MMDeviceEnumerator,
+};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -328,6 +336,105 @@ pub fn window_process_info(hwnd: HWND) -> Option<(String, String)> {
     Some((path, name))
 }
 
+// ---------------------------------------------------------------------------
+// COM / Core Audio（媒体播放监控用）
+// ---------------------------------------------------------------------------
+
+/// 本线程 COM 初始化的 RAII 守卫。
+///
+/// 关键不变量：COM 必须「谁初始化谁反初始化」，而 `CoUninitialize` 会**连本线程的
+/// COM 对象一起带走**。这正是音频峰值计必须跨整个采样周期持有、绝不能在枚举函数
+/// 内部 init/uninit 成对调用的原因。守卫把生命周期绑到作用域，退出时自动收尾。
+pub struct ComGuard {
+    /// 私有字段：强制走 `init_multithreaded()` 构造，保证「构造成功 ⟺ 已初始化」
+    _private: (),
+}
+
+impl ComGuard {
+    /// 以多线程套间（MTA）初始化本线程 COM。
+    ///
+    /// 返回 `None` 表示初始化失败——典型是 `RPC_E_CHANGED_MODE`（本线程已被别人
+    /// 以别的套间初始化）。此时**绝不能** `CoUninitialize`，那会拆掉别人的初始化。
+    pub fn init_multithreaded() -> Option<Self> {
+        // SAFETY：`pvReserved` 必须为 NULL；配对的反初始化由 Drop 保证，不会重漏。
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        // S_OK / S_FALSE 都算成功（S_FALSE = 本线程此前已初始化过，仍需配对反初始化）。
+        // 注意 HRESULT::ok() 得到的是 Result<()>，再 .ok() 才是 Option。
+        hr.ok().ok().map(|()| Self { _private: () })
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        // SAFETY：与构造时那次成功的 CoInitializeEx 严格一一配对。
+        unsafe { CoUninitialize() }
+    }
+}
+
+/// 一个音频会话的峰值计及其所属进程 PID。
+pub struct AudioMeter {
+    /// 会话所属进程 PID；`0` = 系统声音会话（没有对应的用户进程）
+    pub pid: u32,
+    meter: IAudioMeterInformation,
+}
+
+impl AudioMeter {
+    /// 读取本会话当前峰值（0.0~1.0 归一化）；会话已消失（应用关闭）返回 `None`。
+    ///
+    /// 注意：返回的是**上一个设备周期**（典型 10ms 级）的峰值快照，不是自上次调用
+    /// 以来的累积值（MSDN：peak value is recorded over one device period）。
+    /// 因此调用方必须密采样，不能一个统计周期只读一次——否则提示音会被放大成整周期。
+    pub fn peak(&self) -> Option<f32> {
+        // SAFETY：meter 由本模块的 `audio_meters` 创建，接口指针在本结构体存活期内有效。
+        unsafe { self.meter.GetPeakValue() }.ok()
+    }
+}
+
+/// 枚举默认渲染端点（扬声器 / 耳机）上的全部音频会话。
+///
+/// 返回值刻意区分两种「空」：
+/// - `None` = Core Audio 不可用（无渲染设备 / COM 异常 / 权限问题）——**监控失效**；
+/// - `Some(v)` 且 `v` 为空 = 枚举成功，只是此刻确实没有会话——**监控正常**。
+///
+/// 调用方（audio_usage）据此设置 `WATCH_OK`：两者对用户的含义完全不同。
+///
+/// 调用线程需已初始化 COM（见 [`ComGuard`]）：返回的峰值计要跨整个采样周期持有。
+pub fn audio_meters() -> Option<Vec<AudioMeter>> {
+    // SAFETY：整条调用链只使用本模块自己创建并持有的 COM 接口指针；
+    // `CoCreateInstance` 的 CLSID 与接口类型、`Activate` 的接口类型均成对匹配；
+    // 返回的 AudioMeter 持有各自接口的强引用，不会悬垂。
+    unsafe {
+        let enumerator =
+            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .ok()?;
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .ok()?;
+        let mgr = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None).ok()?;
+        let sessions = mgr.GetSessionEnumerator().ok()?;
+        let count = sessions.GetCount().ok()?;
+
+        let mut out = Vec::new();
+        for i in 0..count {
+            // 单个会话失败（应用刚好退出）不影响其余会话，跳过即可
+            let Ok(session) = sessions.GetSession(i) else {
+                continue;
+            };
+            let Ok(meter) = session.cast::<IAudioMeterInformation>() else {
+                continue;
+            };
+            let Ok(ctrl2) = session.cast::<IAudioSessionControl2>() else {
+                continue;
+            };
+            let Ok(pid) = ctrl2.GetProcessId() else {
+                continue;
+            };
+            out.push(AudioMeter { pid, meter });
+        }
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +474,39 @@ mod tests {
     fn window_pid_of_invalid_window_is_none() {
         assert!(window_pid(HWND::default()).is_none());
         assert!(window_process_info(HWND::default()).is_none());
+    }
+
+    /// COM 守卫：新线程上初始化必须成功（否则媒体播放监控会直接不可用）。
+    #[test]
+    fn com_guard_initializes_on_fresh_thread() {
+        // 测试框架为每个用例单独开线程，故这里是「全新线程」的语义。
+        assert!(
+            ComGuard::init_multithreaded().is_some(),
+            "新线程上 COM 初始化应成功"
+        );
+    }
+
+    /// COM 守卫：析构（CoUninitialize）后应能重新初始化——计数必须真正归零。
+    /// 若守卫漏掉反初始化，本用例第二次初始化仍能成功但计数泄漏，
+    /// 若守卫多反初始化一次，则会拆掉尚在使用的 COM。
+    #[test]
+    fn com_guard_can_reinit_after_drop() {
+        let first = ComGuard::init_multithreaded();
+        assert!(first.is_some());
+        drop(first);
+        assert!(
+            ComGuard::init_multithreaded().is_some(),
+            "反初始化后应能重新初始化"
+        );
+    }
+
+    /// Core Audio 调用链冒烟测试：整条 COM 链路（CoCreateInstance → 默认端点 →
+    /// 会话枚举）在**没有渲染设备**的机器上也必须优雅返回 `None`，绝不能 panic。
+    /// 有设备时返回 `Some`，两种结果都合法，故只断言「不崩溃」。
+    #[test]
+    fn audio_meters_never_panics() {
+        let _com = ComGuard::init_multithreaded().expect("COM 初始化失败");
+        let _ = audio_meters();
     }
 
     /// 每种设备类型：刚好够长则通过，短一个字节则拒绝，HID 一律拒绝。

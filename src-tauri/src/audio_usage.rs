@@ -19,15 +19,6 @@ use std::time::{Duration, Instant};
 use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::Serialize;
-use windows::core::Interface;
-use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
-use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
-    MMDeviceEnumerator,
-};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
-};
 
 /// 会话枚举周期（秒）：每 5 秒重新枚举一次音频会话（含进程名解析，开销在大头）
 const POLL_INTERVAL_SECS: u64 = 5;
@@ -76,52 +67,23 @@ pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
 
-/// 枚举一轮音频会话，返回「应用显示名 → 该会话的峰值计」，供本轮密集采样复用。
+/// 把本轮枚举到的音频会话解析成「应用显示名 → 峰值计」，供密集采样复用。
 ///
 /// 返回值刻意保留**全部**会话（含此刻静音的）：会话可能在本轮采样途中才开始发声，
 /// 枚举时按峰值过滤会把它们提前排除掉。进程名解析 / 软件名映射只在这里做一次
 /// （每个枚举周期一次），采样期间不再碰任何进程 API。
 ///
-/// 调用方需自行完成本线程的 COM 初始化——返回的峰值计要跨整个采样周期持有，
-/// 不能在枚举函数内部 CoUninitialize。
-unsafe fn playing_meters() -> Vec<(String, IAudioMeterInformation)> {
-    let Ok(enumerator) =
-        CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
-    else {
-        return Vec::new();
-    };
-    // 默认渲染端点（扬声器/耳机）
-    let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eConsole) else {
-        return Vec::new();
-    };
-    let Ok(mgr) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
-        return Vec::new();
-    };
-    let Ok(sessions) = mgr.GetSessionEnumerator() else {
-        return Vec::new();
-    };
-    let Ok(count) = sessions.GetCount() else {
-        return Vec::new();
-    };
-
-    let mut found: Vec<(String, IAudioMeterInformation)> = Vec::new();
-    for i in 0..count {
-        let Ok(session) = sessions.GetSession(i) else {
+/// 会话枚举本身（Core Audio / COM）已收口于 `win::audio_meters`，这里只做
+/// 「进程 → 显示名」的业务映射，不接触任何 Win32 API。
+fn resolve_meters(meters: Vec<crate::win::AudioMeter>) -> Vec<(String, crate::win::AudioMeter)> {
+    let mut found: Vec<(String, crate::win::AudioMeter)> = Vec::new();
+    for m in meters {
+        // PID=0 是系统声音会话，没有对应的用户进程，无法归属到任何软件
+        if m.pid == 0 {
             continue;
-        };
-        // 1) 会话峰值计：本轮采样期间反复读取（峰值是设备周期快照，必须密采样）
-        let Ok(meter) = session.cast::<IAudioMeterInformation>() else {
-            continue;
-        };
-        // 2) 会话 → 进程 → exe 路径 → 软件名（复用 app_usage 的命名与图标逻辑）
-        let Ok(ctrl2) = session.cast::<IAudioSessionControl2>() else {
-            continue;
-        };
-        let Ok(pid) = ctrl2.GetProcessId() else {
-            continue;
-        };
-        // PID → 镜像路径复用平台层实现（曾与 app_usage 各写一份，逻辑漂移风险高）
-        let Some(exe_path) = crate::win::process_exe_path(pid) else {
+        }
+        // 会话 → 进程 → exe 路径 → 软件名（复用 app_usage 的命名与图标逻辑）
+        let Some(exe_path) = crate::win::process_exe_path(m.pid) else {
             continue;
         };
         let exe_name = exe_path.rsplit('\\').next().unwrap_or("").to_lowercase();
@@ -131,7 +93,7 @@ unsafe fn playing_meters() -> Vec<(String, IAudioMeterInformation)> {
         let display = crate::app_usage::display_name_of(&exe_path, &exe_name);
         // 不再于热轮询里同步提取图标：只记录「显示名→exe路径」，留给 summary() 懒提取
         playing_exe().lock().unwrap().insert(display.clone(), exe_path);
-        found.push((display, meter));
+        found.push((display, m));
     }
     found
 }
@@ -145,7 +107,7 @@ unsafe fn playing_meters() -> Vec<(String, IAudioMeterInformation)> {
 /// 分辨率（默认 15.6ms）与调度影响，按名义值记会引入系统性偏差。
 /// 但单次间隔要封顶——系统休眠/长时间卡顿醒来时 dt 可达数千秒，
 /// 而休眠期间声卡并不输出声音，按名义间隔记才不会把休眠时长算成播放时长。
-fn sample_round(meters: &[(String, IAudioMeterInformation)]) -> HashMap<String, u64> {
+fn sample_round(meters: &[(String, crate::win::AudioMeter)]) -> HashMap<String, u64> {
     let mut acc: HashMap<String, u64> = HashMap::new();
     let deadline = Duration::from_secs(POLL_INTERVAL_SECS);
     let start = Instant::now();
@@ -162,9 +124,9 @@ fn sample_round(meters: &[(String, IAudioMeterInformation)]) -> HashMap<String, 
         // 先判定再累加：保证同一应用有多个会话时本轮只记一次 dt
         let mut heard: HashSet<&str> = HashSet::new();
         for (app, meter) in meters {
-            // 会话中途消失（应用关闭）时 GetPeakValue 会失败，按静音处理即可——
+            // 会话中途消失（应用关闭）时读峰会失败，按静音处理即可——
             // 下一轮枚举自会拿到最新的会话列表
-            if let Ok(peak) = unsafe { meter.GetPeakValue() } {
+            if let Some(peak) = meter.peak() {
                 if peak > PEAK_THRESHOLD {
                     heard.insert(app.as_str());
                 }
@@ -214,28 +176,44 @@ fn credit(played_ms: &HashMap<String, u64>) {
 
 /// 枚举 + 采样 + 落盘的主循环。
 fn tick_loop() {
-    unsafe {
-        // COM 在本线程只初始化一次：采样期间要跨整个枚举周期持有 IAudioMeterInformation，
-        // 不能像旧实现那样每轮 init/uninit 成对——CoUninitialize 会把 COM 对象一起带走。
-        // 线程常驻不退出，故无需配对的 CoUninitialize。
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    }
+    // COM 在本线程只初始化一次：采样期间要跨整个枚举周期持有峰值计，
+    // 不能每轮 init/uninit 成对——CoUninitialize 会把 COM 对象一起带走。
+    // 守卫常驻到本线程结束，退出时自动反初始化。
+    let Some(_com) = crate::win::ComGuard::init_multithreaded() else {
+        eprintln!("[audio_usage] COM 初始化失败，媒体播放监控不可用");
+        WATCH_OK.store(false, Ordering::SeqCst);
+        return;
+    };
     loop {
         if !ENABLED.load(Ordering::Relaxed) {
             // 已停用：跳过枚举与落盘，纯休眠，完全不碰 Core Audio API
             std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
             continue;
         }
-        // 枚举本身即计时器：sample_round 内的密集采样已经把这一轮的时间走完，
-        // 不再额外 sleep，否则每轮都有一半时间处于「没在采样」的空窗。
-        let meters = unsafe { playing_meters() };
-        if meters.is_empty() {
-            std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
-            continue;
+        match crate::win::audio_meters() {
+            // Core Audio 不可用（无渲染设备 / COM 异常）：标记失效，前端据此提示。
+            // 旧实现把「枚举失败」和「没有会话」混为一谈，WATCH_OK 一旦置 true 就不回退，
+            // 拔掉音频设备后界面仍显示监控正常。
+            None => {
+                WATCH_OK.store(false, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+            }
+            // 枚举成功但没有会话：监控本身是好的，只是此刻没人发声
+            Some(sessions) if sessions.is_empty() => {
+                WATCH_OK.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+            }
+            // 枚举本身即计时器：sample_round 内的密集采样已经把这一轮的时间走完，
+            // 不再额外 sleep，否则每轮都有一半时间处于「没在采样」的空窗。
+            Some(sessions) => {
+                WATCH_OK.store(true, Ordering::SeqCst);
+                let meters = resolve_meters(sessions);
+                if !meters.is_empty() {
+                    let played = sample_round(&meters);
+                    credit(&played);
+                }
+            }
         }
-        WATCH_OK.store(true, Ordering::SeqCst);
-        let played = sample_round(&meters);
-        credit(&played);
     }
 }
 
