@@ -67,6 +67,7 @@ const KNOWN_MAP: &[(&str, &str)] = &[
     ("wemeetapp.exe", "腾讯会议"),
     ("feishu.exe", "飞书"),
     ("wecom.exe", "企业微信"),
+    ("wxwork.exe", "企业微信"),
     ("wps.exe", "WPS Office"),
     ("winword.exe", "Word"),
     ("excel.exe", "Excel"),
@@ -236,9 +237,11 @@ pub(crate) fn display_name_of(exe_path: &str, exe_name_lower: &str) -> String {
             return fd.to_string();
         }
     }
+    // 兜底：去 .exe 扩展名的进程名。**不能用 rsplit('.').next()**——那是从尾部
+    // 迭代，取到的是扩展名本身（"wxwork.exe" → "exe"），正是「应用列表显示 exe」
+    // bug 的根源；strip_suffix 才是真正的「去扩展名」。
     exe_name_lower
-        .rsplit('.')
-        .next()
+        .strip_suffix(".exe")
         .unwrap_or(exe_name_lower)
         .to_string()
 }
@@ -857,6 +860,25 @@ mod tests {
         let b = mono_ms();
         assert!(b > a, "单调时钟必须随时间前进: {a} -> {b}");
         assert!(b - a >= 15, "睡了 20ms，差值不应明显偏小: {}", b - a);
+    }
+
+    /// 回归：未知 exe 且 FileDescription 读不到时，兜底名必须是「去扩展名的进程名」，
+    /// 而不是扩展名本身（旧实现 rsplit('.').next() 把 "wxwork.exe" 显示成 "exe"）。
+    /// 传不存在的路径让 file_description 稳定返回 None，只测兜底分支与映射表优先级。
+    #[test]
+    fn display_name_fallback_strips_extension() {
+        // 已知映射表优先：企业微信主进程 WXWork.exe（旧表只有 wecom.exe，漏了它）
+        assert_eq!(
+            display_name_of(r"C:\Program Files\WXWork\WXWork.exe", "wxwork.exe"),
+            "企业微信"
+        );
+        // 未知 exe：兜底取去扩展名的进程名，而非扩展名 "exe"
+        assert_eq!(
+            display_name_of(r"C:\Bloat\SomeApp\someapp.exe", "someapp.exe"),
+            "someapp"
+        );
+        // 没有 .exe 后缀的名字原样保留
+        assert_eq!(display_name_of(r"C:\x\foo", "foo"), "foo");
     }
 
     /// 段切分的三条关键性质。
