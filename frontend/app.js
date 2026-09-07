@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-07.v15";
+const FE_VER = "2026-09-07.v16";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -557,7 +557,8 @@ async function loadAppUsage() {
     return;
   }
   try {
-    const s = await invoke("get_app_usage_summary", { known_icons: knownIcons() });
+    // 参数名用 camelCase：Tauri v2 的命令宏会把 Rust 的 snake_case 参数统一转成 camelCase
+    const s = await invoke("get_app_usage_summary", { knownIcons: knownIcons() });
     renderAppUsage(s);
     if (audioLogged.appu < 2) {
       audioLogged.appu++;
@@ -674,7 +675,7 @@ async function loadAudioUsage() {
     return;
   }
   try {
-    const s = await invoke("get_audio_usage_summary", { known_icons: knownIcons() });
+    const s = await invoke("get_audio_usage_summary", { knownIcons: knownIcons() });
     renderAudioUsage(s);
     if (audioLogged.audio < 3) {
       audioLogged.audio++;
