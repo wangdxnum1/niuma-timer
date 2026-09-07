@@ -19,9 +19,12 @@ use core::ffi::c_void;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Accessibility::{
     HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent, WINEVENTPROC,
 };
@@ -32,9 +35,9 @@ use windows::Win32::UI::Input::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
-    GetForegroundWindow, GetMessageW, HWND_MESSAGE, RegisterClassW, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, MSG,
+    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, MSG,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -284,6 +287,47 @@ pub fn foreground_window() -> Option<HWND> {
     }
 }
 
+/// 窗口句柄 → 所属进程 PID。窗口无效 / 查询失败返回 `None`。
+pub fn window_pid(hwnd: HWND) -> Option<u32> {
+    // SAFETY：纯查询；pid 先初始化为 0，失败时保持 0，据此判定失败。
+    let mut pid: u32 = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
+}
+
+/// PID → 进程主模块的完整路径。进程已退出 / 权限不足返回 `None`。
+///
+/// 用 `PROCESS_QUERY_LIMITED_INFORMATION`（而非 `PROCESS_ALL_ACCESS`）：
+/// 查询镜像路径不需要完整权限，这样对提权进程（如系统服务）也能拿到路径，
+/// 不会因为拒绝访问而漏统计。
+pub fn process_exe_path(pid: u32) -> Option<String> {
+    // SAFETY：句柄在本函数内成对 CloseHandle，绝不外泄；缓冲区长度由 size 传入并
+    // 以返回值写回，读取区间不会越界。
+    unsafe {
+        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return None;
+        };
+        let mut buf = [0u16; 1024];
+        let mut size = buf.len() as u32;
+        let ok =
+            QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size);
+        let _ = CloseHandle(h);
+        if ok.is_ok() && size > 0 && (size as usize) <= buf.len() {
+            return Some(String::from_utf16_lossy(&buf[..size as usize]));
+        }
+    }
+    None
+}
+
+/// 窗口 → `(exe 完整路径, 进程名小写)`。
+///
+/// 进程名用于「已知软件映射表」匹配与自身进程排除，故统一小写。
+pub fn window_process_info(hwnd: HWND) -> Option<(String, String)> {
+    let path = process_exe_path(window_pid(hwnd)?)?;
+    let name = path.rsplit('\\').next().unwrap_or("").to_lowercase();
+    Some((path, name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +344,29 @@ mod tests {
             "键盘载荷 {kb} 应小于 RAWINPUT {}，否则说明 union 布局变了、本文件的门槛也要重估",
             size_of::<RAWINPUT>()
         );
+    }
+
+    /// 进程路径解析：拿**自身进程**实测（不依赖任何全局状态或外部窗口）。
+    /// 这是 app_usage（前台窗口）与 audio_usage（音频会话）共用的唯一实现，
+    /// 若它退化成返回 None，两个模块的统计会一起静默清零。
+    #[test]
+    fn process_exe_path_of_self_is_absolute_exe() {
+        let p = process_exe_path(std::process::id()).expect("自身进程路径必须能查到");
+        assert!(p.to_lowercase().ends_with(".exe"), "应指向 exe: {p}");
+        assert!(p.contains('\\'), "应是完整路径而非进程名: {p}");
+    }
+
+    /// 不存在的 PID：必须优雅返回 None（进程已退出是常态，不能 panic）
+    #[test]
+    fn process_exe_path_of_dead_pid_is_none() {
+        assert!(process_exe_path(u32::MAX).is_none());
+    }
+
+    /// 空窗口句柄：PID 查询失败返回 None
+    #[test]
+    fn window_pid_of_invalid_window_is_none() {
+        assert!(window_pid(HWND::default()).is_none());
+        assert!(window_process_info(HWND::default()).is_none());
     }
 
     /// 每种设备类型：刚好够长则通过，短一个字节则拒绝，HID 一律拒绝。

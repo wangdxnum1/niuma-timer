@@ -29,23 +29,18 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{Local, TimeZone, Timelike};
 use rusqlite::params;
 use serde::Serialize;
-use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject,
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, GetIconInfo, GetWindowThreadProcessId, DI_NORMAL, EVENT_SYSTEM_FOREGROUND,
-    HICON, ICONINFO,
+    DestroyIcon, DrawIconEx, GetIconInfo, DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON, ICONINFO,
 };
 
 /// 挂机阈值：距最后一次真实输入超过该时长（毫秒）→ 前台窗口不算使用中
@@ -470,29 +465,11 @@ fn extract_icon_png(exe_path: &str) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 /// 窗口句柄 → (exe 完整路径, 进程名小写)。拿不到（权限/已退出）返回 None。
+///
+/// 实现收口于 `win::window_process_info`：PID 查询 + 镜像路径解析属于 Win32 原语，
+/// 且曾与 audio_usage 各自内联一份、逻辑漂移风险高。
 fn process_info_of(hwnd: HWND) -> Option<(String, String)> {
-    let mut pid: u32 = 0;
-    unsafe {
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    }
-    if pid == 0 {
-        return None;
-    }
-    unsafe {
-        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return None;
-        };
-        let mut buf = [0u16; 1024];
-        let mut size = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size);
-        let _ = CloseHandle(h);
-        if ok.is_ok() && size > 0 {
-            let s = String::from_utf16_lossy(&buf[..size as usize]);
-            let name = s.rsplit('\\').next().unwrap_or("").to_lowercase();
-            return Some((s, name));
-        }
-    }
-    None
+    crate::win::window_process_info(hwnd)
 }
 
 /// 更新当前前台应用（全量：任何前台窗口都记录，跳过自身进程）

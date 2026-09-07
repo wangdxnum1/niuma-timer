@@ -19,8 +19,7 @@ use std::time::{Duration, Instant};
 use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::Serialize;
-use windows::core::{Interface, PWSTR};
-use windows::Win32::Foundation::CloseHandle;
+use windows::core::Interface;
 use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
@@ -28,9 +27,6 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
-};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 /// 会话枚举周期（秒）：每 5 秒重新枚举一次音频会话（含进程名解析，开销在大头）
@@ -80,25 +76,6 @@ pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
 
-/// PID → exe 完整路径（进程已退出/权限不足返回 None）
-fn exe_path_of(pid: u32) -> Option<String> {
-    unsafe {
-        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return None;
-        };
-        let mut buf = [0u16; 1024];
-        let mut size = buf.len() as u32;
-        let ok =
-            QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size);
-        let _ = CloseHandle(h);
-        if ok.is_ok() && size > 0 {
-            let s = String::from_utf16_lossy(&buf[..size as usize]);
-            return Some(s);
-        }
-    }
-    None
-}
-
 /// 枚举一轮音频会话，返回「应用显示名 → 该会话的峰值计」，供本轮密集采样复用。
 ///
 /// 返回值刻意保留**全部**会话（含此刻静音的）：会话可能在本轮采样途中才开始发声，
@@ -143,7 +120,8 @@ unsafe fn playing_meters() -> Vec<(String, IAudioMeterInformation)> {
         let Ok(pid) = ctrl2.GetProcessId() else {
             continue;
         };
-        let Some(exe_path) = exe_path_of(pid) else {
+        // PID → 镜像路径复用平台层实现（曾与 app_usage 各写一份，逻辑漂移风险高）
+        let Some(exe_path) = crate::win::process_exe_path(pid) else {
             continue;
         };
         let exe_name = exe_path.rsplit('\\').next().unwrap_or("").to_lowercase();
