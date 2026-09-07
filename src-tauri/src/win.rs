@@ -21,6 +21,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
+    BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
+};
 use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
@@ -29,10 +33,14 @@ use windows::Win32::Media::Audio::{
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
+use windows::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::Accessibility::{
     HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent, WINEVENTPROC,
 };
@@ -42,10 +50,11 @@ use windows::Win32::UI::Input::{
     RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
-    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, MSG,
+    CreateWindowExW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx,
+    EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetIconInfo, GetMessageW,
+    GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, DI_NORMAL, HICON, ICONINFO, MSG,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -390,6 +399,221 @@ impl AudioMeter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// exe 资源读取（版本信息 / 图标）
+// ---------------------------------------------------------------------------
+
+/// 图标尺寸上限（像素）。超过则放弃提取——托盘卡片只需要小图，
+/// 大图纯属浪费内存与 PNG 编码时间。
+const MAX_ICON_PX: u32 = 128;
+
+/// 从 exe 提取出的图标原始像素（RGBA，自上而下）。
+pub struct IconRgba {
+    pub width: u32,
+    pub height: u32,
+    /// 长度恒为 `width * height * 4`，RGBA 顺序（已由 BGRA 转换而来）
+    pub rgba: Vec<u8>,
+}
+
+/// GDI 图标句柄守卫：Drop 自动 `DestroyIcon`。
+struct IconGuard(HICON);
+
+impl Drop for IconGuard {
+    fn drop(&mut self) {
+        // SAFETY：句柄由本模块的 ExtractIconExW 产出，且只在这里释放一次。
+        unsafe {
+            let _ = DestroyIcon(self.0);
+        }
+    }
+}
+
+/// GDI 对象（位图 / 画笔等）守卫：Drop 自动 `DeleteObject`。
+struct ObjGuard(HGDIOBJ);
+
+impl Drop for ObjGuard {
+    fn drop(&mut self) {
+        // SAFETY：句柄来自 GetIconInfo / CreateDIBSection，且只在这里释放一次。
+        unsafe {
+            let _ = DeleteObject(self.0);
+        }
+    }
+}
+
+/// 内存 DC 守卫：Drop 自动 `DeleteDC`（内存 DC 必须用 DeleteDC，不是 ReleaseDC）。
+struct DcGuard(HDC);
+
+impl Drop for DcGuard {
+    fn drop(&mut self) {
+        // SAFETY：DC 由本模块 CreateCompatibleDC 产出，且只在这里释放一次。
+        unsafe {
+            let _ = DeleteDC(self.0);
+        }
+    }
+}
+
+/// 提取 exe 的第一个图标 → RGBA 像素。无图标资源 / 失败返回 `None`。
+///
+/// 这段逻辑原本内联在 app_usage 里，每个失败分支都要手工重复
+/// `DestroyIcon×2 + DeleteDC + DeleteObject` 四句清理——本次改为 RAII 守卫后，
+/// 任何提前 return 都会自动收尾，GDI 对象泄漏不复存在。
+pub fn extract_icon_rgba(exe_path: &str) -> Option<IconRgba> {
+    // SAFETY：所有句柄均由本函数创建，并在此返回前经守卫释放（无论走哪个分支）；
+    // 像素缓冲长度严格等于 32bpp DIBSection 的 w*h*4，读取不会越界。
+    unsafe {
+        let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut hlarge = HICON::default();
+        let mut hsmall = HICON::default();
+        if ExtractIconExW(PCWSTR(wide.as_ptr()), 0, Some(&mut hlarge), Some(&mut hsmall), 1) == 0 {
+            return None;
+        }
+        // 从这一行起，两个图标句柄交给守卫：后续任何提前 return 都会释放它们。
+        // ExtractIconExW 可能只产出其中一个，另一个是无效句柄（DestroyIcon 对无效句柄是安全的空操作）。
+        let _large = IconGuard(hlarge);
+        let _small = IconGuard(hsmall);
+        let icon = if !hlarge.is_invalid() { hlarge } else { hsmall };
+
+        let mut ii = ICONINFO::default();
+        if GetIconInfo(icon, &mut ii).is_err() {
+            return None;
+        }
+        // GetIconInfo 产出的掩码/颜色位图必须 DeleteObject，否则每次调用泄漏两个 GDI 对象。
+        let _mask = ObjGuard(ii.hbmMask.into());
+        let _color = ObjGuard(ii.hbmColor.into());
+
+        let mut bmp = BITMAP::default();
+        let bmp_ok = !ii.hbmColor.is_invalid()
+            && GetObjectW(
+                ii.hbmColor.into(),
+                std::mem::size_of::<BITMAP>() as i32,
+                Some(&mut bmp as *mut _ as *mut c_void),
+            ) != 0;
+        if !bmp_ok || bmp.bmWidth <= 0 || bmp.bmHeight <= 0 {
+            return None;
+        }
+        let (w, h) = (bmp.bmWidth as u32, bmp.bmHeight as u32);
+        if w > MAX_ICON_PX || h > MAX_ICON_PX {
+            return None;
+        }
+
+        let mem_dc = CreateCompatibleDC(None);
+        if mem_dc.is_invalid() {
+            return None;
+        }
+        let _dc = DcGuard(mem_dc);
+
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w as i32,
+                // 负值 = top-down（首行是图像顶部），省去一次上下翻转
+                biHeight: -(h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let Ok(hbmp) = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+        else {
+            return None;
+        };
+        if hbmp.is_invalid() || bits.is_null() {
+            return None;
+        }
+        let _bmp = ObjGuard(hbmp.into());
+        let old = SelectObject(mem_dc, hbmp.into());
+        let _ = DrawIconEx(mem_dc, 0, 0, icon, w as i32, h as i32, 0, None, DI_NORMAL);
+
+        // 读 DIB 像素（32bpp = BGRA），交换 R/B 转成 PNG 需要的 RGBA
+        let len = (w * h * 4) as usize;
+        let mut rgba = vec![0u8; len];
+        std::ptr::copy_nonoverlapping(bits as *const u8, rgba.as_mut_ptr(), len);
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        // 位图仍被 DC 选中时 DeleteObject 会失败（GDI 规则），必须先还原再让守卫释放
+        let _ = SelectObject(mem_dc, old);
+
+        Some(IconRgba {
+            width: w,
+            height: h,
+            rgba,
+        })
+    }
+}
+
+/// 读 exe 版本信息里的 FileDescription（本地化产品名），失败返回 `None`。
+pub fn file_description(exe_path: &str) -> Option<String> {
+    // SAFETY：缓冲区长度来自 GetFileVersionInfoSizeW，VerQueryValueW 返回的指针与
+    // 长度都指向该缓冲区内；以 null 为界扫描字符串，不会越界。
+    unsafe {
+        let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(PCWSTR(wide.as_ptr()), Some(0), size, buf.as_mut_ptr() as *mut c_void)
+            .is_err()
+        {
+            return None;
+        }
+        // 取第一个语言/代码页块
+        let mut tlen: u32 = 0;
+        let mut tptr: *mut c_void = std::ptr::null_mut();
+        let tkey: Vec<u16> = r"\VarFileInfo\Translation"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        if !VerQueryValueW(
+            buf.as_ptr() as *const c_void,
+            PCWSTR(tkey.as_ptr()),
+            &mut tptr,
+            &mut tlen,
+        )
+        .as_bool()
+            || tlen < 4
+        {
+            return None;
+        }
+        let lang = *(tptr as *const u16);
+        let cp = *((tptr as *const u16).add(1));
+        let key = format!(r"\StringFileInfo\{:04x}{:04x}\FileDescription", lang, cp);
+        let mut vlen: u32 = 0;
+        let mut vptr: *mut c_void = std::ptr::null_mut();
+        let vkey: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+        if !VerQueryValueW(
+            buf.as_ptr() as *const c_void,
+            PCWSTR(vkey.as_ptr()),
+            &mut vptr,
+            &mut vlen,
+        )
+        .as_bool()
+            || vlen == 0
+        {
+            return None;
+        }
+        // 注意：VerQueryValueW 的 vlen 是 u16 字符数（含结尾 null），不是字节数。
+        // 不能除以 2，否则长名称会被截断一半（如 "Microsoft Edge" → "Microso"）。
+        // 以 null 为界扫描最稳妥（兼容 vlen 两种单位语义），杜绝截断与越界。
+        let p = vptr as *const u16;
+        let max = vlen as usize;
+        let mut n = 0usize;
+        while n < max && *p.add(n) != 0 {
+            n += 1;
+        }
+        let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+        let s = s.trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+}
+
 /// 枚举默认渲染端点（扬声器 / 耳机）上的全部音频会话。
 ///
 /// 返回值刻意区分两种「空」：
@@ -507,6 +731,53 @@ mod tests {
     fn audio_meters_never_panics() {
         let _com = ComGuard::init_multithreaded().expect("COM 初始化失败");
         let _ = audio_meters();
+    }
+
+    /// 版本信息读取：系统自带的 notepad.exe 一定有 FileDescription。
+    /// 这是「应用显示名」的主要来源，读不出来就全靠进程名兜底，用户会看到裸 exe 名。
+    #[test]
+    fn file_description_of_system_exe_is_nonempty() {
+        let fd = file_description(r"C:\Windows\System32\notepad.exe");
+        assert!(
+            fd.as_deref().is_some_and(|s| !s.is_empty()),
+            "notepad.exe 应能读到 FileDescription"
+        );
+    }
+
+    /// 不存在的路径：必须返回 None，且不能因为提前 return 漏掉任何资源。
+    #[test]
+    fn file_description_of_missing_file_is_none() {
+        assert!(file_description(r"C:\nonexistent\no-such-app.exe").is_none());
+    }
+
+    /// 图标提取：不存在的路径返回 None（验证失败路径的守卫不会误释放无效句柄）
+    #[test]
+    fn extract_icon_rgba_of_missing_file_is_none() {
+        assert!(extract_icon_rgba(r"C:\nonexistent\no-such-app.exe").is_none());
+    }
+
+    /// 图标提取：拿自身 exe 实测，结果的尺寸与缓冲区长度必须自洽。
+    /// 无图标资源的构建返回 None 也合法，故只约束「有结果时一定自洽」。
+    #[test]
+    fn extract_icon_rgba_of_self_is_self_consistent() {
+        let path = std::env::current_exe()
+            .expect("无法获取自身路径")
+            .to_string_lossy()
+            .to_string();
+        if let Some(icon) = extract_icon_rgba(&path) {
+            assert!(icon.width > 0 && icon.height > 0, "图标尺寸必须为正");
+            assert!(
+                icon.width <= MAX_ICON_PX && icon.height <= MAX_ICON_PX,
+                "图标尺寸不得超过上限 {MAX_ICON_PX}: {}x{}",
+                icon.width,
+                icon.height
+            );
+            assert_eq!(
+                icon.rgba.len(),
+                (icon.width * icon.height * 4) as usize,
+                "RGBA 缓冲区长度必须等于 w*h*4"
+            );
+        }
     }
 
     /// 每种设备类型：刚好够长则通过，短一个字节则拒绝，HID 一律拒绝。

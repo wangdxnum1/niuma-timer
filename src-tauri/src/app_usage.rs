@@ -18,7 +18,6 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,19 +28,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{Local, TimeZone, Timelike};
 use rusqlite::params;
 use serde::Serialize;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject,
-    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-};
-use windows::Win32::Storage::FileSystem::{
-    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
-};
-use windows::Win32::UI::Shell::ExtractIconExW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, GetIconInfo, DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON, ICONINFO,
-};
+use windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_FOREGROUND;
 
 /// 挂机阈值：距最后一次真实输入超过该时长（毫秒）→ 前台窗口不算使用中
 const IDLE_THRESHOLD_MS: u64 = 5 * 60 * 1000;
@@ -242,71 +230,10 @@ pub(crate) fn display_name_of(exe_path: &str, exe_name_lower: &str) -> String {
 }
 
 /// 读 exe 版本信息里的 FileDescription（本地化产品名），失败返回 None。
+///
+/// 实现收口于 `win::file_description`：读 PE 版本资源属于 Win32 原语。
 fn file_description(exe_path: &str) -> Option<String> {
-    unsafe {
-        let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
-        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
-        if size == 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; size as usize];
-        if GetFileVersionInfoW(PCWSTR(wide.as_ptr()), Some(0), size, buf.as_mut_ptr() as *mut c_void)
-            .is_err()
-        {
-            return None;
-        }
-        // 取第一个语言/代码页块
-        let mut tlen: u32 = 0;
-        let mut tptr: *mut c_void = std::ptr::null_mut();
-        let tkey: Vec<u16> = r"\VarFileInfo\Translation"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        if !VerQueryValueW(
-            buf.as_ptr() as *const c_void,
-            PCWSTR(tkey.as_ptr()),
-            &mut tptr,
-            &mut tlen,
-        )
-        .as_bool()
-            || tlen < 4
-        {
-            return None;
-        }
-        let lang = *(tptr as *const u16);
-        let cp = *((tptr as *const u16).add(1));
-        let key = format!(r"\StringFileInfo\{:04x}{:04x}\FileDescription", lang, cp);
-        let mut vlen: u32 = 0;
-        let mut vptr: *mut c_void = std::ptr::null_mut();
-        let vkey: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
-        if !VerQueryValueW(
-            buf.as_ptr() as *const c_void,
-            PCWSTR(vkey.as_ptr()),
-            &mut vptr,
-            &mut vlen,
-        )
-        .as_bool()
-            || vlen == 0
-        {
-            return None;
-        }
-        // 注意：VerQueryValueW 的 vlen 是 u16 字符数（含结尾 null），不是字节数。
-        // 不能除以 2，否则长名称会被截断一半（如 "Microsoft Edge" → "Microso"）。
-        // 以 null 为界扫描最稳妥（兼容 vlen 两种单位语义），杜绝截断与越界。
-        let p = vptr as *const u16;
-        let max = vlen as usize;
-        let mut n = 0usize;
-        while n < max && *p.add(n) != 0 {
-            n += 1;
-        }
-        let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
-        let s = s.trim().to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    }
+    crate::win::file_description(exe_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -369,95 +296,20 @@ pub(crate) fn cached_icon(display: &str) -> Option<String> {
     None
 }
 
-/// 提取 exe 第一个图标 → RGBA → PNG 字节。无图标资源/失败返回 None。
+/// 提取 exe 第一个图标 → PNG 字节。无图标资源 / 失败返回 None。
+///
+/// GDI 提取（HICON → DIBSection → RGBA）收口于 `win::extract_icon_rgba`；
+/// 这里只做 PNG 编码——那是数据格式而非平台 API，留在业务侧更合适。
 fn extract_icon_png(exe_path: &str) -> Option<Vec<u8>> {
-    unsafe {
-        let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut hlarge: HICON = HICON::default();
-        let mut hsmall: HICON = HICON::default();
-        if ExtractIconExW(PCWSTR(wide.as_ptr()), 0, Some(&mut hlarge), Some(&mut hsmall), 1) == 0 {
-            return None;
-        }
-        let icon = if !hlarge.is_invalid() { hlarge } else { hsmall };
-        let mut ii = ICONINFO::default();
-        if GetIconInfo(icon, &mut ii).is_err() {
-            let _ = DestroyIcon(hlarge);
-            let _ = DestroyIcon(hsmall);
-            return None;
-        }
-        let mut bmp = BITMAP::default();
-        let bmp_ok = !ii.hbmColor.is_invalid()
-            && GetObjectW(
-                ii.hbmColor.into(),
-                std::mem::size_of::<BITMAP>() as i32,
-                Some(&mut bmp as *mut _ as *mut c_void),
-            ) != 0;
-        let _ = DeleteObject(ii.hbmColor.into());
-        let _ = DeleteObject(ii.hbmMask.into());
-        if !bmp_ok || bmp.bmWidth <= 0 || bmp.bmHeight <= 0 {
-            let _ = DestroyIcon(hlarge);
-            let _ = DestroyIcon(hsmall);
-            return None;
-        }
-        let w = bmp.bmWidth as u32;
-        let h = bmp.bmHeight as u32;
-        if w > 128 || h > 128 {
-            let _ = DestroyIcon(hlarge);
-            let _ = DestroyIcon(hsmall);
-            return None;
-        }
-
-        let mem_dc = CreateCompatibleDC(None);
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w as i32,
-                biHeight: -(h as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let Ok(hbmp) = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-        else {
-            let _ = DeleteDC(mem_dc);
-            let _ = DestroyIcon(hlarge);
-            let _ = DestroyIcon(hsmall);
-            return None;
-        };
-        if hbmp.is_invalid() || bits.is_null() {
-            let _ = DeleteDC(mem_dc);
-            let _ = DestroyIcon(hlarge);
-            let _ = DestroyIcon(hsmall);
-            return None;
-        }
-        let old = SelectObject(mem_dc, hbmp.into());
-        let _ = DrawIconEx(mem_dc, 0, 0, icon, w as i32, h as i32, 0, None, DI_NORMAL);
-        // 读 DIB 像素（32bpp top-down = BGRA），转 RGBA
-        let len = (w * h * 4) as usize;
-        let mut rgba = vec![0u8; len];
-        std::ptr::copy_nonoverlapping(bits as *const u8, rgba.as_mut_ptr(), len);
-        for px in rgba.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
-        let _ = SelectObject(mem_dc, old);
-        let _ = DeleteObject(hbmp.into());
-        let _ = DeleteDC(mem_dc);
-        let _ = DestroyIcon(hlarge);
-        let _ = DestroyIcon(hsmall);
-
-        let mut out = Vec::new();
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut writer = enc.write_header().ok()?;
-        writer.write_image_data(&rgba).ok()?;
-        drop(writer); // 结束对 out 的借用，之后才能把 out 移出
-        Some(out)
-    }
+    let icon = crate::win::extract_icon_rgba(exe_path)?;
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, icon.width, icon.height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header().ok()?;
+    writer.write_image_data(&icon.rgba).ok()?;
+    drop(writer); // 结束对 out 的借用，之后才能把 out 移出
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------
