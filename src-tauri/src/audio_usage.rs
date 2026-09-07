@@ -253,7 +253,12 @@ pub struct AudioUsageSummary {
 }
 
 /// 今日媒体播放汇总
-pub fn summary() -> AudioUsageSummary {
+/// 今日媒体播放汇总。
+///
+/// `known_icons`：前端已缓存过图标的应用名，命中的条目 `icon` 返回 `None`。
+/// 与 `app_usage::summary` 同理——避免每 2 秒轮询反复回传整批图标 base64。
+pub fn summary(known_icons: &[String]) -> AudioUsageSummary {
+    let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
     let g = crate::db::conn().lock().unwrap();
 
@@ -270,7 +275,11 @@ pub fn summary() -> AudioUsageSummary {
                 if let Some(exe) = playing_exe().lock().unwrap().get(&app).cloned() {
                     crate::app_usage::ensure_icon(&app, &exe);
                 }
-                let icon = crate::app_usage::cached_icon(&app);
+                let icon = if known.contains(app.as_str()) {
+                    None // 前端已有，本次不再回传
+                } else {
+                    crate::app_usage::cached_icon(&app)
+                };
                 apps.push(AudioUsageItem {
                     app,
                     seconds: row.1,

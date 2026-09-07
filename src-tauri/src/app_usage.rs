@@ -17,7 +17,7 @@
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计），跳过自身进程。
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -604,8 +604,13 @@ pub struct AppUsageSummary {
     pub watch_ok: bool,
 }
 
-/// 今日应用使用汇总
-pub fn summary() -> AppUsageSummary {
+/// 今日应用使用汇总。
+///
+/// `known_icons`：前端已缓存过图标的应用名。命中的条目 `icon` 返回 `None`，不再回传
+/// base64——前端每 2 秒轮询一次，而图标是几 KB~几十 KB 的 data URL，每次整批搬运
+/// 纯属浪费 IPC 带宽（只有新出现的应用才真正需要传一次）。
+pub fn summary(known_icons: &[String]) -> AppUsageSummary {
+    let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
     let g = crate::db::conn().lock().unwrap();
 
@@ -623,7 +628,11 @@ pub fn summary() -> AppUsageSummary {
                     if let Some(exe) = app_exe_map().lock().unwrap().get(&app).cloned() {
                         ensure_icon(&app, &exe);
                     }
-                    let icon = cached_icon(&app);
+                    let icon = if known.contains(app.as_str()) {
+                        None // 前端已有，本次不再回传
+                    } else {
+                        cached_icon(&app)
+                    };
                     apps.push(AppUsageItem {
                         app,
                         seconds: row.1,

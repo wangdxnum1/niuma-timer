@@ -4,7 +4,12 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-04.v14";
+const FE_VER = "2026-09-07.v15";
+
+// 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
+// （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
+// 初值 true：万一事件系统不通，退化为「始终轮询」的旧行为，不会更差。
+let winVisible = true;
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -552,7 +557,7 @@ async function loadAppUsage() {
     return;
   }
   try {
-    const s = await invoke("get_app_usage_summary");
+    const s = await invoke("get_app_usage_summary", { known_icons: knownIcons() });
     renderAppUsage(s);
     if (audioLogged.appu < 2) {
       audioLogged.appu++;
@@ -583,6 +588,7 @@ const audioLogged = { audio: 0, appu: 0 };
 
 function renderAppUsage(s) {
   const apps = s.apps || [];
+  mergeIcons(apps);
   // 首页卡片：排行前 6
   const home = $("appuHomeList");
   if (home) renderAppRows(home, apps, 6);
@@ -629,6 +635,22 @@ function appIconHTML(a) {
   return '<span class="app-icon app-icon-fallback">' + escapeHtml(ch) + "</span>";
 }
 
+// 图标按应用名缓存（base64 data URL 几 KB~几十 KB，每 2 秒轮询整批回传纯属浪费）。
+// 后端只回传前端缺的（known_icons 里没报过的），这里负责把新到的存起来、把缺的补回去。
+// 应用使用与媒体播放共用一份：同一个应用两边图标相同，先加载的那页顺带喂给另一页。
+const iconCache = new Map();
+
+function mergeIcons(apps) {
+  for (const a of apps || []) {
+    if (a.icon) iconCache.set(a.app, a.icon);
+    else if (iconCache.has(a.app)) a.icon = iconCache.get(a.app);
+  }
+}
+
+function knownIcons() {
+  return Array.from(iconCache.keys());
+}
+
 // 逐小时柱状图（复用 act-chart 样式；hourly 为 24 个秒数，空态文案自定义）
 function renderHourChart(el, hourly) {
   if (!el) return;
@@ -652,7 +674,7 @@ async function loadAudioUsage() {
     return;
   }
   try {
-    const s = await invoke("get_audio_usage_summary");
+    const s = await invoke("get_audio_usage_summary", { known_icons: knownIcons() });
     renderAudioUsage(s);
     if (audioLogged.audio < 3) {
       audioLogged.audio++;
@@ -678,6 +700,7 @@ async function loadAudioUsage() {
 
 function renderAudioUsage(s) {
   const apps = s.apps || [];
+  mergeIcons(apps);
   // 首页卡片：排行前 6
   const home = $("audioHomeList");
   if (home) renderAppRows(home, apps, 6, "今日暂无播放记录");
@@ -766,6 +789,7 @@ async function closeWindow() {
   if (JSON.stringify(readCfg()) !== lastSaved) {
     await doSave();
   }
+  winVisible = false; // 立即停轮询，不等 Rust 端下一秒的可见性广播
   TAURI.window.getCurrentWindow().hide();
 }
 // Esc 键关闭（关闭交给原生窗口标题栏按钮；Esc 作为键盘快捷键保留）
@@ -798,6 +822,7 @@ async function boot() {
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
+  winVisible = true; // 窗口已显示，恢复轮询（启动时若先收到 false 也能被这里纠正）
   const shownAt = Date.now();
   try { await load(); } catch (e) { console.error("load", e); }
   try { await tick(); } catch (e) { console.error("tick", e); }
@@ -813,13 +838,40 @@ async function boot() {
   hideSplash();
 }
 
+// 窗口重新可见时补跑一轮：隐藏期间数据照常在后台累积，切回来要立刻看到最新值
+function refreshAll() {
+  tick();
+  loadOvertime();
+  loadActivity();
+  loadAppUsage();
+  loadAudioUsage();
+}
+
+// 订阅 Rust 端广播的主窗口可见性变化。事件系统若不通则 winVisible 保持 true，
+// 退化成「始终轮询」的旧行为——宁可浪费，也不能让界面不刷新。
+async function watchVisibility() {
+  try {
+    await TAURI.event.listen("win-visibility", (e) => {
+      const vis = !!(e && e.payload);
+      if (vis === winVisible) return;
+      winVisible = vis;
+      if (vis) refreshAll();
+    });
+  } catch (err) {
+    flog("vis listen failed: " + (err && err.message ? err.message : String(err)));
+  }
+}
+
 boot();
-setInterval(tick, 1000);
+watchVisibility();
+// 以下轮询全部受 winVisible 约束：窗口 hide 到托盘时直接跳过，
+// 不再空跑「每 2 秒三次 IPC + SQLite 聚合查询 + 图标 base64 回传」。
+setInterval(() => { if (winVisible) tick(); }, 1000);
 // 加班记录每 10 秒刷新（锁屏=下班离开事件可能随时产生新记录）
-setInterval(loadOvertime, 10000);
+setInterval(() => { if (winVisible) loadOvertime(); }, 10000);
 // 活动统计每 2 秒刷新（命令内部会先刷内存计数，点击/按键后近实时可见）
-setInterval(loadActivity, 2000);
+setInterval(() => { if (winVisible) loadActivity(); }, 2000);
 // 应用使用每 2 秒刷新（10 秒结算一次，2 秒轮询保证切回后尽快看到新值）
-setInterval(loadAppUsage, 2000);
+setInterval(() => { if (winVisible) loadAppUsage(); }, 2000);
 // 媒体播放每 2 秒刷新（5 秒结算一次，口径同上）
-setInterval(loadAudioUsage, 2000);
+setInterval(() => { if (winVisible) loadAudioUsage(); }, 2000);

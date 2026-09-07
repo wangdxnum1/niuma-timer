@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use serde_json::{from_value, to_value, Value};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 struct AppState {
     config: Mutex<config::Config>,
@@ -351,15 +351,18 @@ fn get_activity_summary() -> activity::ActivitySummary {
 }
 
 /// 获取今日应用使用时长统计（各应用累计 + 24 小时分布）
+///
+/// `known_icons`：前端已缓存图标的应用名，命中者不再回传 base64（图标是几 KB~几十 KB
+/// 的 data URL，每 2 秒轮询整批搬运纯属浪费，只有新应用才需要传一次）。
 #[tauri::command]
-fn get_app_usage_summary() -> app_usage::AppUsageSummary {
-    app_usage::summary()
+fn get_app_usage_summary(known_icons: Vec<String>) -> app_usage::AppUsageSummary {
+    app_usage::summary(&known_icons)
 }
 
 /// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）
 #[tauri::command]
-fn get_audio_usage_summary() -> audio_usage::AudioUsageSummary {
-    audio_usage::summary()
+fn get_audio_usage_summary(known_icons: Vec<String>) -> audio_usage::AudioUsageSummary {
+    audio_usage::summary(&known_icons)
 }
 
 /// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
@@ -387,6 +390,18 @@ if (!window.__TAURI__) {
           show: function () { return window.__TAURI_INTERNALS__.invoke('show_window'); },
           setFocus: function () { return window.__TAURI_INTERNALS__.invoke('focus_window'); }
         };
+      }
+    },
+    event: {
+      // Tauri v2 的事件系统实际就是 plugin:event|listen 命令（见 @tauri-apps/api 的
+      // _listen 实现），这里直接调它，省掉整个 @tauri-apps/api 依赖与打包链。
+      // handler 收到的是完整 event 对象 { event, id, payload }。
+      listen: function (evt, handler) {
+        return window.__TAURI_INTERNALS__.invoke('plugin:event|listen', {
+          event: evt,
+          target: { kind: 'Any' },
+          handler: window.__TAURI_INTERNALS__.transformCallback(handler)
+        });
       }
     }
   };
@@ -529,12 +544,28 @@ fn main() {
 
             // 托盘 UI 刷新：独立 1s 循环，仅做实时状态显示（已赚¥/距下班/距发薪），
             // 与下方业务轮询解耦，方便单独调频率或替换实现。
+            //
+            // 顺带检测主窗口可见性变化并广播给前端，前端据此暂停/恢复 2s 轮询。
+            // 放在状态侧检测而非逐个改 show/hide 调用点，是因为触发路径太多
+            // （托盘菜单、hide/show_window 命令、关闭按钮拦截改 hide、前端 Esc），
+            // 只有统一检测才能全覆盖；窗口 hide 后这里仍在跑，代价仅一次 bool 比较。
             {
                 let apph = apph.clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    let state = apph.state::<AppState>();
-                    refresh_tray(&apph, state.inner());
+                std::thread::spawn(move || {
+                    let mut last_visible: Option<bool> = None;
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        let vis = apph
+                            .get_webview_window("main")
+                            .map(|w| w.is_visible().unwrap_or(false))
+                            .unwrap_or(false);
+                        if last_visible != Some(vis) {
+                            last_visible = Some(vis);
+                            let _ = apph.emit("win-visibility", vis);
+                        }
+                        let state = apph.state::<AppState>();
+                        refresh_tray(&apph, state.inner());
+                    }
                 });
             }
 
