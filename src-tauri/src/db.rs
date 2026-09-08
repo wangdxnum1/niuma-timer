@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS ot_records (
 );
 "#;
 
-const CREATE_ACT_HOURLY: &str = r#"
+pub(crate) const CREATE_ACT_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS act_hourly (
     date        TEXT NOT NULL,
     hour        INTEGER NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS act_hourly (
 );
 "#;
 
-const CREATE_ACT_KEYS: &str = r#"
+pub(crate) const CREATE_ACT_KEYS: &str = r#"
 CREATE TABLE IF NOT EXISTS act_keys (
     date  TEXT NOT NULL,
     vk    INTEGER NOT NULL,

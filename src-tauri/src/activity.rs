@@ -36,7 +36,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{Local, Timelike};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
@@ -330,11 +330,28 @@ fn keyq_worker() {
 
 /// 当天累计状态（24 小时桶 + 当天按键全量明细）。
 /// 仅用于从旧 JSON 迁移时的反序列化（db.rs），正常读写走 SQLite。
+///
+/// 另带两组「脏标记」，供增量落盘使用（见 [`write_delta`]）：
+/// 落盘策略是「只写变动过的部分」，而不是每 10 秒把全天数据整体重写一遍。
 #[derive(Deserialize)]
 pub(crate) struct DayState {
     pub(crate) date: String,
     pub(crate) hourly: Vec<HourBucket>,
     pub(crate) key_detail: BTreeMap<u32, u64>,
+    /// `hourly[i]` 的内存值与库中值已经不一致（尚未成功落库）。
+    ///
+    /// 绝大多数 10 秒周期只有「当前小时」这一个桶在变；夜间无人使用时
+    /// 24 个桶全干净，一次写库都不会发生。
+    #[serde(default)]
+    pub(crate) dirty_hours: Vec<bool>,
+    /// 已并入 `key_detail`、但尚未成功落库的按键增量（vk -> 增量次数）。
+    ///
+    /// 按键明细同理：不再每轮 `DELETE` + 全量重插当天几十个键码，
+    /// 只把本轮真正新增的次数用 `count = count + ?` 累加进去。
+    /// **只在事务提交成功后清空**——失败时保留，下一轮带着完整增量重试，
+    /// 既不会重复计数（旧值已被回滚），也不会丢数据。
+    #[serde(default)]
+    pub(crate) key_dirty: BTreeMap<u32, u64>,
 }
 
 impl DayState {
@@ -343,6 +360,9 @@ impl DayState {
             date,
             hourly: vec![HourBucket::default(); 24],
             key_detail: BTreeMap::new(),
+            // 新建 / 从库里恢复的状态都与库一致，故初始无脏
+            dirty_hours: vec![false; 24],
+            key_dirty: BTreeMap::new(),
         }
     }
 }
@@ -359,43 +379,70 @@ fn day() -> &'static Mutex<DayState> {
 // 落盘（SQLite）
 // ---------------------------------------------------------------------------
 
-/// 把当天内存状态整体写入 SQLite：24 小时桶全量 UPSERT + 按键明细全量重写。
-/// 单事务提交，WAL 模式下原子落盘，崩溃不会损坏。
-fn save_day(d: &DayState) {
-    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
-        let tx = g.transaction()?;
-        for (i, b) in d.hourly.iter().enumerate() {
-            // 逐条容错：单条失败不回滚整个事务（宁可少记一小时，也不丢全天统计）
-            let _ = tx.execute(
-                "INSERT OR REPLACE INTO act_hourly \
-                 (date, hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![
-                    d.date,
-                    i as i64,
-                    b.moves as i64,
-                    b.pixels as i64,
-                    b.left as i64,
-                    b.dbl as i64,
-                    b.right as i64,
-                    b.wheel as i64,
-                    b.wheel_ticks as i64,
-                    b.mid as i64,
-                    b.xbtn as i64,
-                    b.keys as i64
-                ],
-            );
+/// 把「脏」的部分写进库：脏小时桶整体覆盖、按键明细按增量累加。
+///
+/// 抽成接受 `&mut Connection` 的纯函数，是为了让单测能在 in-memory 库上直接验证
+/// 「只写脏桶 / 增量累加 / 失败整体回滚」三条语义，不必碰真实的
+/// `%APPDATA%/niuma-timer/niuma.db`（与 overtime::upsert_into 同一手法）。
+///
+/// 全程 `?` + 单事务：任何一条写失败都整体回滚，**绝不留下半截数据**——
+/// 否则调用方保留的脏标记下一轮重试时，已写进去的那部分会被再累加一次。
+fn write_delta(g: &mut Connection, d: &DayState) -> rusqlite::Result<()> {
+    let tx = g.transaction()?;
+    for (hour, dirty) in d.dirty_hours.iter().enumerate() {
+        if !*dirty {
+            continue;
         }
-        // 按键明细是内存累积态，全量重写保证一致、无残留
-        let _ = tx.execute("DELETE FROM act_keys WHERE date = ?1", params![d.date]);
-        for (vk, cnt) in &d.key_detail {
-            let _ = tx.execute(
-                "INSERT OR REPLACE INTO act_keys (date, vk, count) VALUES (?1, ?2, ?3)",
-                params![d.date, *vk as i64, *cnt as i64],
-            );
+        let Some(b) = d.hourly.get(hour) else { continue };
+        tx.execute(
+            "INSERT OR REPLACE INTO act_hourly \
+             (date, hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                d.date,
+                hour as i64,
+                b.moves as i64,
+                b.pixels as i64,
+                b.left as i64,
+                b.dbl as i64,
+                b.right as i64,
+                b.wheel as i64,
+                b.wheel_ticks as i64,
+                b.mid as i64,
+                b.xbtn as i64,
+                b.keys as i64
+            ],
+        )?;
+    }
+    for (vk, delta) in &d.key_dirty {
+        tx.execute(
+            "INSERT INTO act_keys (date, vk, count) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(date, vk) DO UPDATE SET count = count + ?3",
+            params![d.date, *vk as i64, *delta as i64],
+        )?;
+    }
+    tx.commit()
+}
+
+/// 落盘当天状态：**只写脏的部分**，并在事务提交成功后清除脏标记。
+///
+/// 旧实现每 10 秒把 24 个桶全量 `INSERT OR REPLACE` 一遍、再把当天几十条按键
+/// 明细 `DELETE` 后全量重插——夜里没人用电脑时也照样写，纯属给 WAL 添垃圾。
+/// 现在无变化则直接返回（连事务都不开），典型周期只写 1 个桶 + 几个键码。
+///
+/// 写失败时**保留脏标记**：内存态始终是权威值，下一轮会带着完整增量重试，
+/// 而上一轮的事务已整体回滚，不会重复计数。
+fn save_day(d: &mut DayState) {
+    if !d.dirty_hours.iter().any(|x| *x) && d.key_dirty.is_empty() {
+        return; // 无变化：不碰数据库
+    }
+    // 注意：写库期间仍持有 day 锁，与旧实现一致（落盘频率已大幅降低）
+    if crate::db::with_db(|g| write_delta(g, d)).is_ok() {
+        for x in d.dirty_hours.iter_mut() {
+            *x = false;
         }
-        tx.commit()
-    });
+        d.key_dirty.clear();
+    }
 }
 
 /// 从 SQLite 读取指定日期的活动统计（无数据则返回全零）。
@@ -692,32 +739,51 @@ fn flush_pending_impl(persist: bool) {
 
     let mut d = day().lock().unwrap();
     if d.date != date {
-        save_day(&d);
+        save_day(&mut d); // 跨天：先把旧一天剩余增量落盘，再开新的一天
         *d = DayState::new(date.clone());
     }
-    let b = &mut d.hourly[hour];
-    b.moves += C_MOVES.swap(0, Ordering::Relaxed);
-    b.pixels += C_PIXELS.swap(0, Ordering::Relaxed);
-    b.left += C_LEFT.swap(0, Ordering::Relaxed);
-    b.dbl += C_DBL.swap(0, Ordering::Relaxed);
-    b.right += C_RIGHT.swap(0, Ordering::Relaxed);
-    b.wheel += C_WHEEL.swap(0, Ordering::Relaxed);
-    b.wheel_ticks += C_WHEEL_TICKS.swap(0, Ordering::Relaxed);
-    b.mid += C_MID.swap(0, Ordering::Relaxed);
-    b.xbtn += C_XBTN.swap(0, Ordering::Relaxed);
-    b.keys += C_KEYS.swap(0, Ordering::Relaxed);
+    let dm = C_MOVES.swap(0, Ordering::Relaxed);
+    let dp = C_PIXELS.swap(0, Ordering::Relaxed);
+    let dl = C_LEFT.swap(0, Ordering::Relaxed);
+    let dd = C_DBL.swap(0, Ordering::Relaxed);
+    let dr = C_RIGHT.swap(0, Ordering::Relaxed);
+    let dw = C_WHEEL.swap(0, Ordering::Relaxed);
+    let dt = C_WHEEL_TICKS.swap(0, Ordering::Relaxed);
+    let dmi = C_MID.swap(0, Ordering::Relaxed);
+    let dx = C_XBTN.swap(0, Ordering::Relaxed);
+    let dk = C_KEYS.swap(0, Ordering::Relaxed);
+    // 位或判断「本轮是否有任何增量」：计数恒为非负，任一非零则结果非零
+    let gained = dm | dp | dl | dd | dr | dw | dt | dmi | dx | dk;
+    {
+        let b = &mut d.hourly[hour];
+        b.moves += dm;
+        b.pixels += dp;
+        b.left += dl;
+        b.dbl += dd;
+        b.right += dr;
+        b.wheel += dw;
+        b.wheel_ticks += dt;
+        b.mid += dmi;
+        b.xbtn += dx;
+        b.keys += dk;
+    }
+    if gained > 0 {
+        d.dirty_hours[hour] = true; // 只把当前小时标脏，其余 23 桶保持干净
+    }
 
     // 取走键盘增量：遍历 256 个原子键槽，swap(0) 收归到 key_detail（vkCode 即数组下标）。
     // 锁无关：合并线程不再与钩子回调在每次按键时抢 KEY_STATE 锁，消除输入卡顿的并发来源。
+    // 同一份增量也记进 key_dirty——落盘时只写这几个键的增量，不再全量重插当天明细。
     for (vk, slot) in key_pending().iter().enumerate() {
         let v = slot.swap(0, Ordering::Relaxed);
         if v > 0 {
             *d.key_detail.entry(vk as u32).or_insert(0) += v;
+            *d.key_dirty.entry(vk as u32).or_insert(0) += v;
         }
     }
 
     if persist {
-        save_day(&d);
+        save_day(&mut d);
     }
 }
 
@@ -810,6 +876,7 @@ fn vk_name(vk: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     /// `last_input_ms` 必须返回**墙钟毫秒**，且落在合理区间内。
     ///
@@ -825,5 +892,74 @@ mod tests {
         assert!(t <= now + 1_000, "最后输入时刻晚于当前时刻: {t} > {now}");
         // 上限取 u32 tick count 的回绕周期 49.7 天，留足余量
         assert!(now.saturating_sub(t) <= 50 * 24 * 3600 * 1000);
+    }
+
+    /// in-memory 库：只建活动两张表，**不碰**真实库 `%APPDATA%/niuma-timer/niuma.db`。
+    fn mem_db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::CREATE_ACT_HOURLY).unwrap();
+        c.execute_batch(crate::db::CREATE_ACT_KEYS).unwrap();
+        c
+    }
+
+    /// 只写标记为脏的小时桶：其余 23 桶不该出现在库里（旧实现是 24 桶全量重写）。
+    #[test]
+    fn write_delta_only_touches_dirty_hours() {
+        let mut c = mem_db();
+        let mut d = DayState::new("2026-09-08".into());
+        d.hourly[3].keys = 42;
+        d.dirty_hours[3] = true; // 只有 3 点这一桶脏
+        write_delta(&mut c, &d).unwrap();
+
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM act_hourly", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        let (hour, keys): (i64, i64) = c
+            .query_row("SELECT hour, keys FROM act_hourly", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((hour, keys), (3, 42));
+    }
+
+    /// 按键明细按增量累加而非整行覆盖：库里已有 10 次，本轮新增 5 次 → 15。
+    /// （旧实现是 DELETE 后照内存值全量重插，语义上等价但写入量是几十倍。）
+    #[test]
+    fn write_delta_accumulates_key_counts() {
+        let mut c = mem_db();
+        c.execute(
+            "INSERT INTO act_keys (date, vk, count) VALUES ('2026-09-08', 65, 10)",
+            [],
+        )
+        .unwrap();
+        let mut d = DayState::new("2026-09-08".into());
+        d.key_dirty.insert(65, 5);
+        write_delta(&mut c, &d).unwrap();
+
+        let n: i64 = c
+            .query_row("SELECT count FROM act_keys WHERE vk = 65", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 15);
+    }
+
+    /// 失败必须整体回滚：不能出现「小时桶写进去了、按键明细没写」的半截数据，
+    /// 否则调用方保留的脏标记下一轮重试时会把已写入的部分再累加一次。
+    #[test]
+    fn write_delta_rolls_back_on_failure() {
+        // 故意只建 act_hourly：写 act_keys 必然失败
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::CREATE_ACT_HOURLY).unwrap();
+
+        let mut d = DayState::new("2026-09-08".into());
+        d.hourly[9].moves = 7;
+        d.dirty_hours[9] = true;
+        d.key_dirty.insert(65, 1);
+
+        assert!(write_delta(&mut c, &d).is_err());
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM act_hourly", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }
