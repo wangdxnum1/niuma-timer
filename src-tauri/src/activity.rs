@@ -526,11 +526,15 @@ pub fn start() {
     std::thread::spawn(keyq_worker);
     // 原始输入线程：注册 Raw Input 后必须进入消息循环才能收到 WM_INPUT
     std::thread::spawn(|| unsafe { raw_thread() });
-    // 合并线程：每 10 秒把原子计数刷入当天小时桶并落盘
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(10));
-        flush_pending();
-    });
+    // 周期落盘改由 scheduler 统一调度（每 10 秒调一次 `flush_now`），
+    // 本模块只保留采集相关的两条线程，不再单独起合并线程。
+}
+
+/// 周期落盘入口（由 `scheduler` 每 10 秒调用一次）：
+/// 把原子计数器里的增量刷进当天小时桶，跨天则先落盘旧一天再开新一天。
+/// 程序退出前的最后一次落盘走 `shutdown()`，不走这里。
+pub fn flush_now() {
+    flush_pending();
 }
 
 /// 程序退出前调用：把原子计数器里的最后增量刷进小时桶并落盘。

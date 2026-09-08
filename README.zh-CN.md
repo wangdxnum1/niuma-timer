@@ -146,7 +146,7 @@ cargo tauri build
 niuma-timer/
 ├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs         # 应用入口、invoke 垫片、1 秒定时循环、加班锁屏检测
+│   │   ├── main.rs         # 应用入口、invoke 垫片、托盘与业务任务（交给 scheduler）
 │   │   ├── config.rs       # 配置结构体 + 读写
 │   │   ├── calc.rs         # 赚钱计算 + 时长格式化 + tooltip
 │   │   ├── holiday.rs      # 节假日数据拉取/解析/缓存
@@ -157,7 +157,9 @@ niuma-timer/
 │   │   ├── lock_monitor.rs # Windows 锁屏监听（WTS 会话变更）
 │   │   ├── activity.rs     # Raw Input 键鼠采集 + 逐小时桶 + 高频按键榜
 │   │   ├── app_usage.rs    # 前台窗口应用使用时长监控（白名单）
-│   │   └── audio_usage.rs  # 音频会话媒体播放监控
+│   │   ├── audio_usage.rs  # 音频会话媒体播放监控
+│   │   ├── win.rs          # Win32 平台层（钩子/COM/GDI 的 RAII 守卫、进程与图标提取）
+│   │   └── scheduler.rs    # 统一周期调度（1 秒节拍 → 1/5/10 秒任务）
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri 构建（注册命令）
 │   ├── tauri.conf.json

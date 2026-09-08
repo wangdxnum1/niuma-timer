@@ -10,6 +10,7 @@ mod holiday;
 mod icon_render;
 mod lock_monitor;
 mod overtime;
+mod scheduler;
 mod tray;
 mod win;
 
@@ -19,7 +20,7 @@ use std::sync::Mutex;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use serde_json::{from_value, to_value, Value};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 
 struct AppState {
     config: Mutex<config::Config>,
@@ -542,44 +543,13 @@ fn main() {
             // 启动即拉一次节假日
             spawn_holiday_refresh(apph.clone());
 
-            // 托盘 UI 刷新：独立 1s 循环，仅做实时状态显示（已赚¥/距下班/距发薪），
-            // 与下方业务轮询解耦，方便单独调频率或替换实现。
-            //
-            // 顺带检测主窗口可见性变化并广播给前端，前端据此暂停/恢复 2s 轮询。
-            // 放在状态侧检测而非逐个改 show/hide 调用点，是因为触发路径太多
-            // （托盘菜单、hide/show_window 命令、关闭按钮拦截改 hide、前端 Esc），
-            // 只有统一检测才能全覆盖；窗口 hide 后这里仍在跑，代价仅一次 bool 比较。
-            {
-                let apph = apph.clone();
-                std::thread::spawn(move || {
-                    let mut last_visible: Option<bool> = None;
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                        let vis = apph
-                            .get_webview_window("main")
-                            .map(|w| w.is_visible().unwrap_or(false))
-                            .unwrap_or(false);
-                        if last_visible != Some(vis) {
-                            last_visible = Some(vis);
-                            let _ = apph.emit("win-visibility", vis);
-                        }
-                        let state = apph.state::<AppState>();
-                        refresh_tray(&apph, state.inner());
-                    }
-                });
-            }
-
-            // 业务轮询：跨天检测 + 加班锁屏检测，低频（无需秒级）。
-            // 与 UI 刷新分离后，锁屏→记加班的延迟从 ≤1s 放宽到 ≤5s，对加班统计无影响。
-            {
-                let apph = apph.clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    let state = apph.state::<AppState>();
-                    maybe_rollover_day(state.inner(), &apph);
-                    maybe_record_overtime_lock(state.inner());
-                });
-            }
+            // 统一周期调度：托盘 UI 刷新(1s) / 跨天+加班检测(5s) / 活动落盘与
+            // 应用结算(10s) 合并成一条「1 秒一拍」的线程——它们都是纯周期任务，
+            // 原先各占一个常驻线程纯属浪费。带 Win32 消息循环 / COM 亲和的采集
+            // 线程不在此列，仍在各自模块里（详见 scheduler 模块文档）。
+            // 必须在 activity::start() / app_usage::start() 之后：采集线程先就位。
+            scheduler::start(apph);
+            trace_startup("setup: scheduler started");
             trace_startup("setup: done");
             Ok(())
         })

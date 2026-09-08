@@ -148,7 +148,7 @@ cargo tauri build
 niuma-timer/
 ├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs         # App bootstrap, invoke shim, 1s timer loop, overtime lock detection
+│   │   ├── main.rs         # App bootstrap, invoke shim, tray & business tasks (via scheduler)
 │   │   ├── config.rs       # Config struct + load/save
 │   │   ├── calc.rs         # Earnings calc + duration formatting + tooltip
 │   │   ├── holiday.rs      # Holiday data fetch + parse + cache
@@ -159,7 +159,9 @@ niuma-timer/
 │   │   ├── lock_monitor.rs # Windows lock-screen listener (WTS session change)
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
-│   │   └── audio_usage.rs  # Audio-session media playback tracking
+│   │   ├── audio_usage.rs  # Audio-session media playback tracking
+│   │   ├── win.rs          # Win32 platform layer (RAII guards: hooks/COM/GDI, process & icon)
+│   │   └── scheduler.rs    # Unified periodic scheduler (1s beat -> 1s/5s/10s tasks)
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri build (registers commands)
 │   ├── tauri.conf.json

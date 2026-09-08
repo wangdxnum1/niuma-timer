@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{Local, TimeZone, Timelike};
@@ -565,16 +565,21 @@ fn tick() {
     settle(mono_ms(), true);
 }
 
-/// 启动监控：前台事件钩子线程 + 10 秒结算线程。幂等，仅首次生效。
+/// 启动监控：前台事件钩子线程。幂等，仅首次生效。
+///
+/// 周期结算改由 scheduler 统一调度（每 10 秒调一次 `tick_now`），
+/// 本模块只保留带消息循环的钩子线程——它不能被别的任务占用。
 pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(watch_thread);
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(10));
-        tick();
-    });
+}
+
+/// 周期结算入口（由 `scheduler` 每 10 秒调用一次）：
+/// 结算当前前台应用这一段的使用时长并落盘。
+pub fn tick_now() {
+    tick();
 }
 
 /// 程序退出前：最后结算一把（正常退出零丢失）
@@ -692,7 +697,7 @@ mod tests {
     fn mono_ms_is_monotonic_and_nonzero() {
         let a = mono_ms();
         assert!(a > 0, "mono_ms 不得返回 0，会撞上 since_ms 的未初始化哨兵");
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let b = mono_ms();
         assert!(b > a, "单调时钟必须随时间前进: {a} -> {b}");
         assert!(b - a >= 15, "睡了 20ms，差值不应明显偏小: {}", b - a);
