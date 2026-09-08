@@ -23,7 +23,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Configurable duration format** — `hms` (Xh Xm Xs) / `hm` (Xh Xm) / `h` (decimal hours)
 - **Single instance** — launching a second copy focuses the existing window instead
 - **Double-click tray to show** the main/settings window
-- **Auto holiday data** — fetches the official China holiday schedule (days off + make-up workdays) from a CDN, caches locally; falls back to Mon–Fri when offline
+- **Auto holiday data** — fetches the official China holiday schedule (days off + make-up workdays) from a CDN, caches locally; offline it falls back to a built-in schedule table (2025/2026), and only to Mon–Fri for years not covered yet
 - **No runtime dependency** — the release `.exe` is self-contained (WebView2 Runtime is the only system prerequisite, pre-installed on Win10/11)
 - **Overtime tracking** — when you lock the screen after the workday, it records your leave time and computes overtime pay + meal allowance; view/edit/delete records per day
 - **Activity monitoring** — Raw Input (`WM_INPUT`) captures mouse/keyboard: clicks, scrolls, keystrokes, movement, bucketed per hour with a top-keys leaderboard (no input lag, even with IME)
@@ -133,7 +133,7 @@ cargo tauri build
 | Tray icon | Runtime pixel rendering with a built-in 5×7 dot-matrix font |
 | Persistence | SQLite (`rusqlite`, WAL mode) |
 | Windows APIs | `windows` crate 0.61 — WTS lock-screen events, audio-session polling, DPI-aware window icon, Raw Input (WM_INPUT) for mouse/keyboard |
-| Holiday data | GitHub-hosted JSON via jsDelivr CDN, with local cache fallback |
+| Holiday data | GitHub-hosted JSON via jsDelivr CDN, with local cache + built-in schedule fallback |
 
 ## Known limitations
 
@@ -151,7 +151,7 @@ niuma-timer/
 │   │   ├── main.rs         # App bootstrap, invoke shim, tray & business tasks (via scheduler)
 │   │   ├── config.rs       # Config struct + load/save
 │   │   ├── calc.rs         # Earnings calc + duration formatting + tooltip
-│   │   ├── holiday.rs      # Holiday data fetch + parse + cache
+│   │   ├── holiday.rs      # Holiday data fetch + parse + cache + built-in fallback table
 │   │   ├── icon_render.rs  # Tray icon pixel rendering
 │   │   ├── tray.rs         # Tray icon, menu, hover card (debounce/watchdog/click-cooldown)
 │   │   ├── db.rs           # SQLite layer (WAL), schema init

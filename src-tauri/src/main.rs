@@ -131,24 +131,55 @@ pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
     calc::compute(&cfg, is_workday, mw, now)
 }
 
-/// 后台拉取并刷新节假日缓存
+/// 装载节假日数据并刷新托盘。
+///  表示数据来自网络，落本地缓存供下次启动直接用；
+/// 内置兜底表不落盘——它只是「没有网络时的次优解」，不该污染缓存文件。
+fn apply_holiday_cache(app: &tauri::AppHandle, mut c: holiday::HolidayCache, persist: bool) {
+    if persist {
+        c.fetched_at = Local::now().timestamp();
+    }
+    let state = app.state::<AppState>();
+    {
+        let mut hol = state.holiday.lock().unwrap();
+        *hol = c;
+        if persist {
+            let snapshot = hol.clone();
+            drop(hol);
+            holiday::save_cache(&snapshot);
+        }
+    }
+    let st = get_status(state.inner());
+    tray::update_tray(app, &st);
+}
+
+/// 后台拉取并刷新节假日缓存；网络不可用时退回内置法定节假日表。
 pub fn spawn_holiday_refresh(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let year = Local::now().year();
         match holiday::fetch_year(year).await {
             Ok(days) => {
-                let state = app.state::<AppState>();
-                let mut hol = state.holiday.lock().unwrap();
-                hol.year = year;
-                hol.days = days;
-                hol.fetched_at = Local::now().timestamp();
-                let hol_clone = hol.clone();
-                drop(hol);
-                holiday::save_cache(&hol_clone);
-                let st = get_status(state.inner());
-                tray::update_tray(&app, &st);
+                apply_holiday_cache(
+                    &app,
+                    holiday::HolidayCache {
+                        year,
+                        fetched_at: 0,
+                        days,
+                    },
+                    true,
+                );
             }
-            Err(e) => eprintln!("节假日刷新失败: {}", e),
+            Err(e) => {
+                db::debug_log(&format!("节假日刷新失败: {}", e));
+                match holiday::builtin_cache(year) {
+                    Some(c) => {
+                        db::debug_log(&format!("节假日：网络不可用，改用内置 {year} 年法定节假日表"));
+                        apply_holiday_cache(&app, c, false);
+                    }
+                    None => db::debug_log(&format!(
+                        "节假日：网络不可用且内置表未收录 {year} 年，退回周一至周五估算"
+                    )),
+                }
+            }
         }
     });
 }
@@ -269,18 +300,35 @@ async fn refresh_holidays(
     app: tauri::AppHandle,
 ) -> Result<u32, String> {
     let year = Local::now().year();
-    let days = holiday::fetch_year(year).await?;
-    let mut hol = state.holiday.lock().unwrap();
-    hol.year = year;
-    hol.days = days;
-    hol.fetched_at = Local::now().timestamp();
-    let hol_clone = hol.clone();
-    drop(hol);
-    holiday::save_cache(&hol_clone);
-    let mw = current_monthly_workdays(&*state.config.lock().unwrap(), &hol_clone);
-    let st = get_status(state.inner());
-    tray::update_tray(&app, &st);
-    Ok(mw)
+    match holiday::fetch_year(year).await {
+        Ok(days) => {
+            let c = holiday::HolidayCache {
+                year,
+                fetched_at: 0,
+                days,
+            };
+            let mw = current_monthly_workdays(&*state.config.lock().unwrap(), &c);
+            apply_holiday_cache(&app, c, true);
+            Ok(mw)
+        }
+        Err(e) => {
+            // 手动刷新失败也让数字先准起来：内置表已收录的年份直接兜底，
+            // 未收录才把错误抛给前端（此时确实给不出可信的工作日数）。
+            db::debug_log(&format!("手动刷新节假日失败: {}", e));
+            match holiday::builtin_cache(year) {
+                Some(c) => {
+                    db::debug_log(&format!("节假日：改用内置 {year} 年法定节假日表"));
+                    let mw = current_monthly_workdays(&*state.config.lock().unwrap(), &c);
+                    apply_holiday_cache(&app, c, false);
+                    Ok(mw)
+                }
+                None => Err(format!(
+                    "节假日数据获取失败，且内置表未收录 {year} 年：{}",
+                    e
+                )),
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -475,11 +523,15 @@ fn main() {
             db::conn();
             trace_startup("setup: db ready");
 
-            // 载入本地节假日缓存
+            // 载入本地节假日缓存；无缓存时用内置法定节假日表兜底，
+            // 避免首屏就按「周一至周五」估算（2026-10 会算成 22 天，实际 18 天）
             {
                 let year = Local::now().year();
-                if let Some(c) = holiday::load_cache(year) {
+                if let Some(c) = holiday::load_cache(year).or_else(|| holiday::builtin_cache(year))
+                {
                     *app.state::<AppState>().holiday.lock().unwrap() = c;
+                } else {
+                    db::debug_log(&format!("节假日：无缓存且内置表未收录 {year} 年，退回周一至周五估算"));
                 }
             }
             trace_startup("setup: holiday cache loaded");
