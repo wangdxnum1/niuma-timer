@@ -265,10 +265,10 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
     }
     NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
-    let g = crate::db::conn().lock().unwrap();
-    let n = g
-        .execute("DELETE FROM ot_records WHERE date = ?1", params![date])
-        .map_err(|e| format!("删除失败: {e}"))?;
+    let n = crate::db::with_db(|g| {
+        g.execute("DELETE FROM ot_records WHERE date = ?1", params![date])
+    })
+    .map_err(|e| format!("删除失败: {e}"))?;
     if n == 0 {
         return Err("未找到该日期的加班记录".to_string());
     }
@@ -326,48 +326,43 @@ fn upsert_into(g: &Connection, record: &OvertimeRecord, force: bool) -> rusqlite
 pub fn upsert_auto(record: OvertimeRecord) {
     let mut rec = record;
     rec.source = SOURCE_AUTO; // 来源由路径决定，不信任调用方传入的值
-    let g = crate::db::conn().lock().unwrap();
-    let _ = upsert_into(&g, &rec, false);
+    let _ = crate::db::with_db(|g| upsert_into(g, &rec, false));
 }
 
 /// **手动**路径 upsert（加班明细页增删改）。手改是用户明确意图，优先级最高，无条件覆盖。
 pub fn upsert_manual(record: OvertimeRecord) {
     let mut rec = record;
     rec.source = SOURCE_MANUAL;
-    let g = crate::db::conn().lock().unwrap();
-    let _ = upsert_into(&g, &rec, true);
+    let _ = crate::db::with_db(|g| upsert_into(g, &rec, true));
 }
 
 /// 获取指定月份的加班记录（SQL 按日期前缀过滤，历史月与当月同表，无需归档）。
 pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
     let prefix = format!("{:04}-{:02}-", year, month);
-    let g = crate::db::conn().lock().unwrap();
-    let mut stmt = match g.prepare(
-        "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
-         FROM ot_records WHERE date LIKE ?1 ORDER BY date",
-    ) {
-        Ok(s) => s,
-        Err(_) => return MonthlyOvertime::default(),
-    };
-    let rows = stmt.query_map(params![format!("{prefix}%")], |r| {
-        Ok(OvertimeRecord {
-            date: r.get(0)?,
-            lock_time: r.get(1)?,
-            ot_start: r.get(2)?,
-            raw_hours: r.get(3)?,
-            valid_hours: r.get(4)?,
-            fee: r.get(5)?,
-            meal: r.get(6)?,
-            total: r.get(7)?,
-            source: r.get(8)?,
+    // 查询失败（表未建 / SQL 出错）时降级为空月报，不再 panic；错误已由 with_db 记入 debug.log
+    crate::db::with_db(|g| {
+        let mut stmt = g.prepare(
+            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
+             FROM ot_records WHERE date LIKE ?1 ORDER BY date",
+        )?;
+        let rows = stmt.query_map(params![format!("{prefix}%")], |r| {
+            Ok(OvertimeRecord {
+                date: r.get(0)?,
+                lock_time: r.get(1)?,
+                ot_start: r.get(2)?,
+                raw_hours: r.get(3)?,
+                valid_hours: r.get(4)?,
+                fee: r.get(5)?,
+                meal: r.get(6)?,
+                total: r.get(7)?,
+                source: r.get(8)?,
+            })
+        })?;
+        Ok(MonthlyOvertime {
+            records: rows.filter_map(|r| r.ok()).collect(),
         })
-    });
-    match rows {
-        Ok(iter) => MonthlyOvertime {
-            records: iter.filter_map(|r| r.ok()).collect(),
-        },
-        Err(_) => MonthlyOvertime::default(),
-    }
+    })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]

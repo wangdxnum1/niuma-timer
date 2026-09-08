@@ -477,19 +477,21 @@ fn settle(now_mono: u64, with_icon: bool) {
     let start_wall = end_wall.saturating_sub(secs.saturating_mul(1000));
     // 按整点 / 跨天边界切分后分桶记账，避免整段被吞并到结算时刻所在的那个桶（A5）。
     let parts = split_by_hour(start_wall, end_wall, secs);
-    let g = crate::db::conn().lock().unwrap();
-    for (date, hour, s) in parts {
-        let _ = g.execute(
-            "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-            params![date, cur.display, s],
-        );
-        let _ = g.execute(
-            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-            params![date, hour, cur.display, s],
-        );
-    }
+    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
+        for (date, hour, s) in parts {
+            g.execute(
+                "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+                params![date, cur.display, s],
+            )?;
+            g.execute(
+                "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+                params![date, hour, cur.display, s],
+            )?;
+        }
+        Ok(())
+    });
 }
 
 /// 把一段墙钟区间按「整点（含跨天）」边界切分，供落库时分桶记账。
@@ -612,16 +614,16 @@ pub struct AppUsageSummary {
 pub fn summary(known_icons: &[String]) -> AppUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
-    let g = crate::db::conn().lock().unwrap();
-
-    let mut apps = Vec::new();
-    match g.prepare(
-        "SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC",
-    ) {
-        Ok(mut stmt) => match stmt.query_map(params![date], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        }) {
-            Ok(rows) => {
+    let watch_ok = WATCH_OK.load(Ordering::SeqCst);
+    // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
+    let (apps, hourly) = crate::db::with_db(|g| {
+        let mut apps = Vec::new();
+        if let Ok(mut stmt) = g.prepare(
+            "SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            }) {
                 for row in rows.flatten() {
                     let app = row.0;
                     // 懒提取：若尚未缓存图标，用记录的 exe 路径补提取（GDI+PNG 一次，幂等）
@@ -640,36 +642,32 @@ pub fn summary(known_icons: &[String]) -> AppUsageSummary {
                     });
                 }
             }
-            Err(_) => {}
-        },
-        Err(_) => {}
-    }
+        }
 
-    let mut hourly = vec![0i64; 24];
-    match g.prepare(
-        "SELECT hour, SUM(seconds) FROM app_usage_hourly \
-         WHERE date = ?1 GROUP BY hour ORDER BY hour",
-    ) {
-        Ok(mut stmt) => match stmt.query_map(params![date], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-        }) {
-            Ok(rows) => {
+        let mut hourly = vec![0i64; 24];
+        if let Ok(mut stmt) = g.prepare(
+            "SELECT hour, SUM(seconds) FROM app_usage_hourly \
+             WHERE date = ?1 GROUP BY hour ORDER BY hour",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            }) {
                 for row in rows.flatten() {
                     if let Some(b) = hourly.get_mut(row.0 as usize) {
                         *b = row.1;
                     }
                 }
             }
-            Err(_) => {}
-        },
-        Err(_) => {}
-    }
+        }
+        Ok((apps, hourly))
+    })
+    .unwrap_or_else(|_| (Vec::new(), vec![0i64; 24]));
 
     AppUsageSummary {
         date,
         apps,
         hourly,
-        watch_ok: WATCH_OK.load(Ordering::SeqCst),
+        watch_ok,
     }
 }
 

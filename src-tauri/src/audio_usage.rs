@@ -159,19 +159,21 @@ fn credit(played_ms: &HashMap<String, u64>) {
     let now_dt = Local::now();
     let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
     let hour = now_dt.hour().min(23) as i64;
-    let g = crate::db::conn().lock().unwrap();
-    for (app, secs) in due {
-        let _ = g.execute(
-            "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-            params![date, app, secs],
-        );
-        let _ = g.execute(
-            "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-            params![date, hour, app, secs],
-        );
-    }
+    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
+        for (app, secs) in due {
+            g.execute(
+                "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+                params![date, app, secs],
+            )?;
+            g.execute(
+                "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+                params![date, hour, app, secs],
+            )?;
+        }
+        Ok(())
+    });
 }
 
 /// 枚举 + 采样 + 落盘的主循环。
@@ -260,52 +262,55 @@ pub struct AudioUsageSummary {
 pub fn summary(known_icons: &[String]) -> AudioUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
-    let g = crate::db::conn().lock().unwrap();
-
-    let mut apps = Vec::new();
-    if let Ok(mut stmt) = g.prepare(
-        "SELECT app, seconds FROM audio_usage WHERE date = ?1 ORDER BY seconds DESC",
-    ) {
-        if let Ok(rows) = stmt.query_map(params![date], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        }) {
-            for row in rows.flatten() {
-                let app = row.0;
-                // 懒提取：若尚未缓存图标，用轮询时记录的 exe 路径补提取（GDI+PNG 一次，幂等）
-                if let Some(exe) = playing_exe().lock().unwrap().get(&app).cloned() {
-                    crate::app_usage::ensure_icon(&app, &exe);
-                }
-                let icon = if known.contains(app.as_str()) {
-                    None // 前端已有，本次不再回传
-                } else {
-                    crate::app_usage::cached_icon(&app)
-                };
-                apps.push(AudioUsageItem {
-                    app,
-                    seconds: row.1,
-                    icon,
-                });
-            }
-        }
-    }
-
-    let mut hourly = vec![0i64; 24];
-    if let Ok(mut stmt) = g.prepare(
-        "SELECT hour, SUM(seconds) FROM audio_usage_hourly \
-         WHERE date = ?1 GROUP BY hour ORDER BY hour",
-    ) {
-        if let Ok(rows) = stmt.query_map(params![date], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-        }) {
-            for row in rows.flatten() {
-                if let Some(b) = hourly.get_mut(row.0 as usize) {
-                    *b = row.1;
-                }
-            }
-        }
-    }
-
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
+    // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
+    let (apps, hourly) = crate::db::with_db(|g| {
+        let mut apps = Vec::new();
+        if let Ok(mut stmt) = g.prepare(
+            "SELECT app, seconds FROM audio_usage WHERE date = ?1 ORDER BY seconds DESC",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    let app = row.0;
+                    // 懒提取：若尚未缓存图标，用轮询时记录的 exe 路径补提取（GDI+PNG 一次，幂等）
+                    if let Some(exe) = playing_exe().lock().unwrap().get(&app).cloned() {
+                        crate::app_usage::ensure_icon(&app, &exe);
+                    }
+                    let icon = if known.contains(app.as_str()) {
+                        None // 前端已有，本次不再回传
+                    } else {
+                        crate::app_usage::cached_icon(&app)
+                    };
+                    apps.push(AudioUsageItem {
+                        app,
+                        seconds: row.1,
+                        icon,
+                    });
+                }
+            }
+        }
+
+        let mut hourly = vec![0i64; 24];
+        if let Ok(mut stmt) = g.prepare(
+            "SELECT hour, SUM(seconds) FROM audio_usage_hourly \
+             WHERE date = ?1 GROUP BY hour ORDER BY hour",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    if let Some(b) = hourly.get_mut(row.0 as usize) {
+                        *b = row.1;
+                    }
+                }
+            }
+        }
+        Ok((apps, hourly))
+    })
+    .unwrap_or_else(|_| (Vec::new(), vec![0i64; 24]));
+
     AudioUsageSummary {
         date,
         apps,

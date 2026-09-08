@@ -1,6 +1,7 @@
 //! SQLite 持久化层：统一管理「加班记录」与「活动统计」的落盘。
 //!
 //! - 单库单连接（`Mutex<Connection>` 串行化，SQLite 单写者模型足够）；
+//!   访问一律走 [`with_db`]，不要自己 `conn().lock().unwrap()`；
 //! - WAL 模式：崩溃/断电不损坏数据，读写不互斥；
 //! - 数据库文件：`%APPDATA%/niuma-timer/niuma.db`；
 //! - config.json / holiday_cache.json 保持 JSON（固定体量、一次性读写，迁移无收益）。
@@ -159,6 +160,37 @@ pub fn conn() -> &'static Mutex<Connection> {
         let _ = db.pragma_update(None, "journal_mode", "WAL");
         init_tables(&db);
         Mutex::new(db)
+    })
+}
+
+/// 在全局连接上执行一段数据库操作，**统一**处理锁中毒与错误上报。
+///
+/// 背景：此前 4 个模块各自 `conn().lock().unwrap()`（共 10 处），有两个隐患——
+/// 1. **故障连锁**：任一处 DB 操作 panic 都会让这把全局 Mutex 中毒，此后
+///    加班 / 活动 / 应用 / 媒体每一次 `unwrap()` 全部连锁 panic，
+///    一个点出错即整个程序持续崩溃，而连接本身其实完好可用；
+/// 2. **错误静默**：`let _ = g.execute(...)` 的写法让失败彻底消失，无人知晓。
+///
+/// 这里统一收口：
+/// - 锁中毒时**自愈**——取回内层连接继续服务（中毒只说明曾有线程在持锁期间
+///   panic，不代表 SQLite 连接损坏），并记一条 debug.log；
+/// - 每次失败都写 `debug_log`，日志带具体 SQL 错误；
+/// - 返回 `Result`，由调用方决定降级（忽略 / 返回空 / 上报前端），不再 panic。
+///
+/// 闭包拿到 `&mut Connection`：既能执行写操作，也能开事务；
+/// 只读场景传进去会自动 reborrow 成 `&Connection`。
+pub fn with_db<T>(f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
+    let mut guard = match conn().lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            debug_log("[db] 检测到连接锁中毒，已自愈（此前有线程在持锁期间 panic）");
+            poisoned.into_inner()
+        }
+    };
+    f(&mut guard).map_err(|e| {
+        let msg = e.to_string();
+        debug_log(&format!("[db] SQL 执行失败: {msg}"));
+        msg
     })
 }
 

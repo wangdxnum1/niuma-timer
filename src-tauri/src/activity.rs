@@ -362,41 +362,40 @@ fn day() -> &'static Mutex<DayState> {
 /// 把当天内存状态整体写入 SQLite：24 小时桶全量 UPSERT + 按键明细全量重写。
 /// 单事务提交，WAL 模式下原子落盘，崩溃不会损坏。
 fn save_day(d: &DayState) {
-    let mut g = crate::db::conn().lock().unwrap();
-    let tx = match g.transaction() {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-    for (i, b) in d.hourly.iter().enumerate() {
-        let _ = tx.execute(
-            "INSERT OR REPLACE INTO act_hourly \
-             (date, hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                d.date,
-                i as i64,
-                b.moves as i64,
-                b.pixels as i64,
-                b.left as i64,
-                b.dbl as i64,
-                b.right as i64,
-                b.wheel as i64,
-                b.wheel_ticks as i64,
-                b.mid as i64,
-                b.xbtn as i64,
-                b.keys as i64
-            ],
-        );
-    }
-    // 按键明细是内存累积态，全量重写保证一致、无残留
-    let _ = tx.execute("DELETE FROM act_keys WHERE date = ?1", params![d.date]);
-    for (vk, cnt) in &d.key_detail {
-        let _ = tx.execute(
-            "INSERT OR REPLACE INTO act_keys (date, vk, count) VALUES (?1, ?2, ?3)",
-            params![d.date, *vk as i64, *cnt as i64],
-        );
-    }
-    let _ = tx.commit();
+    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
+        let tx = g.transaction()?;
+        for (i, b) in d.hourly.iter().enumerate() {
+            // 逐条容错：单条失败不回滚整个事务（宁可少记一小时，也不丢全天统计）
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO act_hourly \
+                 (date, hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    d.date,
+                    i as i64,
+                    b.moves as i64,
+                    b.pixels as i64,
+                    b.left as i64,
+                    b.dbl as i64,
+                    b.right as i64,
+                    b.wheel as i64,
+                    b.wheel_ticks as i64,
+                    b.mid as i64,
+                    b.xbtn as i64,
+                    b.keys as i64
+                ],
+            );
+        }
+        // 按键明细是内存累积态，全量重写保证一致、无残留
+        let _ = tx.execute("DELETE FROM act_keys WHERE date = ?1", params![d.date]);
+        for (vk, cnt) in &d.key_detail {
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO act_keys (date, vk, count) VALUES (?1, ?2, ?3)",
+                params![d.date, *vk as i64, *cnt as i64],
+            );
+        }
+        tx.commit()
+    });
 }
 
 /// 从 SQLite 读取指定日期的活动统计（无数据则返回全零）。
@@ -404,51 +403,45 @@ fn save_day(d: &DayState) {
 fn query_day_from_db(date: &str) -> (Vec<HourBucket>, BTreeMap<u32, u64>) {
     let mut hourly = vec![HourBucket::default(); 24];
     let mut keys = BTreeMap::new();
-    let g = crate::db::conn().lock().unwrap();
-    match g.prepare(
-        "SELECT hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys \
-         FROM act_hourly WHERE date = ?1",
-    ) {
-        Ok(mut stmt) => match stmt.query_map(params![date], |r| {
-            let hour: i64 = r.get(0)?;
-            let b = HourBucket {
-                moves: r.get(1)?,
-                pixels: r.get(2)?,
-                left: r.get(3)?,
-                dbl: r.get(4)?,
-                right: r.get(5)?,
-                wheel: r.get(6)?,
-                wheel_ticks: r.get(7)?,
-                mid: r.get(8)?,
-                xbtn: r.get(9)?,
-                keys: r.get(10)?,
-            };
-            Ok((hour, b))
-        }) {
-            Ok(rows) => {
+    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
+        if let Ok(mut stmt) = g.prepare(
+            "SELECT hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys \
+             FROM act_hourly WHERE date = ?1",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                let hour: i64 = r.get(0)?;
+                let b = HourBucket {
+                    moves: r.get(1)?,
+                    pixels: r.get(2)?,
+                    left: r.get(3)?,
+                    dbl: r.get(4)?,
+                    right: r.get(5)?,
+                    wheel: r.get(6)?,
+                    wheel_ticks: r.get(7)?,
+                    mid: r.get(8)?,
+                    xbtn: r.get(9)?,
+                    keys: r.get(10)?,
+                };
+                Ok((hour, b))
+            }) {
                 for row in rows.flatten() {
                     if let Some(b) = hourly.get_mut(row.0 as usize) {
                         *b = row.1;
                     }
                 }
             }
-            Err(_) => {}
-        },
-        Err(_) => {}
-    }
-    match g.prepare("SELECT vk, count FROM act_keys WHERE date = ?1") {
-        Ok(mut stmt) => match stmt.query_map(params![date], |r| {
-            Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64))
-        }) {
-            Ok(rows) => {
+        }
+        if let Ok(mut stmt) = g.prepare("SELECT vk, count FROM act_keys WHERE date = ?1") {
+            if let Ok(rows) = stmt.query_map(params![date], |r| {
+                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64))
+            }) {
                 for row in rows.flatten() {
                     keys.insert(row.0, row.1);
                 }
             }
-            Err(_) => {}
-        },
-        Err(_) => {}
-    }
+        }
+        Ok(())
+    });
     (hourly, keys)
 }
 
