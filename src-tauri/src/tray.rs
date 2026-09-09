@@ -429,17 +429,16 @@ impl HoverController {
         if is_pending {
             if let Some(sa) = show_at {
                 if now >= sa {
-                    // 到点：校验仍停留且不在冷却期才显示
+                    // 到点：Enter 已证明鼠标在托盘，直接用锚点显示，不再重查
+                    // cursor_position()——该调用在 Windows 下偶发失败，曾导致偶发不显示。
+                    // 中途离开由 Leave 取消，漏网的由看门狗（每 150ms 轮询）兜底隐藏。
                     if !self.in_click_cooldown() {
-                        if let Ok(cur) = app.cursor_position() {
-                            if self.mouse_near_tray(app, cur) {
-                                let anchor = self.pending_pos.unwrap_or(cur);
-                                self.do_show(app, anchor);
-                                return;
-                            }
+                        if let Some(anchor) = self.pending_pos {
+                            self.do_show(app, anchor);
+                            return;
                         }
                     }
-                    // 条件不满足：取消待显
+                    // 无待显锚点（理论不该发生）：取消待显
                     self.phase = Phase::Hidden;
                     self.pending_pos = None;
                 }
