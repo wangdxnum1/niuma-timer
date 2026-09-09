@@ -38,17 +38,11 @@ use std::time::Duration;
 use chrono::{Local, Timelike};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::System::SystemInformation::GetTickCount;
-use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::{
-    RAWINPUT, RAWINPUTHEADER, RAWKEYBOARD, RAWMOUSE, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetCursorPos, GetMessageTime, PostThreadMessageW, RI_KEY_BREAK,
-    RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_LEFT_BUTTON_DOWN,
-    RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_WHEEL, WM_INPUT, WM_QUIT,
+    DefWindowProcW, RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL,
+    RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_DOWN,
+    RI_MOUSE_WHEEL, WM_INPUT,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,7 +172,7 @@ fn request_stop() {
         return;
     }
     // 失败（线程已退出 / 无消息队列）可安全忽略：线程结束必然已注销设备
-    let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+    let _ = crate::win::post_thread_quit(tid);
 }
 
 /// 当前毫秒时间戳（自 Unix 纪元）
@@ -202,18 +196,9 @@ fn now_ms() -> u64 {
 ///
 /// 调用频率极低（仅 app_usage 每 10 秒结算一次），系统调用开销无关紧要。
 pub fn last_input_ms() -> u64 {
-    let mut lii = LASTINPUTINFO {
-        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
-        dwTime: 0,
-    };
     // 失败极罕见；退化成「此刻刚有输入」——宁可多记一段，也别把真实使用判成挂机
-    if !unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
-        return now_ms();
-    }
-    // dwTime 与 GetTickCount 同为 u32 毫秒计数，约 49.7 天回绕一次；
-    // wrapping_sub 保证跨回绕点依然算得出正确差值
-    let idle_ms = unsafe { GetTickCount() }.wrapping_sub(lii.dwTime) as u64;
-    now_ms().saturating_sub(idle_ms)
+    let idle = crate::win::idle_ms().unwrap_or(0);
+    now_ms().saturating_sub(idle)
 }
 
 /// 鼠标上次位置（首次移动只记录、不累计距离）。
@@ -525,7 +510,7 @@ pub fn start() {
     // 键盘事件工作线程：消费 WM_INPUT 键盘分支入队的按键增量（去重 / 计数 / 明细累加）
     std::thread::spawn(keyq_worker);
     // 原始输入线程：注册 Raw Input 后必须进入消息循环才能收到 WM_INPUT
-    std::thread::spawn(|| unsafe { raw_thread() });
+    std::thread::spawn(raw_thread);
     // 周期落盘改由 scheduler 统一调度（每 10 秒调一次 `flush_now`），
     // 本模块只保留采集相关的两条线程，不再单独起合并线程。
 }
@@ -553,10 +538,10 @@ pub fn shutdown() {
 /// 线程本身常驻不退出（避免反复 spawn 带来的竞态：新线程还没跑到注册设备，
 /// 停用请求就已经发出），只在停用期间空转；Raw Input 设备严格随开关注册/注销——
 /// 停用期间系统输入旁路不再投递到本窗口，输入零额外开销。
-unsafe fn raw_thread() {
+fn raw_thread() {
     // 记录线程 ID：set_enabled(false) / shutdown 靠它投递 WM_QUIT 唤醒下面的消息循环
-    RAW_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
-    let class = raw_wnd_class();
+    RAW_TID.store(crate::win::current_thread_id(), Ordering::SeqCst);
+    // 窗口与设备注册的配对交给守卫：Drop 时自动 RIDEV_REMOVE + 销毁窗口
     loop {
         if !ENABLED.load(Ordering::SeqCst) {
             // 已停用：此时设备必然是注销状态（上一轮末尾已调用 RIDEV_REMOVE），
@@ -567,17 +552,16 @@ unsafe fn raw_thread() {
         // 建 message-only 窗口 + 注册 Raw Input（键+鼠，RIDEV_INPUTSINK）：
         // 即使本窗口不是前台窗口也能收到全局输入；绝不加 RIDEV_NOLEGACY，
         // 否则会禁用别的程序的 WM_KEYDOWN，变成劫持键盘。
-        let hwnd = match crate::win::create_message_window(&class, Some(raw_wndproc)) {
-            Ok(h) => h,
+        let mut wnd = match crate::win::MessageWindow::create(RAW_WND_CLASS, Some(raw_wndproc)) {
+            Ok(w) => w,
             Err(e) => {
                 eprintln!("[activity] Raw Input 窗口创建失败: {e}");
                 RAW_OK.store(false, Ordering::SeqCst);
                 return;
             }
         };
-        if let Err(e) = crate::win::register_raw_input(hwnd) {
+        if let Err(e) = wnd.register_raw_input() {
             eprintln!("[activity] Raw Input 注册失败: {e}");
-            let _ = crate::win::destroy_message_window(hwnd);
             RAW_OK.store(false, Ordering::SeqCst);
             return;
         }
@@ -586,18 +570,16 @@ unsafe fn raw_thread() {
         // 这是 Raw Input 的硬性要求：WM_INPUT 靠线程消息队列驱动，必须有消息循环。
         // 边界：200ms 内快速「关→开」时，队列里可能残留一个多余的 WM_QUIT，
         // 会在下一轮注册后被立即取出——只多一次注册/注销循环，随后自愈，无害。
-        crate::win::run_message_loop();
-        // 收到 WM_QUIT：注销设备 + 销毁窗口，系统输入旁路不再有本模块。
-        let _ = crate::win::unregister_raw_input(hwnd);
-        let _ = crate::win::destroy_message_window(hwnd);
+        wnd.run_message_loop();
+        // 收到 WM_QUIT：离开作用域即注销设备 + 销毁窗口（守卫 Drop 负责），
+        // 系统输入旁路不再有本模块。
+        drop(wnd);
         RAW_OK.store(false, Ordering::SeqCst);
     }
 }
 
-/// 原始输入窗口类名（null 结尾的 UTF-16）。本进程内唯一，窗口类只注册一次。
-fn raw_wnd_class() -> Vec<u16> {
-    "NiumaRawInputWnd\0".encode_utf16().collect()
-}
+/// 原始输入窗口类名。本进程内唯一，窗口类只注册一次。
+const RAW_WND_CLASS: &str = "NiumaRawInputWnd";
 
 /// 把 `WM_INPUT` 的原始鼠标数据解析为统计。
 ///
@@ -605,15 +587,13 @@ fn raw_wnd_class() -> Vec<u16> {
 /// 非屏幕像素），而双击判定需要屏幕绝对坐标；`GetCursorPos` 与旧 `MSLLHOOKSTRUCT.pt`
 /// 同源（系统光标位置），既准又统一。移动距离 = 相邻两次 `WM_INPUT` 间的光标位移，
 /// 与旧实现语义一致。
-fn on_raw_mouse(m: &RAWMOUSE) {
-    let bf = unsafe { m.Anonymous.Anonymous.usButtonFlags };
+fn on_raw_mouse(m: &crate::win::RawMouse) {
+    let bf = m.button_flags;
     // 移动：只要有相对/绝对移动标志或位移非零，就记一次 moves 并累加光标位移像素。
     // 绝对模式（触控板/笔）下 lLastX/Y 为绝对坐标，仍用 GetCursorPos 算位移，跨设备一致。
-    let moved = m.usFlags.0 == 0 || m.usFlags.0 == 1; // MOVE_RELATIVE(0) / MOVE_ABSOLUTE(1)
-    if moved || m.lLastX != 0 || m.lLastY != 0 {
-        let mut pt = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut pt).is_ok() } {
-            let (x, y) = (pt.x, pt.y);
+    let moved = m.flags == 0 || m.flags == 1; // MOVE_RELATIVE(0) / MOVE_ABSOLUTE(1)
+    if moved || m.last_x != 0 || m.last_y != 0 {
+        if let Some((x, y)) = crate::win::cursor_pos() {
             C_MOVES.fetch_add(1, Ordering::Relaxed);
             let (px, py) = (LAST_X.load(Ordering::Relaxed), LAST_Y.load(Ordering::Relaxed));
             if px != i32::MIN && py != i32::MIN {
@@ -631,22 +611,21 @@ fn on_raw_mouse(m: &RAWMOUSE) {
     if bf & RI_MOUSE_LEFT_BUTTON_DOWN as u16 != 0 {
         C_LEFT.fetch_add(1, Ordering::Relaxed);
         // 双击判定：间隔 < 系统双击时间 且 位移 ≤5px（位置取自真实光标）
-        let mut pt = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut pt).is_ok() } {
-            let now = unsafe { GetMessageTime() } as u32;
+        if let Some((x, y)) = crate::win::cursor_pos() {
+            let now = crate::win::message_time();
             let (lt, lx, ly) = (
                 LAST_LBTN_TIME.load(Ordering::Relaxed),
                 LAST_LBTN_X.load(Ordering::Relaxed),
                 LAST_LBTN_Y.load(Ordering::Relaxed),
             );
             let dt = now.wrapping_sub(lt);
-            let (dx, dy) = ((pt.x - lx).abs(), (pt.y - ly).abs());
-            if dt > 0 && dt < unsafe { GetDoubleClickTime() } && dx <= 5 && dy <= 5 {
+            let (dx, dy) = ((x - lx).abs(), (y - ly).abs());
+            if dt > 0 && dt < crate::win::double_click_time() && dx <= 5 && dy <= 5 {
                 C_DBL.fetch_add(1, Ordering::Relaxed);
             }
             LAST_LBTN_TIME.store(now, Ordering::Relaxed);
-            LAST_LBTN_X.store(pt.x, Ordering::Relaxed);
-            LAST_LBTN_Y.store(pt.y, Ordering::Relaxed);
+            LAST_LBTN_X.store(x, Ordering::Relaxed);
+            LAST_LBTN_Y.store(y, Ordering::Relaxed);
         }
     }
     if bf & RI_MOUSE_RIGHT_BUTTON_DOWN as u16 != 0 {
@@ -662,8 +641,7 @@ fn on_raw_mouse(m: &RAWMOUSE) {
         C_WHEEL.fetch_add(1, Ordering::Relaxed);
         // 滚轮增量在 usButtonData（i16，符号表示方向，绝对值通常为 120 的整数倍）。
         // 与旧实现一致：直接累加绝对值（每格 120），前端按需 /120 展示。
-        let data = unsafe { m.Anonymous.Anonymous.usButtonData } as i16;
-        C_WHEEL_TICKS.fetch_add(data.unsigned_abs() as u64, Ordering::Relaxed);
+        C_WHEEL_TICKS.fetch_add(m.button_data.unsigned_abs() as u64, Ordering::Relaxed);
     }
 }
 
@@ -673,11 +651,11 @@ fn on_raw_mouse(m: &RAWMOUSE) {
 /// 只做采集：把虚拟键码 + 消息时间打包入 SPSC 队列，去重（50ms 间隔自动重复）/
 /// 计数 / 明细累加交给 keyq_worker（与旧钩子同分工）。
 /// `GetMessageTime()` 与旧 `KBDLLHOOKSTRUCT.time` 同域（GetTickCount 毫秒），等价。
-fn on_raw_keyboard(k: &RAWKEYBOARD) {
-    if k.Flags & RI_KEY_BREAK as u16 != 0 {
+fn on_raw_keyboard(vk: u16, up: bool) {
+    if up {
         return; // 键抬起：不计
     }
-    keyq_push(k.VKey as u32, unsafe { GetMessageTime() } as u32);
+    keyq_push(vk as u32, crate::win::message_time());
 }
 
 /// Raw Input 窗口过程：仅处理 `WM_INPUT`，其余消息交 `DefWindowProcW`。
@@ -694,25 +672,13 @@ unsafe extern "system" fn raw_wndproc(
     if msg == WM_INPUT {
         if !crate::lock_monitor::is_away() && ENABLED.load(Ordering::Relaxed) {
             if let Some(buf) = crate::win::read_raw_input(lparam) {
-                // 门槛只需保证 header 可读（缓冲区恒 ≥ size_of::<RAWINPUT>()，见 read_raw_input）；
-                // 载荷够不够按 dwType 判断交给 raw_input_len_ok——**不能**用
-                // `buf.len() >= size_of::<RAWINPUT>()`：键盘载荷只有 40 字节（x64），
-                // 小于 RAWINPUT 的 48，那样会把所有键盘事件静默丢掉（按键次数恒为 0）。
-                if buf.len() >= std::mem::size_of::<RAWINPUTHEADER>() {
-                    let raw = &*(buf.as_ptr() as *const RAWINPUT);
-                    if crate::win::raw_input_len_ok(raw.header.dwType, raw.header.dwSize) {
-                        match raw.header.dwType {
-                            t if t == RIM_TYPEMOUSE.0 => {
-                                let m = unsafe { raw.data.mouse };
-                                on_raw_mouse(&m);
-                            }
-                            t if t == RIM_TYPEKEYBOARD.0 => {
-                                let k = unsafe { raw.data.keyboard };
-                                on_raw_keyboard(&k);
-                            }
-                            _ => {}
-                        }
-                    }
+                // 解析收口在 win::parse_raw_input：长度按 dwType 分别校验
+                // （键盘载荷只有 40 字节，小于 RAWINPUT 的 48，拿 size_of::<RAWINPUT>()
+                // 当门槛会把所有键盘事件静默丢掉），union 也只在那里读。
+                match crate::win::parse_raw_input(&buf) {
+                    Some(crate::win::RawEvent::Mouse(m)) => on_raw_mouse(&m),
+                    Some(crate::win::RawEvent::Keyboard { vk, up }) => on_raw_keyboard(vk, up),
+                    None => {}
                 }
             }
         }

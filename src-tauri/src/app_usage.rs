@@ -394,9 +394,9 @@ fn watch_thread() {
     if let Some(fg) = crate::win::foreground_window() {
         switch_foreground(fg);
     }
-    // SAFETY：OUTOFCONTEXT 钩子的回调投递到本线程，必须跑消息循环才能收到事件
+    // OUTOFCONTEXT 钩子的回调投递到本线程，必须跑消息循环才能收到事件
     // （见 win.rs 顶部不变量）。
-    unsafe { crate::win::run_message_loop() };
+    crate::win::run_message_loop();
 }
 
 // ---------------------------------------------------------------------------

@@ -192,7 +192,7 @@ fn load_config(state: State<AppState>) -> config::Config {
 #[tauri::command]
 fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) {
     // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
-    // （如 last_holiday_year 等保留字段，以及未来新增字段），避免整份替换把未传字段重置成默认值。
+    // （如未来新增的后端字段），避免整份替换把未传字段重置成默认值。
     let existing = state.config.lock().unwrap().clone();
     let mut base = to_value(&existing).unwrap_or(Value::Null);
     if let Some(obj) = base.as_object_mut() {

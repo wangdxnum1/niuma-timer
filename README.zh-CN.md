@@ -158,7 +158,7 @@ niuma-timer/
 │   │   ├── activity.rs     # Raw Input 键鼠采集 + 逐小时桶 + 高频按键榜
 │   │   ├── app_usage.rs    # 前台窗口应用使用时长监控（白名单）
 │   │   ├── audio_usage.rs  # 音频会话媒体播放监控
-│   │   ├── win.rs          # Win32 平台层（钩子/COM/GDI 的 RAII 守卫、进程与图标提取）
+│   │   ├── win.rs          # Win32 平台层（窗口/钩子/COM/GDI 的 RAII 守卫、进程与图标、Raw Input 解析）
 │   │   └── scheduler.rs    # 统一周期调度（1 秒节拍 → 1/5/10 秒任务）
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri 构建（注册命令）

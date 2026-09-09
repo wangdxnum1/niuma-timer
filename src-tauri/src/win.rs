@@ -20,7 +20,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
     BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
@@ -37,8 +37,10 @@ use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::Accessibility::{
@@ -49,12 +51,14 @@ use windows::Win32::UI::Input::{
     RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx,
-    EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetIconInfo, GetMessageW,
-    GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, DI_NORMAL, HICON, ICONINFO, MSG,
+    EVENT_SYSTEM_FOREGROUND, GetCursorPos, GetForegroundWindow, GetIconInfo, GetMessageTime,
+    GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, PostThreadMessageW, RegisterClassW,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, DI_NORMAL, HICON, ICONINFO, MSG, RI_KEY_BREAK,
+    WM_QUIT,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -62,13 +66,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Raw Input 窗口线程、前台窗口事件线程都依赖它——此前两处各自内联了同一段循环，
 /// 现统一为单一实现，消除漂移风险。
 ///
-/// # Safety
-/// 调用线程必须是可以安全处理消息的线程；本函数只转发消息，不处理任何窗口过程。
-pub unsafe fn run_message_loop() {
+pub fn run_message_loop() {
     let mut msg = MSG::default();
-    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        let _ = TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    // SAFETY：本函数只转发消息（`GetMessageW` / `DispatchMessageW`），窗口过程由
+    // 注册方提供。窗口过程里可能回跑到业务代码，但那是调用方自己的契约。
+    while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
+        let _ = unsafe { TranslateMessage(&msg) };
+        unsafe { DispatchMessageW(&msg) };
     }
 }
 
@@ -77,9 +81,7 @@ static RAW_CLASS_READY: AtomicBool = AtomicBool::new(false);
 
 /// 注册（仅一次）一个 message-only 窗口类，随后每次「启用」都基于它创建窗口。
 ///
-/// # Safety
-/// `wndproc` 必须能在创建出的窗口的消息循环上安全调用。
-unsafe fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
+fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
     if RAW_CLASS_READY.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -88,7 +90,7 @@ unsafe fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
         lpfnWndProc: wndproc,
         cbClsExtra: 0,
         cbWndExtra: 0,
-        hInstance: match GetModuleHandleW(None) {
+        hInstance: match unsafe { GetModuleHandleW(None) } {
             Ok(h) => h.into(),
             Err(_) => return,
         },
@@ -100,87 +102,112 @@ unsafe fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
     };
     // RegisterClassW 返回类原子（0 表示失败）。本进程类名唯一，仅「已注册」这一种
     // 失败需要忽略；真实失败会在后续 CreateWindowExW 处暴露。不区分 GetLastError。
-    let _ = RegisterClassW(&wc);
+    let _ = unsafe { RegisterClassW(&wc) };
 }
 
-/// 创建 message-only 窗口（注册类 + 建窗口）。窗口无可见界面，仅用于接收 `WM_INPUT`。
+/// message-only 窗口的 RAII 守卫：Drop 时自动注销 Raw Input 并销毁窗口。
 ///
-/// # Safety
-/// `class_name` 必须是 null 结尾的 UTF-16；`wndproc` 必须安全。
-pub unsafe fn create_message_window(class_name: &[u16], wndproc: WNDPROC) -> windows::core::Result<HWND> {
-    ensure_raw_class(class_name, wndproc);
-    let hwnd = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(class_name.as_ptr()),
-        PCWSTR::null(),
-        WINDOW_STYLE(0),
-        0,
-        0,
-        0,
-        0,
-        Some(HWND_MESSAGE),
-        None,
-        Some(GetModuleHandleW(None)?.into()),
-        None,
-    )?;
-    Ok(hwnd)
+/// 与 `WinEventHookGuard` 同一思路——此前调用方要手工「建窗口 → 注册设备 →
+/// 消息循环 → 注销设备 → 销毁窗口」五段配对，任一提前 return / panic 都会漏掉
+/// 后半段，后果是系统仍把输入旁路投递给一个本已「停用」的窗口。守卫把配对
+/// 交给类型系统：窗口生命周期 == 守卫生命周期。
+pub struct MessageWindow {
+    hwnd: HWND,
+    raw_registered: bool,
 }
 
-/// 销毁 message-only 窗口（停用 / 退出时调用，与 create_message_window 配对）。
-///
-/// # Safety
-/// `hwnd` 必须是由 create_message_window 创建的合法窗口。
-pub unsafe fn destroy_message_window(hwnd: HWND) -> windows::core::Result<()> {
-    DestroyWindow(hwnd)
+impl MessageWindow {
+    /// 创建 message-only 窗口（注册类 + 建窗口）。窗口无可见界面，仅用于收消息。
+    ///
+    /// `class_name` 传普通 UTF-8 字符串，null 结尾由本函数保证——此前要求调用方
+    /// 自己维护 null 结尾的 UTF-16，是个容易被忽视的越界读隐患。
+    ///
+    /// 注意：窗口类进程内只注册一次（`ensure_raw_class`），类名相同的第二次创建
+    /// 会沿用首次注册的类（含其 wndproc）。
+    pub fn create(class_name: &str, wndproc: WNDPROC) -> windows::core::Result<Self> {
+        let wide: Vec<u16> = class_name.encode_utf16().chain(Some(0)).collect();
+        ensure_raw_class(&wide, wndproc);
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(wide.as_ptr()),
+                PCWSTR::null(),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                Some(GetModuleHandleW(None)?.into()),
+                None,
+            )
+        }?;
+        Ok(Self {
+            hwnd,
+            raw_registered: false,
+        })
+    }
+
+    /// 注册 Raw Input 设备（键盘 + 鼠标），把输入旁路投递到本窗口。
+    ///
+    /// 用 `RIDEV_INPUTSINK`：即使本窗口不是前台窗口（托盘程序常如此）也能收到全局输入。
+    /// **绝不**加 `RIDEV_NOLEGACY`——那会禁用别的程序的 `WM_KEYDOWN`，等于劫持键盘。
+    pub fn register_raw_input(&mut self) -> windows::core::Result<()> {
+        let devices = [
+            RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x06, // 键盘 (Generic Desktop / Keyboard)
+                dwFlags: RIDEV_INPUTSINK,
+                hwndTarget: self.hwnd,
+            },
+            RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x02, // 鼠标 (Generic Desktop / Mouse)
+                dwFlags: RIDEV_INPUTSINK,
+                hwndTarget: self.hwnd,
+            },
+        ];
+        unsafe { RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) }?;
+        self.raw_registered = true;
+        Ok(())
+    }
+
+    /// 注销 Raw Input 设备。`RIDEV_REMOVE` 下 `hwndTarget` 被系统忽略，仍传 hwnd 无害。
+    /// 只在实际注册过时才调用，避免未注册时的多余系统调用。
+    pub fn unregister_raw_input(&mut self) {
+        if !self.raw_registered {
+            return;
+        }
+        self.raw_registered = false;
+        let devices = [
+            RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x06,
+                dwFlags: RIDEV_REMOVE,
+                hwndTarget: self.hwnd,
+            },
+            RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x02,
+                dwFlags: RIDEV_REMOVE,
+                hwndTarget: self.hwnd,
+            },
+        ];
+        let _ = unsafe { RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) };
+    }
+
+    /// 在调用线程上跑消息循环，直到本线程收到 `WM_QUIT`。
+    pub fn run_message_loop(&self) {
+        run_message_loop()
+    }
 }
 
-/// 注册 Raw Input 设备（键盘 + 鼠标），把输入旁路投递到 `hwnd`。
-///
-/// 用 `RIDEV_INPUTSINK`：即使本窗口不是前台窗口（托盘程序常如此）也能收到全局输入。
-/// **绝不**加 `RIDEV_NOLEGACY`——那会禁用别的程序的 `WM_KEYDOWN`，等于劫持键盘。
-///
-/// # Safety
-/// `hwnd` 必须有效；调用线程需运行消息循环以接收 `WM_INPUT`。
-pub unsafe fn register_raw_input(hwnd: HWND) -> windows::core::Result<()> {
-    let devices = [
-        RAWINPUTDEVICE {
-            usUsagePage: 0x01,
-            usUsage: 0x06, // 键盘 (Generic Desktop / Keyboard)
-            dwFlags: RIDEV_INPUTSINK,
-            hwndTarget: hwnd,
-        },
-        RAWINPUTDEVICE {
-            usUsagePage: 0x01,
-            usUsage: 0x02, // 鼠标 (Generic Desktop / Mouse)
-            dwFlags: RIDEV_INPUTSINK,
-            hwndTarget: hwnd,
-        },
-    ];
-    RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-}
-
-/// 注销 Raw Input 设备（停用 / 退出时调用，与 register_raw_input 配对）。
-///
-/// `RIDEV_REMOVE` 下 `hwndTarget` 被系统忽略，仍传 hwnd 无害。
-///
-/// # Safety
-/// `hwnd` 必须有效。
-pub unsafe fn unregister_raw_input(hwnd: HWND) -> windows::core::Result<()> {
-    let devices = [
-        RAWINPUTDEVICE {
-            usUsagePage: 0x01,
-            usUsage: 0x06,
-            dwFlags: RIDEV_REMOVE,
-            hwndTarget: hwnd,
-        },
-        RAWINPUTDEVICE {
-            usUsagePage: 0x01,
-            usUsage: 0x02,
-            dwFlags: RIDEV_REMOVE,
-            hwndTarget: hwnd,
-        },
-    ];
-    RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+impl Drop for MessageWindow {
+    fn drop(&mut self) {
+        self.unregister_raw_input();
+        let _ = unsafe { DestroyWindow(self.hwnd) };
+    }
 }
 
 /// 读取 `WM_INPUT` 的 `lParam` 携带的原始输入数据（HRAWINPUT）。
@@ -241,6 +268,120 @@ pub fn raw_input_len_ok(dw_type: u32, dw_size: u32) -> bool {
         _ => return false, // HID 等未处理的设备类型：一律不读，避免按错结构体解释
     };
     (dw_size as usize) >= need
+}
+
+/// `RAWMOUSE` 的业务子集：把 union 里真正用到的字段摊平成普通 Rust 数据。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawMouse {
+    /// `usFlags`：0=相对移动 1=绝对移动（触控板/笔）
+    pub flags: u16,
+    /// `usButtonFlags`：各按键的按下/抬起位，可同时出现
+    pub button_flags: u16,
+    /// `usButtonData`：滚轮增量（i16，符号表示方向，每格通常 120）
+    pub button_data: i16,
+    pub last_x: i32,
+    pub last_y: i32,
+}
+
+/// `WM_INPUT` 载荷的安全解析结果。
+///
+/// `RAWINPUT.data` 是个 union——按错分支读就是 UB，且键盘/鼠标载荷长度不同
+/// （见 `raw_input_len_ok` 的教训）。解析收口在这里，业务模块只见普通 Rust 数据。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RawEvent {
+    /// 虚拟键码 + 是否为「抬起」
+    Keyboard { vk: u16, up: bool },
+    Mouse(RawMouse),
+}
+
+/// 把 `read_raw_input` 取回的字节缓冲解析成 `RawEvent`。
+///
+/// 三重防线：缓冲够放 header → `dwType` 对应的载荷长度达标（按 `dwSize`）→
+/// 缓冲本身也够长。任一不满足就返回 None，**不碰 union**。
+pub fn parse_raw_input(buf: &[u8]) -> Option<RawEvent> {
+    if buf.len() < size_of::<RAWINPUTHEADER>() {
+        return None;
+    }
+    let header = unsafe { &*(buf.as_ptr() as *const RAWINPUTHEADER) };
+    if !raw_input_len_ok(header.dwType, header.dwSize) {
+        return None;
+    }
+    // buf 实际长度同样要够（read_raw_input 恒给 ≥48；单测里可能给短缓冲）
+    let need = match header.dwType {
+        t if t == RIM_TYPEKEYBOARD.0 => size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>(),
+        t if t == RIM_TYPEMOUSE.0 => size_of::<RAWINPUTHEADER>() + size_of::<RAWMOUSE>(),
+        _ => return None,
+    };
+    if buf.len() < need {
+        return None;
+    }
+    let raw = unsafe { &*(buf.as_ptr() as *const RAWINPUT) };
+    match header.dwType {
+        t if t == RIM_TYPEMOUSE.0 => {
+            let m = unsafe { raw.data.mouse };
+            Some(RawEvent::Mouse(RawMouse {
+                flags: m.usFlags.0,
+                button_flags: unsafe { m.Anonymous.Anonymous.usButtonFlags },
+                button_data: unsafe { m.Anonymous.Anonymous.usButtonData } as i16,
+                last_x: m.lLastX,
+                last_y: m.lLastY,
+            }))
+        }
+        t if t == RIM_TYPEKEYBOARD.0 => {
+            let k = unsafe { raw.data.keyboard };
+            Some(RawEvent::Keyboard {
+                vk: k.VKey,
+                up: k.Flags & RI_KEY_BREAK as u16 != 0,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// 光标当前屏幕坐标。
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    let mut pt = POINT::default();
+    unsafe { GetCursorPos(&mut pt) }.ok().map(|()| (pt.x, pt.y))
+}
+
+/// 当前消息的时间戳（`GetMessageTime`），与 `GetTickCount` 同域的毫秒计数。
+pub fn message_time() -> u32 {
+    // 负值（出错）按 u32 解释，与旧实现一致
+    (unsafe { GetMessageTime() }) as u32
+}
+
+/// 当前线程 ID（`GetCurrentThreadId`）。用于向特定线程投递 `WM_QUIT`。
+pub fn current_thread_id() -> u32 {
+    unsafe { GetCurrentThreadId() }
+}
+
+/// 系统双击时间阈值（毫秒）。
+pub fn double_click_time() -> u32 {
+    unsafe { GetDoubleClickTime() }
+}
+
+/// 距上次「真实输入」的空闲毫秒数。
+///
+/// 由内核为每个登录会话维护，覆盖面优于自造打点（含钩子看不到的部分全屏程序
+/// 原始输入）。失败返回 None，由调用方决定降级。
+pub fn idle_ms() -> Option<u64> {
+    let mut lii = LASTINPUTINFO {
+        cbSize: size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    if unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
+        // dwTime 与 GetTickCount 同为 u32 毫秒，约 49.7 天回绕；
+        // wrapping_sub 保证跨回绕点仍算出正确差值
+        Some(unsafe { GetTickCount() }.wrapping_sub(lii.dwTime) as u64)
+    } else {
+        None
+    }
+}
+
+/// 给指定线程投递 `WM_QUIT` 唤醒其消息循环。
+/// 失败（线程已退出 / 无消息队列）返回 false，可安全忽略。
+pub fn post_thread_quit(tid: u32) -> bool {
+    unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) }.is_ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +805,84 @@ mod tests {
     use super::*;
     // 仅测试用到：正式代码里 HID 走 raw_input_len_ok 的 `_` 分支，故不占顶层 import
     use windows::Win32::UI::Input::RIM_TYPEHID;
+    use windows::Win32::UI::WindowsAndMessaging::RI_MOUSE_LEFT_BUTTON_DOWN;
+
+    /// 把一块 `RAWINPUT` 按「系统实际填了多少字节」切成字节缓冲。
+    /// 键盘事件只有 40 字节（header+RAWKEYBOARD），比 RAWINPUT 的 48 短——
+    /// 正是历史上「按键次数恒为 0」的根因，测试必须按真实长度切。
+    fn as_bytes(raw: &RAWINPUT, len: usize) -> Vec<u8> {
+        unsafe { std::slice::from_raw_parts(raw as *const RAWINPUT as *const u8, len) }.to_vec()
+    }
+
+    #[test]
+    fn parse_raw_input_accepts_short_keyboard_payload() {
+        let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
+        raw.header.dwType = RIM_TYPEKEYBOARD.0;
+        raw.header.dwSize = (size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>()) as u32;
+        unsafe { raw.data.keyboard = RAWKEYBOARD { VKey: 65, ..std::mem::zeroed() } };
+        let bytes = as_bytes(&raw, size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>());
+        assert_eq!(
+            parse_raw_input(&bytes),
+            Some(RawEvent::Keyboard { vk: 65, up: false }),
+            "键盘载荷比 RAWINPUT 短，也必须能解析出来"
+        );
+    }
+
+    #[test]
+    fn parse_raw_input_marks_key_break_as_up() {
+        let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
+        raw.header.dwType = RIM_TYPEKEYBOARD.0;
+        raw.header.dwSize = (size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>()) as u32;
+        unsafe {
+            raw.data.keyboard = RAWKEYBOARD {
+                VKey: 27,
+                Flags: RI_KEY_BREAK as u16,
+                ..std::mem::zeroed()
+            }
+        };
+        let bytes = as_bytes(&raw, size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>());
+        assert_eq!(
+            parse_raw_input(&bytes),
+            Some(RawEvent::Keyboard { vk: 27, up: true })
+        );
+    }
+
+    /// union 的鼠标分支：字段必须原样带出，业务侧不碰 union 也能拿到全部数据
+    #[test]
+    fn parse_raw_input_reads_mouse_union() {
+        let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
+        raw.header.dwType = RIM_TYPEMOUSE.0;
+        raw.header.dwSize = (size_of::<RAWINPUTHEADER>() + size_of::<RAWMOUSE>()) as u32;
+        unsafe {
+            let m = &mut raw.data.mouse;
+            m.usFlags.0 = 0; // MOVE_RELATIVE
+            m.lLastX = 3;
+            m.lLastY = -4;
+            m.Anonymous.Anonymous.usButtonFlags = RI_MOUSE_LEFT_BUTTON_DOWN as u16;
+            m.Anonymous.Anonymous.usButtonData = 120;
+        }
+        let bytes = as_bytes(&raw, size_of::<RAWINPUT>());
+        match parse_raw_input(&bytes) {
+            Some(RawEvent::Mouse(m)) => {
+                assert_eq!((m.last_x, m.last_y), (3, -4));
+                assert_eq!(m.button_flags, RI_MOUSE_LEFT_BUTTON_DOWN as u16);
+                assert_eq!(m.button_data, 120);
+            }
+            other => panic!("期望 Mouse，实际 {other:?}"),
+        }
+    }
+
+    /// 缓冲被截断时必须返回 None，绝不去读 union
+    #[test]
+    fn parse_raw_input_rejects_truncated_buffer() {
+        let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
+        raw.header.dwType = RIM_TYPEMOUSE.0;
+        raw.header.dwSize = (size_of::<RAWINPUTHEADER>() + size_of::<RAWMOUSE>()) as u32;
+        let bytes = as_bytes(&raw, size_of::<RAWINPUTHEADER>() + 4);
+        assert_eq!(parse_raw_input(&bytes), None);
+        // 连 header 都不够
+        assert_eq!(parse_raw_input(&[0u8; 4]), None);
+    }
 
     /// 核心不变量：键盘载荷严格小于完整 RAWINPUT，
     /// 故「用 size_of::<RAWINPUT>() 当门槛」在结构上就是错的（会丢光键盘事件）。

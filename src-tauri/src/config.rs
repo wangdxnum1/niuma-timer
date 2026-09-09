@@ -26,8 +26,6 @@ pub struct Config {
     /// 托盘悬停显示彩色卡片（true=自绘 HTML 卡片，false=系统原生 tooltip），默认开启
     #[serde(default = "default_true")]
     pub tray_hover_card: bool,
-    /// 缓存年份标记（保留字段，便于迁移）
-    pub last_holiday_year: i32,
 
     // ---- 加班追踪 ----
     /// 加班追踪开关
@@ -99,7 +97,6 @@ impl Default for Config {
             payday: 10,
             duration_format: "hms".into(),
             tray_hover_card: true,
-            last_holiday_year: 0,
             overtime_enabled: false,
             overtime_start: None,
             overtime_rate: 20.0,

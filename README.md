@@ -160,7 +160,7 @@ niuma-timer/
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
 │   │   ├── audio_usage.rs  # Audio-session media playback tracking
-│   │   ├── win.rs          # Win32 platform layer (RAII guards: hooks/COM/GDI, process & icon)
+│   │   ├── win.rs          # Win32 platform layer (RAII guards: window/hooks/COM/GDI, process & icon, raw-input parsing)
 │   │   └── scheduler.rs    # Unified periodic scheduler (1s beat -> 1s/5s/10s tasks)
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri build (registers commands)
