@@ -93,18 +93,7 @@ fn show_fatal(msg: &str) {
     {
         let _ = f.write_all(format!("[fatal] {msg}\n").as_bytes());
     }
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-    let wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
-    let title: Vec<u16> = "牛马计时器".encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe {
-        let _ = MessageBoxW(
-            None,
-            PCWSTR(wide.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MB_OK | MB_ICONERROR,
-        );
-    }
+    crate::win::message_box("牛马计时器", msg);
 }
 
 /// 计算当月实际上班天数（手动覆盖 > 缓存 > 兜底周末数）
@@ -485,49 +474,7 @@ if (!window.__TAURI__) {
 
 /// 修复任务栏图标模糊：
 /// tauri-codegen 生成默认窗口图标时只解码 icon.ico 的**第一个图层**（本项目为 16×16），
-/// 底层 tao 又把这同一张小图设为 ICON_BIG——任务栏在高 DPI 下放大 16px 位图必然发糊。
-/// （托盘图标是运行时 SDF 动态绘制、资源管理器读的是完整多尺寸 ico，所以那两处清晰。）
-/// 此处改为从 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
-/// 分别加载 ICON_BIG / ICON_SMALL 并 WM_SETICON 覆盖，Windows 自动挑选最贴合的图层。
-#[cfg(windows)]
-unsafe fn set_window_icons_from_resource(hwnd: windows::Win32::Foundation::HWND) {
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{HINSTANCE, LPARAM, WPARAM};
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, SM_CXICON,
-        SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
-    };
 
-    let Ok(hmod) = GetModuleHandleW(None) else {
-        return;
-    };
-    let hinst = HINSTANCE(hmod.0);
-    // MAKEINTRESOURCEW(32512)
-    let name = PCWSTR(32512usize as *const u16);
-    let mut dpi = GetDpiForWindow(hwnd);
-    if dpi == 0 {
-        dpi = 96;
-    }
-
-    let set_icon = |wparam: u32, cx: _, cy: _| {
-        let (cx, cy) = (
-            GetSystemMetricsForDpi(cx, dpi).max(1),
-            GetSystemMetricsForDpi(cy, dpi).max(1),
-        );
-        if let Ok(h) = LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) {
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(wparam as usize)),
-                Some(LPARAM(h.0 as isize)),
-            );
-        }
-    };
-    set_icon(ICON_BIG, SM_CXICON, SM_CYICON);
-    set_icon(ICON_SMALL, SM_CXSMICON, SM_CYSMICON);
-}
 
 fn main() {
     install_crash_log();
@@ -566,7 +513,7 @@ fn main() {
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
                 if let Ok(hwnd) = w.hwnd() {
-                    unsafe { set_window_icons_from_resource(hwnd) };
+                    crate::win::set_window_icons_from_resource(hwnd);
                 }
             }
             trace_startup("setup: window icons set");

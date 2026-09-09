@@ -20,7 +20,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
     BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
@@ -37,6 +37,7 @@ use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -58,7 +59,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, PostThreadMessageW, RegisterClassW,
     TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, DI_NORMAL, HICON, ICONINFO, MSG, RI_KEY_BREAK,
-    WM_QUIT,
+    ICON_BIG, ICON_SMALL, IMAGE_ICON, LoadImageW, LR_DEFAULTSIZE,
+    MessageBoxW, MB_ICONERROR, MB_OK, SendMessageW, SM_CXICON, SM_CXSMICON, SM_CYICON,
+    SM_CYSMICON, WM_SETICON, WM_QUIT,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -1045,3 +1048,65 @@ mod tests {
     }
 
 }
+
+/// 用 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
+/// 分别加载 ICON_BIG / ICON_SMALL 并 WM_SETICON 覆盖，消除任务栏高 DPI 下图标发糊。
+///
+/// 底层 tao 默认只挂一张固定 16px 位图，任务栏在高 DPI 下放大必然发糊；
+/// 托盘图标是运行时 SDF 动态绘制、资源管理器读的是完整多尺寸 ico，所以那两处清晰。
+///
+/// SAFETY：内部 FFI 调用（LoadImageW / SendMessageW / GetDpiForWindow 等）均为只读式
+/// 系统调用，句柄经 WM_SETICON 后由窗口接管，无需手动释放；本函数对调用方暴露为 safe。
+#[cfg(windows)]
+pub fn set_window_icons_from_resource(hwnd: HWND) {
+    // SAFETY：以下均为只读式系统调用；句柄经 WM_SETICON 后由窗口接管，无需手动释放。
+    let hmod = match unsafe { GetModuleHandleW(None) } {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let hinst = HINSTANCE(hmod.0);
+    // MAKEINTRESOURCEW(32512)
+    let name = PCWSTR(32512usize as *const u16);
+    let mut dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        dpi = 96;
+    }
+
+    let set_icon = |wparam: u32, cx: _, cy: _| {
+        let (cx, cy) = (
+            unsafe { GetSystemMetricsForDpi(cx, dpi) }.max(1),
+            unsafe { GetSystemMetricsForDpi(cy, dpi) }.max(1),
+        );
+        if let Ok(h) = unsafe { LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) } {
+            // SAFETY：WM_SETICON 把图标句柄交给窗口，由窗口负责后续生命周期。
+            unsafe {
+                let _ = SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    Some(WPARAM(wparam as usize)),
+                    Some(LPARAM(h.0 as isize)),
+                );
+            }
+        }
+    };
+    set_icon(ICON_BIG, SM_CXICON, SM_CYICON);
+    set_icon(ICON_SMALL, SM_CXSMICON, SM_CYSMICON);
+}
+
+/// 弹一个模态错误对话框，用于构建期 / 启动期致命错误，把「双击无反应」转成可操作的提示。
+///
+/// SAFETY：MessageBoxW 是只读式模态对话框，无资源需释放，对调用方暴露为 safe。
+#[cfg(windows)]
+pub fn message_box(title: &str, msg: &str) {
+    let wide_msg: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(wide_msg.as_ptr()),
+            PCWSTR(wide_title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
