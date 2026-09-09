@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use serde_json::{from_value, to_value, Value};
 use tauri::{Manager, State};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 struct AppState {
     config: Mutex<config::Config>,
@@ -234,38 +235,6 @@ fn apply_monitor_switches(cfg: &config::Config) {
     }
 }
 
-// ---- 开机自启 ----
-
-/// 开机自启在 Run 注册表键下的项名。
-/// 改这个值等于放弃旧版本已经写入的自启项——用户的自启会「莫名失效」，改动前想清楚。
-const AUTOSTART_NAME: &str = "NiumaTimer";
-
-/// 当前可执行文件应写入注册表的命令行（加引号，路径含空格也安全）
-fn current_autostart_command() -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {e}"))?;
-    Ok(crate::win::quote_command_line(&exe))
-}
-
-/// 启动时让注册表向「当前 exe 路径」对齐：只在**已经启用**且路径对不上（换过安装
-/// 目录 / 升级后路径变了）时静默修正；若用户在任务管理器里手工禁用了自启，
-/// 这里绝不写回去——注册表是唯一真相源，用户的手工操作得算数。
-pub fn heal_autostart() {
-    let Some(existing) = crate::win::autostart_command(AUTOSTART_NAME) else {
-        return;
-    };
-    let Ok(cmd) = current_autostart_command() else {
-        return;
-    };
-    if cmd != existing {
-        match crate::win::set_autostart_value(AUTOSTART_NAME, &cmd) {
-            Ok(()) => db::debug_log(&format!(
-                "开机自启：检测到安装路径变化，已更新命令 {existing} → {cmd}"
-            )),
-            Err(e) => db::debug_log(&format!("开机自启：路径变化但更新失败 {e}")),
-        }
-    }
-}
-
 /// 每秒刷新托盘实时状态（已赚¥ / 距下班 / 距发薪日）。仅 UI 刷新，无副作用，
 /// 从主循环抽离以便独立调频率或单元测试。
 fn refresh_tray(apph: &tauri::AppHandle, state: &AppState) {
@@ -452,24 +421,28 @@ fn write_debug_log(msg: String) {
     crate::db::debug_log(&msg);
 }
 
-/// 开机自启是否已开启。直接读注册表而非配置文件——用户在任务管理器里手工禁用后，
-/// 这里必须如实反映，而不是继续显示配置文件里的旧值。
+/// 开机自启是否已开启。底层走 tauri-plugin-autostart（Windows 即 HKCU Run 键），
+/// 用户在任务管理器里手工禁用后这里如实反映——注册表是唯一真相源。
 #[tauri::command]
-fn get_autostart() -> bool {
-    crate::win::autostart_command(AUTOSTART_NAME).is_some()
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("读取开机自启状态失败: {e:?}"))
 }
 
-/// 开启 / 关闭开机自启（写 HKCU Run 键，无需管理员权限）。
-/// 失败时把 Win32 错误回给前端弹提示，避免开关显示成功、实际没写上。
+/// 开启 / 关闭开机自启（经官方插件写 HKCU Run 键，无需管理员权限）。
+/// 失败时把错误回给前端弹提示，避免开关显示成功、实际没写上。
 #[tauri::command]
-fn set_autostart(enabled: bool) -> Result<String, String> {
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<String, String> {
+    let mgr = app.autolaunch();
     if enabled {
-        let cmd = current_autostart_command()?;
-        crate::win::set_autostart_value(AUTOSTART_NAME, &cmd)?;
-        Ok("已开启开机自启".into())
+        mgr.enable()
+            .map(|_| "已开启开机自启".to_string())
+            .map_err(|e| format!("开启开机自启失败: {e:?}"))
     } else {
-        crate::win::remove_autostart_value(AUTOSTART_NAME)?;
-        Ok("已关闭开机自启".into())
+        mgr.disable()
+            .map(|_| "已关闭开机自启".to_string())
+            .map_err(|e| format!("关闭开机自启失败: {e:?}"))
     }
 }
 
@@ -561,6 +534,7 @@ fn main() {
     let app = tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
         // 并在回调里把已存在的主窗口显示并置前，自己退出。
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -600,9 +574,6 @@ fn main() {
             // 创建托盘
             let _tray = tray::create_tray(app)?;
             trace_startup("setup: tray created");
-
-            // 开机自启：仅当用户已启用且安装路径变了才修正，不擅自替用户开启
-            heal_autostart();
 
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
