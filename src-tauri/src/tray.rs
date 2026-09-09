@@ -57,7 +57,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 悬停卡片调试日志：写入临时目录（Windows GUI 程序无控制台，eprintln 不可见）。
+/// 悬停卡片诊断日志：仅异常 / 兜底 / 启动落盘（正常显示隐藏不写，避免长期持续写盘）。
 /// 路径：%TEMP%\niuma_timer_hover.log
 fn hover_log(msg: &str) {
     use std::io::Write;
@@ -285,7 +285,6 @@ impl HoverController {
         };
         self.shown_at = Some(Instant::now());
         self.gone_polls = 0;
-        hover_log(&format!("[hover_card] show pos=({x:.0},{y:.0})"));
     }
 
     /// 鼠标离开托盘：播放淡出动画，动画结束后由页面自行隐藏窗口。
@@ -299,7 +298,6 @@ impl HoverController {
                     fading: true,
                     fade_deadline: Some(Instant::now() + Duration::from_millis(450)),
                 };
-                hover_log("[hover_card] hide (fade)");
                 return;
             }
         }
@@ -325,7 +323,6 @@ impl HoverController {
         match msg {
             HoverMsg::Enter(pos) => {
                 if self.in_click_cooldown() {
-                    hover_log("[hover_card] Enter 在冷却期，抑制显示");
                     self.phase = Phase::Hidden;
                     self.pending_pos = None;
                     return;
@@ -335,10 +332,6 @@ impl HoverController {
                 self.phase = Phase::Pending {
                     show_at: Instant::now() + Duration::from_millis(HOVER_SHOW_DELAY_MS),
                 };
-                hover_log(&format!(
-                    "[hover_card] Enter pos=({:.0},{:.0})",
-                    pos.x, pos.y
-                ));
             }
             HoverMsg::Move(pos) => {
                 if matches!(self.phase, Phase::Pending { .. }) {
@@ -362,7 +355,6 @@ impl HoverController {
                     self.phase = Phase::Hidden;
                     self.pending_pos = None;
                 }
-                hover_log("[hover_card] Leave");
             }
             HoverMsg::Click => {
                 // 记录点击时间（进入冷却期），立即隐藏（与系统 tooltip 一致）
@@ -370,7 +362,6 @@ impl HoverController {
                 self.phase = Phase::Hidden;
                 self.pending_pos = None;
                 self.do_hide_instant(app);
-                hover_log("[hover_card] Click → 立即隐藏卡片（与系统 tooltip 一致）");
             }
             HoverMsg::DoubleClick => {
                 self.last_click_ms = now_ms();
@@ -387,13 +378,11 @@ impl HoverController {
                         let _ = w2.set_focus();
                     });
                 }
-                hover_log("[tray] 左键双击 → 打开主界面");
             }
             HoverMsg::Ready => {
                 // 页面就绪：若鼠标仍悬停在托盘上（pending_pos 存在），补一次定位 + 淡入。
                 // 这是"首次悬停事件丢失"的最终兜底，不依赖任何窗口可见性猜测。
                 if let Some(pos) = self.pending_pos {
-                    hover_log("[hover_card] 页面就绪 (hover_ready) → 补显");
                     self.do_show(app, pos);
                 }
             }
@@ -402,7 +391,6 @@ impl HoverController {
                 self.phase = Phase::Hidden;
                 self.pending_pos = None;
                 self.do_hide_instant(app);
-                hover_log("[hover_card] Menu 点击 → 立即隐藏卡片");
             }
         }
     }
@@ -457,7 +445,6 @@ impl HoverController {
                         self.phase = Phase::Hidden;
                         self.card_rect = None;
                         self.retry_base = None;
-                        hover_log("[hover_card] fade 兜底强制隐藏");
                     }
                 }
                 // 淡出中不轮询看门狗、不重发 hover_show
@@ -483,10 +470,6 @@ impl HoverController {
                     } else {
                         self.gone_polls += 1;
                         if self.gone_polls >= 2 {
-                            hover_log(&format!(
-                                "[hover_card] 看门狗: 鼠标持续移出 ({:.0},{:.0})，强制隐藏",
-                                pos.x, pos.y
-                            ));
                             self.do_hide(app);
                             self.gone_polls = 0;
                             return;
