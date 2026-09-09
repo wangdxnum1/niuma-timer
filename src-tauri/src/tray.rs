@@ -36,6 +36,10 @@ const CLICK_COOLDOWN_MS: u64 = 1500;
 /// 看门狗轮询间隔（毫秒）：卡片可见时每 150ms 检查一次鼠标是否离开活动区域。
 const WATCHDOG_INTERVAL_MS: u64 = 150;
 
+/// 最长驻留时长（毫秒）：卡片持续显示超过该时长即强制隐藏。
+/// 作为看门狗 / Leave 等隐藏路径全部失效时的终极安全网，避免偶发故障导致卡片永久滞留。
+const MAX_VISIBLE_MS: u64 = 20000;
+
 /// 卡片与托盘锚点的间隙（像素）：卡片底部距锚点上方留 24px，比系统默认更透气。
 const HOVER_CARD_GAP: f64 = 24.0;
 
@@ -115,6 +119,8 @@ struct HoverController {
     phase: Phase,
     /// 看门狗连续"离开"轮询计数（去抖：连续 2 次确认才隐藏）
     gone_polls: u32,
+    /// 卡片进入 Shown 阶段的时刻，用于"最长驻留硬上限"计时
+    shown_at: Option<Instant>,
     /// hover_show 分档重发基准时刻与下一档索引
     retry_base: Option<Instant>,
     retry_idx: usize,
@@ -277,6 +283,7 @@ impl HoverController {
             fading: false,
             fade_deadline: None,
         };
+        self.shown_at = Some(Instant::now());
         self.gone_polls = 0;
         hover_log(&format!("[hover_card] show pos=({x:.0},{y:.0})"));
     }
@@ -457,6 +464,18 @@ impl HoverController {
                 // 淡出中不轮询看门狗、不重发 hover_show
                 return;
             }
+            // 最长驻留硬上限：任何隐藏路径（看门狗 / Leave）失效的终极安全网，
+            // 卡片持续显示超过该时长强制隐藏，避免偶发故障导致卡片永久滞留。
+            if let Some(st) = self.shown_at {
+                if now.saturating_duration_since(st) >= Duration::from_millis(MAX_VISIBLE_MS) {
+                    hover_log(&format!(
+                        "[hover_card] 超过最长驻留 {}ms，强制隐藏",
+                        MAX_VISIBLE_MS
+                    ));
+                    self.do_hide(app);
+                    return;
+                }
+            }
             // 看门狗：轮询鼠标是否仍在活动区域，连续 2 次离开才隐藏（去抖）
             match app.cursor_position() {
                 Ok(pos) => {
@@ -476,8 +495,8 @@ impl HoverController {
                     }
                 }
                 Err(_) => {
-                    // 取不到光标位置时不动作，避免误隐藏
-                    self.gone_polls = 0;
+                    // 取不到光标位置：不累加也不清零，留待下次轮询继续裁决，
+                    // 避免偶发失败清零去抖计数导致"连续 2 次离开"永远无法满足，卡片永久不隐藏
                 }
             }
             // 分档重发 hover_show（覆盖页面冷启动加载期）
@@ -506,6 +525,12 @@ impl HoverController {
             }
             Phase::Shown { fading, fade_deadline } => {
                 let mut min = Duration::from_millis(WATCHDOG_INTERVAL_MS);
+                // 最长驻留上限也纳入唤醒时刻，保证到点一定触发强制隐藏
+                if let Some(st) = self.shown_at {
+                    let remain = (st + Duration::from_millis(MAX_VISIBLE_MS))
+                        .saturating_duration_since(Instant::now());
+                    min = min.min(remain);
+                }
                 if *fading {
                     if let Some(d) = fade_deadline {
                         min = min.min(d.saturating_duration_since(Instant::now()));
