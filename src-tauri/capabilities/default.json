@@ -24,6 +24,8 @@
     "allow-get-activity-summary",
     "allow-get-app-usage-summary",
     "allow-get-audio-usage-summary",
-    "allow-write-debug-log"
+    "allow-write-debug-log",
+    "allow-get-autostart",
+    "allow-set-autostart"
   ]
 }

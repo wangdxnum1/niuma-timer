@@ -37,6 +37,10 @@ use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
+    HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, REG_VALUE_TYPE,
+};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -800,6 +804,119 @@ pub fn audio_meters() -> Option<Vec<AudioMeter>> {
     }
 }
 
+// ---- 开机自启（HKCU\\...\\Run）----
+
+/// Windows 开机自启注册表键。HKCU 无需管理员权限、只影响当前用户，
+/// 也不像计划任务那样要额外维护触发器，是自启的最小可用方案。
+const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+/// 注册表键句柄守卫：`HKEY` 是进程外资源，漏一次 `RegCloseKey` 就是一次句柄泄漏。
+/// 与既有守卫同一套路——让 Drop 负责配对，任何提前 return / panic 都不会漏。
+struct RegKeyGuard(HKEY);
+
+impl Drop for RegKeyGuard {
+    fn drop(&mut self) {
+        // 忽略返回值：关闭阶段已无从补救
+        let _ = unsafe { RegCloseKey(self.0) };
+    }
+}
+
+fn open_run_key(write: bool) -> Option<RegKeyGuard> {
+    let rights = if write { KEY_WRITE } else { KEY_READ };
+    let path = to_wide(RUN_KEY);
+    let mut hkey = HKEY::default();
+    let ret = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            None,
+            rights,
+            &mut hkey,
+        )
+    };
+    if ret.is_ok() {
+        Some(RegKeyGuard(hkey))
+    } else {
+        None
+    }
+}
+
+/// 命令行引号包裹：Windows 命令行解析下路径含空格必须加引号，否则会被拆成
+/// `C:\\Program` + `Files\\x.exe` 两段。统一加引号，无条件安全。
+pub fn quote_command_line(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.display())
+}
+
+/// 读取自启项当前值；不存在或读取失败返回 None。
+pub fn autostart_command(name: &str) -> Option<String> {
+    let key = open_run_key(false)?;
+    let vname = to_wide(name);
+    // 先问长度，避免长路径被截断；REG_SZ 的长度单位是字节，不含结尾 nul
+    let mut ty = REG_VALUE_TYPE::default();
+    let mut len: u32 = 0;
+    let probe = unsafe {
+        RegQueryValueExW(
+            key.0,
+            PCWSTR(vname.as_ptr()),
+            None,
+            Some(&mut ty),
+            None,
+            Some(&mut len),
+        )
+    };
+    if probe.is_err() || len == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; (len as usize + 1) / 2 + 1];
+    let ok = unsafe {
+        RegQueryValueExW(
+            key.0,
+            PCWSTR(vname.as_ptr()),
+            None,
+            Some(&mut ty),
+            Some(buf.as_mut_ptr() as *mut u8),
+            Some(&mut len),
+        )
+    };
+    if ok.is_err() {
+        return None;
+    }
+    // 查询返回的 len 含结尾 nul（写入时也是这么算的），去掉它才是真正的命令行；
+    // 不去的话每次启动 heal 都会误判「路径变了」，日志里全是垃圾
+    let s = String::from_utf16_lossy(&buf[..(len as usize / 2)]);
+    Some(s.trim_end_matches('\0').to_string())
+}
+
+/// 写入自启项（REG_SZ 覆盖）。失败返回 Win32 错误描述。
+pub fn set_autostart_value(name: &str, command: &str) -> Result<(), String> {
+    let key = open_run_key(true).ok_or_else(|| "无法打开 Run 注册表键".to_string())?;
+    let vname = to_wide(name);
+    let vdata = to_wide(command);
+    // RegSetValueExW 收的是字节切片，长度由切片自带；REG_SZ 需含结尾 nul
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(vdata.as_ptr() as *const u8, vdata.len() * 2) };
+    let ret = unsafe {
+        RegSetValueExW(key.0, PCWSTR(vname.as_ptr()), None, REG_SZ, Some(bytes))
+    };
+    ret.ok().map_err(|e| format!("写入自启注册表失败: {e}"))
+}
+
+/// 删除自启项。值本来就不存在时视为成功——幂等才有意义，否则用户已手工禁用过的
+/// 情况下点「关闭」会误报失败。
+pub fn remove_autostart_value(name: &str) -> Result<(), String> {
+    if autostart_command(name).is_none() {
+        return Ok(());
+    }
+    let key = open_run_key(true).ok_or_else(|| "无法打开 Run 注册表键".to_string())?;
+    let vname = to_wide(name);
+    let ret = unsafe { RegDeleteValueW(key.0, PCWSTR(vname.as_ptr())) };
+    ret.ok().map_err(|e| format!("删除自启注册表失败: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1041,5 +1158,23 @@ mod tests {
             WinEventHookGuard::install_foreground_hook(Some(noop_win_event_proc)).is_some(),
             "卸载后重装失败：WinEventHookGuard 的 Drop 没有正确 UnhookWinEvent"
         );
+    }
+
+    /// 含空格的路径必须被引号包起来：Windows 命令行解析把空格当参数分隔，
+    /// 漏引号会让 C:\Program Files\x.exe 被拆成两段。
+    #[test]
+    fn quoted_command_line_wraps_spaces() {
+        let cmd = quote_command_line(std::path::Path::new(
+            r"C:\Program Files\Niuma\niuma-timer.exe",
+        ));
+        assert_eq!(cmd, "\"C:\\Program Files\\Niuma\\niuma-timer.exe\"");
+        assert!(cmd.starts_with('\"') && cmd.ends_with('\"'));
+    }
+
+    /// 无空格路径同样加引号：规则统一，避免调用方自行判断出岔子
+    #[test]
+    fn quoted_command_line_is_always_quoted() {
+        let cmd = quote_command_line(std::path::Path::new("D:\\timer\\app.exe"));
+        assert_eq!(cmd, "\"D:\\timer\\app.exe\"");
     }
 }

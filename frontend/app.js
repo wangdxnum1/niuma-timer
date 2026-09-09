@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-07.v16";
+const FE_VER = "2026-09-09.v17";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -46,6 +46,8 @@ async function load() {
     $("payday").value = cfg.payday;
     $("duration_format").value = cfg.duration_format || "hms";
     $("tray_hover_card").checked = !!cfg.tray_hover_card;
+    // 开机自启读注册表真实状态（用户可能在任务管理器手工禁用过），不走 config
+    loadAutostart();
     $("workdays_override").value = cfg.workdays_override ?? "";
     lastOverride = cfg.workdays_override ?? null;
     $("overtime_enabled").checked = !!cfg.overtime_enabled;
@@ -758,6 +760,29 @@ $("appWhitelistInput").addEventListener("keydown", (e) => {
     else loadAudioUsage();
   }),
 );
+// ---- 开机自启（独立读写注册表，不进 config）----
+async function loadAutostart() {
+  try {
+    $("launch_on_boot").checked = await invoke("get_autostart");
+  } catch (e) {
+    flog("get_autostart ERR: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+$("launch_on_boot").addEventListener("change", async () => {
+  const want = $("launch_on_boot").checked;
+  try {
+    const msg = await invoke("set_autostart", { enabled: want });
+    showToast(msg, "ok");
+  } catch (e) {
+    // 写注册表失败要把开关拨回真实状态，否则界面显示与实际不符
+    await loadAutostart();
+    const detail = e && e.message ? e.message : String(e);
+    flog("set_autostart ERR: " + detail);
+    showToast("设置失败：" + detail, "err");
+  }
+});
+
 $("refreshBtn").addEventListener("click", refresh);
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);

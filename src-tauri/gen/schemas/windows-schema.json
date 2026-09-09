@@ -207,6 +207,12 @@
           "markdownDescription": "Enables the get_audio_usage_summary command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-autostart",
+          "markdownDescription": "Enables the get_autostart command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_overtime_records command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-overtime-records",
@@ -247,6 +253,12 @@
           "type": "string",
           "const": "allow-save-overtime-record",
           "markdownDescription": "Enables the save_overtime_record command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-autostart",
+          "markdownDescription": "Enables the set_autostart command without any pre-configured scope."
         },
         {
           "description": "Enables the show_window command without any pre-configured scope.",
@@ -291,6 +303,12 @@
           "markdownDescription": "Denies the get_audio_usage_summary command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-autostart",
+          "markdownDescription": "Denies the get_autostart command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_overtime_records command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-overtime-records",
@@ -331,6 +349,12 @@
           "type": "string",
           "const": "deny-save-overtime-record",
           "markdownDescription": "Denies the save_overtime_record command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-autostart",
+          "markdownDescription": "Denies the set_autostart command without any pre-configured scope."
         },
         {
           "description": "Denies the show_window command without any pre-configured scope.",

@@ -132,7 +132,7 @@ pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
 }
 
 /// 装载节假日数据并刷新托盘。
-///  表示数据来自网络，落本地缓存供下次启动直接用；
+/// `persist=true` 表示数据来自网络，落本地缓存供下次启动直接用；
 /// 内置兜底表不落盘——它只是「没有网络时的次优解」，不该污染缓存文件。
 fn apply_holiday_cache(app: &tauri::AppHandle, mut c: holiday::HolidayCache, persist: bool) {
     if persist {
@@ -231,6 +231,38 @@ fn apply_monitor_switches(cfg: &config::Config) {
     // 重开时把当前前台窗口立即纳入统计
     if cfg.monitor_app_usage {
         app_usage::refresh_foreground();
+    }
+}
+
+// ---- 开机自启 ----
+
+/// 开机自启在 Run 注册表键下的项名。
+/// 改这个值等于放弃旧版本已经写入的自启项——用户的自启会「莫名失效」，改动前想清楚。
+const AUTOSTART_NAME: &str = "NiumaTimer";
+
+/// 当前可执行文件应写入注册表的命令行（加引号，路径含空格也安全）
+fn current_autostart_command() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {e}"))?;
+    Ok(crate::win::quote_command_line(&exe))
+}
+
+/// 启动时让注册表向「当前 exe 路径」对齐：只在**已经启用**且路径对不上（换过安装
+/// 目录 / 升级后路径变了）时静默修正；若用户在任务管理器里手工禁用了自启，
+/// 这里绝不写回去——注册表是唯一真相源，用户的手工操作得算数。
+pub fn heal_autostart() {
+    let Some(existing) = crate::win::autostart_command(AUTOSTART_NAME) else {
+        return;
+    };
+    let Ok(cmd) = current_autostart_command() else {
+        return;
+    };
+    if cmd != existing {
+        match crate::win::set_autostart_value(AUTOSTART_NAME, &cmd) {
+            Ok(()) => db::debug_log(&format!(
+                "开机自启：检测到安装路径变化，已更新命令 {existing} → {cmd}"
+            )),
+            Err(e) => db::debug_log(&format!("开机自启：路径变化但更新失败 {e}")),
+        }
     }
 }
 
@@ -420,6 +452,27 @@ fn write_debug_log(msg: String) {
     crate::db::debug_log(&msg);
 }
 
+/// 开机自启是否已开启。直接读注册表而非配置文件——用户在任务管理器里手工禁用后，
+/// 这里必须如实反映，而不是继续显示配置文件里的旧值。
+#[tauri::command]
+fn get_autostart() -> bool {
+    crate::win::autostart_command(AUTOSTART_NAME).is_some()
+}
+
+/// 开启 / 关闭开机自启（写 HKCU Run 键，无需管理员权限）。
+/// 失败时把 Win32 错误回给前端弹提示，避免开关显示成功、实际没写上。
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<String, String> {
+    if enabled {
+        let cmd = current_autostart_command()?;
+        crate::win::set_autostart_value(AUTOSTART_NAME, &cmd)?;
+        Ok("已开启开机自启".into())
+    } else {
+        crate::win::remove_autostart_value(AUTOSTART_NAME)?;
+        Ok("已关闭开机自启".into())
+    }
+}
+
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -548,6 +601,9 @@ fn main() {
             let _tray = tray::create_tray(app)?;
             trace_startup("setup: tray created");
 
+            // 开机自启：仅当用户已启用且安装路径变了才修正，不擅自替用户开启
+            heal_autostart();
+
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
             {
@@ -619,7 +675,9 @@ fn main() {
             get_activity_summary,
             get_app_usage_summary,
             get_audio_usage_summary,
-            write_debug_log
+            write_debug_log,
+            get_autostart,
+            set_autostart
         ])
         .build(tauri::generate_context!())
     ;
