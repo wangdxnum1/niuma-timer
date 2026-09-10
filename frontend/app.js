@@ -4,12 +4,22 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-09.v17";
+const FE_VER = "2026-09-10.v18";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
 // 初值 true：万一事件系统不通，退化为「始终轮询」的旧行为，不会更差。
 let winVisible = true;
+
+// 当前显示的视图 id。主界面与二级页互斥（showView 只留一个 .app 可见），
+// 所以「看不见的视图」根本不必重绘——此前每 2 秒会把三个二级页的图表、
+// 长列表全量重建一遍，而这些 DOM 正隐藏在主界面背后，纯属浪费。
+// 初值 viewMain：万一状态维护失效，退化为「只画主界面」，不会白屏。
+let curView = "viewMain";
+
+// 最近一次拉到的监控数据。懒渲染后切进二级页要靠它立即补画，
+// 否则得等下一个轮询周期才出内容。
+const viewData = { activity: null, appu: null, audio: null };
 
 // 前端调试日志：经 write_debug_log 命令落盘到 %APPDATA%/niuma-timer/debug.log。
 // 日志失败自身不抛错，绝不影响主流程。
@@ -465,26 +475,39 @@ function fmtBucket(b, i) {
 
 async function loadActivity() {
   if (!monitors.activity) {
-    // 已停用：首页卡片显示占位符
-    ["act_left", "act_right", "act_keys", "act_hours"].forEach((id) => ($(id).textContent = "—"));
+    // 停用即清缓存：否则从设置页切回主界面时，会拿旧数据画出已停用模块的数字
+    viewData.activity = null;
+    // 已停用：主界面卡片显示占位符
+    if (curView === "viewMain") {
+      ["act_left", "act_right", "act_keys", "act_hours"].forEach(
+        (id) => ($(id).textContent = "—")
+      );
+    }
     return;
   }
   try {
     const a = await invoke("get_activity_summary");
-    renderActivity(a);
+    viewData.activity = a;
+    paintActivity();
   } catch (e) {
     console.error("loadActivity error:", e);
   }
 }
 
-function renderActivity(a) {
+// 只画当前看得见的那部分：主界面画 4 个汇总数字，活动明细页画图表与明细。
+// 其余视图（加班/应用/媒体/设置）下活动相关 DOM 全不可见，直接跳过重绘。
+function paintActivity() {
+  const a = viewData.activity;
+  if (!a) return;
   const t = a.totals || {};
-  // 主界面汇总卡片
-  $("act_left").textContent = (t.left || 0).toLocaleString();
-  $("act_right").textContent = (t.right || 0).toLocaleString();
-  $("act_keys").textContent = (t.keys || 0).toLocaleString();
-  $("act_hours").textContent = (a.active_hours || 0) + "h";
-  // 二级页明细
+  if (curView === "viewMain") {
+    $("act_left").textContent = (t.left || 0).toLocaleString();
+    $("act_right").textContent = (t.right || 0).toLocaleString();
+    $("act_keys").textContent = (t.keys || 0).toLocaleString();
+    $("act_hours").textContent = (a.active_hours || 0) + "h";
+    return;
+  }
+  if (curView !== "viewAct") return;
   $("actL").textContent = (t.left || 0).toLocaleString();
   $("actD").textContent = (t.dbl || 0).toLocaleString();
   $("actR").textContent = (t.right || 0).toLocaleString();
@@ -555,13 +578,18 @@ function fmtDurCN(sec) {
 
 async function loadAppUsage() {
   if (!monitors.app_usage) {
-    showCardHint("appuHomeList", "已在设置中关闭应用使用监控");
+    viewData.appu = null; // 同上，停用即清缓存
+    if (curView === "viewMain") {
+      showCardHint("appuHomeList", "已在设置中关闭应用使用监控");
+    }
     return;
   }
   try {
     // 参数名用 camelCase：Tauri v2 的命令宏会把 Rust 的 snake_case 参数统一转成 camelCase
     const s = await invoke("get_app_usage_summary", { knownIcons: knownIcons() });
-    renderAppUsage(s);
+    mergeIcons(s.apps || []); // 图标入缓存与当前视图无关，必须在这里做
+    viewData.appu = s;
+    paintAppUsage();
     if (audioLogged.appu < 2) {
       audioLogged.appu++;
       const n = s.apps ? s.apps.length : "?";
@@ -589,13 +617,17 @@ function showCardHint(listId, text) {
 // 成功结果只记前几次，防止 2 秒轮询刷爆日志
 const audioLogged = { audio: 0, appu: 0 };
 
-function renderAppUsage(s) {
+// 只画当前看得见的那部分：主界面画前 6 行，应用明细页画全量列表与柱状图
+function paintAppUsage() {
+  const s = viewData.appu;
+  if (!s) return;
   const apps = s.apps || [];
-  mergeIcons(apps);
-  // 首页卡片：排行前 6
-  const home = $("appuHomeList");
-  if (home) renderAppRows(home, apps, 6);
-  // 明细页：全部
+  if (curView === "viewMain") {
+    const home = $("appuHomeList");
+    if (home) renderAppRows(home, apps, 6);
+    return;
+  }
+  if (curView !== "viewApp") return;
   const list = $("appuList");
   if (list) renderAppRows(list, apps, 0);
   renderHourChart($("appuChart"), s.hourly || []);
@@ -673,12 +705,17 @@ function renderHourChart(el, hourly) {
 // ---- 媒体播放（audio_usage）：与「应用使用」完全独立的第二套统计 ----
 async function loadAudioUsage() {
   if (!monitors.audio) {
-    showCardHint("audioHomeList", "已在设置中关闭媒体播放监控");
+    viewData.audio = null; // 同上，停用即清缓存
+    if (curView === "viewMain") {
+      showCardHint("audioHomeList", "已在设置中关闭媒体播放监控");
+    }
     return;
   }
   try {
     const s = await invoke("get_audio_usage_summary", { knownIcons: knownIcons() });
-    renderAudioUsage(s);
+    mergeIcons(s.apps || []); // 与应用使用共用一份图标缓存，同样与当前视图无关
+    viewData.audio = s;
+    paintAudioUsage();
     if (audioLogged.audio < 3) {
       audioLogged.audio++;
       const top =
@@ -701,13 +738,17 @@ async function loadAudioUsage() {
   }
 }
 
-function renderAudioUsage(s) {
+// 只画当前看得见的那部分：主界面画前 6 行，媒体明细页画全量列表与柱状图
+function paintAudioUsage() {
+  const s = viewData.audio;
+  if (!s) return;
   const apps = s.apps || [];
-  mergeIcons(apps);
-  // 首页卡片：排行前 6
-  const home = $("audioHomeList");
-  if (home) renderAppRows(home, apps, 6, "今日暂无播放记录");
-  // 明细页：全部
+  if (curView === "viewMain") {
+    const home = $("audioHomeList");
+    if (home) renderAppRows(home, apps, 6, "今日暂无播放记录");
+    return;
+  }
+  if (curView !== "viewAudio") return;
   const list = $("audioList");
   if (list) renderAppRows(list, apps, 0, "今日暂无播放记录");
   renderHourChart($("audioChart"), s.hourly || []);
@@ -794,6 +835,20 @@ function showView(id) {
   if (!target) return; // 目标视图不存在则不操作，避免误隐藏所有视图
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
   target.classList.remove("hidden");
+  curView = id;
+  // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
+  // 否则要等下一个轮询周期才出内容。
+  repaintCurrentView();
+}
+
+// 用缓存立即补画当前视图；缓存还没到就现拉一次，避免切过去看到空白
+function repaintCurrentView() {
+  if (viewData.activity) paintActivity();
+  else loadActivity();
+  if (viewData.appu) paintAppUsage();
+  else loadAppUsage();
+  if (viewData.audio) paintAudioUsage();
+  else loadAudioUsage();
 }
 $("otDetailBtn").addEventListener("click", () => showView("viewOt"));
 $("otBackBtn").addEventListener("click", () => showView("viewMain"));
@@ -898,6 +953,7 @@ setInterval(() => { if (winVisible) loadOvertime(); }, 10000);
 // 活动统计每 2 秒刷新（命令内部会先刷内存计数，点击/按键后近实时可见）
 setInterval(() => { if (winVisible) loadActivity(); }, 2000);
 // 应用使用每 2 秒刷新（10 秒结算一次，2 秒轮询保证切回后尽快看到新值）
-setInterval(() => { if (winVisible) loadAppUsage(); }, 2000);
 // 媒体播放每 2 秒刷新（5 秒结算一次，口径同上）
-setInterval(() => { if (winVisible) loadAudioUsage(); }, 2000);
+// 三者错开 700ms 相位：原先同时刻三连发会堆出一个卡顿尖峰，错开后每秒最多一次 IPC
+setTimeout(() => setInterval(() => { if (winVisible) loadAppUsage(); }, 2000), 700);
+setTimeout(() => setInterval(() => { if (winVisible) loadAudioUsage(); }, 2000), 1400);
