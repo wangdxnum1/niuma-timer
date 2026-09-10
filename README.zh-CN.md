@@ -106,6 +106,23 @@ build.bat package
 
 > 首次打包会自动下载 NSIS；打出 MSI 还需要 [WiX 3](https://wixtoolset.org/) 工具链。
 
+### 一键发布（编译 + 打包 + Release）
+
+```bat
+release.bat             使用 Cargo.toml 中的当前版本
+release.bat 1.1.0       顺便把版本号改为 1.1.0（自动同步 Cargo.toml 与 tauri.conf.json）
+release.bat 1.1.0 /y    全程不询问
+```
+
+按序执行：编译 release → 打包三种产物 → 提交并打 tag → 推送 → 创建 GitHub Release 并上传产物。
+
+- 依赖 `tauri-cli`，脚本检测到未安装会询问是否立即安装
+- 推送强制使用系统 Git + `wincred` + `openssl` 后端（WorkBuddy 自带 Git 的凭据管理器会崩溃）；
+  检测到本机 7890 端口有代理时自动走代理
+- 未安装或未登录 `gh` 时，自动打开浏览器由你手动创建 Release 并上传 `bin\package\` 里的产物
+- 版本号变更会改写 `Cargo.toml` 与 `tauri.conf.json`；若改写失败按提示用 `git checkout --` 还原
+
+
 ## 使用方法
 
 1. 运行 `niuma-timer.exe`——托盘出现图标（显示 `¥0`）。

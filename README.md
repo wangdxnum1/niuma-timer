@@ -108,6 +108,25 @@ Artifacts land in `bin\package\`:
 
 > NSIS is downloaded automatically on first run; MSI additionally needs [WiX 3](https://wixtoolset.org/).
 
+### One-click release (build + package + publish)
+
+```bat
+release.bat             use the current version from Cargo.toml
+release.bat 1.1.0       also bump the version to 1.1.0 (syncs Cargo.toml + tauri.conf.json)
+release.bat 1.1.0 /y    no prompts at all
+```
+
+It runs: release build -> package all three artifacts -> commit and tag -> push -> create a
+GitHub Release and upload the artifacts.
+
+- Requires `tauri-cli`; the script offers to install it when missing
+- Pushing always uses system Git with `wincred` + the `openssl` TLS backend (WorkBuddy's bundled
+  Git has a broken credential manager); a local proxy on port 7890 is picked up automatically
+- Without `gh` (or without `gh auth login`) it opens the browser so you can publish manually
+- Bumping the version rewrites `Cargo.toml` and `tauri.conf.json`; if that fails, restore with
+  `git checkout --` as printed by the script
+
+
 ## Usage
 
 1. Run `niuma-timer.exe` — a tray icon appears showing `¥0`.

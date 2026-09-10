@@ -19,6 +19,15 @@ if "%TRIPLE%"=="" set "TRIPLE=x86_64-pc-windows-msvc"
 
 rem Usage: build.bat [debug|release|all|package]
 set "FLAVOR=%~1"
+
+rem Read version from Cargo.toml (package section, first unindented "version =")
+set "RAWVER="
+for /f "usebackq tokens=2 delims==" %%a in (`findstr /b /c:"version" "%SRC%\Cargo.toml"`) do (
+  if not defined RAWVER set "RAWVER=%%a"
+)
+set "APPVER=%RAWVER:"=%"
+set "APPVER=%APPVER: =%"
+if "%APPVER%"=="" set "APPVER=0.0.0"
 if "%FLAVOR%"=="" set "FLAVOR=all"
 
 if "%FLAVOR%"=="debug" call :do_build debug
@@ -81,7 +90,7 @@ copy /Y "%BUNDLE%\nsis\*.exe" "%BIN%\package\"
 copy /Y "%BUNDLE%\msi\*.msi" "%BIN%\package\"
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
-copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-1.0.0-portable.exe"
+copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
 echo Done: %BIN%\package\
 goto :eof
 :fail
