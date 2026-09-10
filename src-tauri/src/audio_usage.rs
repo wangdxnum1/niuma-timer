@@ -254,14 +254,16 @@ pub struct AudioUsageSummary {
     pub watch_ok: bool,
 }
 
-/// 今日媒体播放汇总
-/// 今日媒体播放汇总。
+/// 媒体播放汇总（默认今天，`date` 可指定任意历史日期）。
 ///
 /// `known_icons`：前端已缓存过图标的应用名，命中的条目 `icon` 返回 `None`。
 /// 与 `app_usage::summary` 同理——避免每 2 秒轮询反复回传整批图标 base64。
-pub fn summary(known_icons: &[String]) -> AudioUsageSummary {
+pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
-    let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let date = match date {
+        Some(d) => d.to_string(),
+        None => Local::now().date_naive().format("%Y-%m-%d").to_string(),
+    };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
     // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
     let (apps, hourly) = crate::db::with_db(|g| {

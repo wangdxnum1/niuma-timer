@@ -489,9 +489,7 @@ fn load_today() {
     *day().lock().unwrap() = d;
 }
 
-/// 查询数据库（供未来历史浏览/聚合用）：读取指定日期的活动统计。
-/// 目前前端只用「当天」，历史查询留作扩展。
-#[allow(dead_code)]
+/// 读取指定日期的活动统计（历史浏览用）。当天数据仍在内存中，走 `summary()`。
 pub fn load_day_from_db(date: &str) -> (Vec<HourBucket>, BTreeMap<u32, u64>) {
     query_day_from_db(date)
 }
@@ -761,20 +759,26 @@ fn flush_pending_impl(persist: bool) {
 pub fn summary() -> ActivitySummary {
     flush_pending_mem();
     let d = day().lock().unwrap();
+    assemble(&d.date, d.hourly.clone(), d.key_detail.clone())
+}
+
+/// 把「24 小时桶 + 按键明细」组装成汇总视图。内存路径与历史（SQLite）路径共用，
+/// 避免两处各算一遍 totals / active_hours / Top 键导致口径不一致。
+fn assemble(
+    date: &str,
+    hourly: Vec<HourBucket>,
+    key_detail: BTreeMap<u32, u64>,
+) -> ActivitySummary {
     let mut totals = HourBucket::default();
     let mut active_hours = 0u64;
-    for b in &d.hourly {
+    for b in &hourly {
         totals.add(b);
         if b.total_events() > 0 {
             active_hours += 1;
         }
     }
     // 高频键 Top 10
-    let mut ranked: Vec<(u64, u32)> = d
-        .key_detail
-        .iter()
-        .map(|(&k, &c)| (c, k))
-        .collect();
+    let mut ranked: Vec<(u64, u32)> = key_detail.iter().map(|(&k, &c)| (c, k)).collect();
     ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     let top_keys: Vec<KeyCount> = ranked
         .into_iter()
@@ -786,12 +790,26 @@ pub fn summary() -> ActivitySummary {
         .collect();
 
     ActivitySummary {
-        date: d.date.clone(),
-        hourly: d.hourly.clone(),
+        date: date.to_string(),
+        hourly,
         totals,
         top_keys,
         active_hours,
         hook_ok: RAW_OK.load(Ordering::SeqCst),
+    }
+}
+
+/// 指定日期的活动汇总：`None` 或就是内存中的「今天」时走内存路径，
+/// 能拿到最近几秒尚未落盘的实时增量；其它日期从 SQLite 读取
+/// （历史数据早已落盘，不存在实时增量一说）。
+pub fn summary_for(date: Option<&str>) -> ActivitySummary {
+    let mem_date = day().lock().unwrap().date.clone();
+    match date {
+        Some(d) if d != mem_date => {
+            let (hourly, keys) = load_day_from_db(d);
+            assemble(d, hourly, keys)
+        }
+        _ => summary(),
     }
 }
 

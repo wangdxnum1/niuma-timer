@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=20" />
+    <link rel="stylesheet" href="styles.css?v=21" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -280,6 +280,11 @@
         <button id="actBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2 id="actTitle">今日活动明细</h2>
       </div>
+      <div class="month-nav">
+        <button id="actPrevDay" class="mn-btn">‹ 前一天</button>
+        <span id="actDayLabel" class="mn-label">今天</span>
+        <button id="actNextDay" class="mn-btn">后一天 ›</button>
+      </div>
       <section class="card">
         <h2>逐小时活跃度</h2>
         <div id="actChart" class="act-chart"></div>
@@ -309,7 +314,12 @@
     <div class="app hidden" id="viewApp">
       <div class="page-head">
         <button id="appuBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
-        <h2>今日应用使用</h2>
+        <h2 id="appuTitle">今日应用使用</h2>
+      </div>
+      <div class="month-nav">
+        <button id="appuPrevDay" class="mn-btn">‹ 前一天</button>
+        <span id="appuDayLabel" class="mn-label">今天</span>
+        <button id="appuNextDay" class="mn-btn">后一天 ›</button>
       </div>
       <section class="card">
         <h2>逐小时使用分布</h2>
@@ -327,7 +337,12 @@
     <div class="app hidden" id="viewAudio">
       <div class="page-head">
         <button id="audioBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
-        <h2>今日媒体播放</h2>
+        <h2 id="audioTitle">今日媒体播放</h2>
+      </div>
+      <div class="month-nav">
+        <button id="audioPrevDay" class="mn-btn">‹ 前一天</button>
+        <span id="audioDayLabel" class="mn-label">今天</span>
+        <button id="audioNextDay" class="mn-btn">后一天 ›</button>
       </div>
       <section class="card">
         <h2>逐小时播放分布</h2>
@@ -372,6 +387,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=21"></script>
   </body>
 </html>

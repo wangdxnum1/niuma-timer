@@ -611,14 +611,17 @@ pub struct AppUsageSummary {
     pub watch_ok: bool,
 }
 
-/// 今日应用使用汇总。
+/// 应用使用汇总（默认今天，`date` 可指定任意历史日期）。
 ///
 /// `known_icons`：前端已缓存过图标的应用名。命中的条目 `icon` 返回 `None`，不再回传
 /// base64——前端每 2 秒轮询一次，而图标是几 KB~几十 KB 的 data URL，每次整批搬运
 /// 纯属浪费 IPC 带宽（只有新出现的应用才真正需要传一次）。
-pub fn summary(known_icons: &[String]) -> AppUsageSummary {
+pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
-    let date = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let date = match date {
+        Some(d) => d.to_string(),
+        None => Local::now().date_naive().format("%Y-%m-%d").to_string(),
+    };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
     // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
     let (apps, hourly) = crate::db::with_db(|g| {

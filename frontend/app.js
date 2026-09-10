@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-10.v20";
+const FE_VER = "2026-09-10.v21";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -612,6 +612,102 @@ function fmtBucket(b, i) {
   return i + "时 · " + (parts.length ? parts.join("、") : "无活动");
 }
 
+// ---- 历史日期查看（活动 / 应用使用 / 媒体播放共用）----
+// null = 跟随今天。翻到历史日期时只影响对应二级页：主界面「今日」卡片由各 paint
+// 分支用 isToday 挡住，不会被历史数据顶掉；返回主界面时统一复位。
+const histDate = { act: null, appu: null, audio: null };
+
+function todayStr() {
+  const d = new Date();
+  return fmtYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+function fmtYMD(y, m, d) {
+  const p = (n) => (n < 10 ? "0" + n : "" + n);
+  return y + "-" + p(m) + "-" + p(d);
+}
+
+// "YYYY-MM-DD" 加减天数。用本地时间构造 Date，避免 UTC 解析把日期串到前一天
+function addDays(s, delta) {
+  const p = String(s || "").split("-").map(Number);
+  if (p.length !== 3 || p.some(isNaN)) return todayStr();
+  const d = new Date(p[0], p[1] - 1, p[2]);
+  d.setDate(d.getDate() + delta);
+  return fmtYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+function isToday(s) {
+  return !!s && s === todayStr();
+}
+
+// 导航条上的日期：今天 / 昨天 / 9月8日（跨年补年份）
+function dateLabel(s) {
+  if (!s || isToday(s)) return "今天";
+  if (s === addDays(todayStr(), -1)) return "昨天";
+  const p = String(s).split("-").map(Number);
+  const now = new Date();
+  return p[0] !== now.getFullYear()
+    ? p[0] + "年" + p[1] + "月" + p[2] + "日"
+    : p[1] + "月" + p[2] + "日";
+}
+
+// 二级页标题：今日活动明细 / 昨日活动明细 / 9月8日活动明细
+function dayTitle(s, name) {
+  if (!s || isToday(s)) return "今日" + name;
+  if (s === addDays(todayStr(), -1)) return "昨日" + name;
+  return dateLabel(s) + name;
+}
+
+// 空态文案：历史日期不能再说「今日暂无…」
+function dayEmpty(s, what) {
+  return isToday(s) ? "今日暂无" + what : dateLabel(s) + "暂无" + what;
+}
+
+// 翻天：delta = -1 前一天 / +1 后一天。未来没有数据，翻不过去
+function shiftHist(key, delta, loadFn) {
+  const next = addDays(histDate[key] || todayStr(), delta);
+  if (next > todayStr()) return; // "YYYY-MM-DD" 定长，字典序即时间序
+  histDate[key] = next;
+  updateDayNav(key);
+  loadFn();
+}
+
+// 导航条日期与「后一天」可用状态
+const DAY_NAV = {
+  act: { label: "actDayLabel", next: "actNextDay", title: "actTitle", name: "活动明细" },
+  appu: { label: "appuDayLabel", next: "appuNextDay", title: "appuTitle", name: "应用使用" },
+  audio: { label: "audioDayLabel", next: "audioNextDay", title: "audioTitle", name: "媒体播放" },
+};
+
+function updateDayNav(key) {
+  const cfg = DAY_NAV[key];
+  if (!cfg) return;
+  const d = histDate[key];
+  const lb = $(cfg.label);
+  const nx = $(cfg.next);
+  const ti = $(cfg.title);
+  if (lb) lb.textContent = dateLabel(d);
+  if (nx) nx.disabled = isToday(d || todayStr());
+  if (ti) ti.textContent = dayTitle(d, cfg.name);
+}
+
+// 返回主界面时把历史日期复位：否则缓存里留着历史数据，
+// 主界面「今日」卡片会被 paint 的 isToday 守卫挡住而停在旧数字上
+function resetHistDates() {
+  let dirty = false;
+  const viewKey = { act: "activity", appu: "appu", audio: "audio" };
+  for (const k of Object.keys(viewKey)) {
+    if (histDate[k] !== null) {
+      histDate[k] = null;
+      viewData[viewKey[k]] = null; // 作废历史缓存，repaintCurrentView 会现拉今天的
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
+  }
+}
+
 async function loadActivity() {
   if (!monitors.activity) {
     // 停用即清缓存：否则从设置页切回主界面时，会拿旧数据画出已停用模块的数字
@@ -625,7 +721,7 @@ async function loadActivity() {
     return;
   }
   try {
-    const a = await invoke("get_activity_summary");
+    const a = await invoke("get_activity_summary", { date: histDate.act });
     viewData.activity = a;
     paintActivity();
   } catch (e) {
@@ -640,6 +736,8 @@ function paintActivity() {
   if (!a) return;
   const t = a.totals || {};
   if (curView === "viewMain") {
+    // 主界面卡片固定反映今天：翻到历史日期后缓存里是历史数据，不能拿去覆盖「今日」
+    if (!isToday(a.date)) return;
     $("act_left").textContent = (t.left || 0).toLocaleString();
     $("act_right").textContent = (t.right || 0).toLocaleString();
     $("act_keys").textContent = (t.keys || 0).toLocaleString();
@@ -647,6 +745,7 @@ function paintActivity() {
     return;
   }
   if (curView !== "viewAct") return;
+  updateDayNav("act");
   $("actL").textContent = (t.left || 0).toLocaleString();
   $("actD").textContent = (t.dbl || 0).toLocaleString();
   $("actR").textContent = (t.right || 0).toLocaleString();
@@ -655,15 +754,16 @@ function paintActivity() {
   $("actK").textContent = (t.keys || 0).toLocaleString();
   $("actP").textContent = fmtDist(t.pixels);
   $("actH").textContent = (a.active_hours || 0) + " 小时";
-  renderChart(a.hourly || []);
+  renderChart(a.hourly || [], isToday(a.date));
   renderTopKeys(a.top_keys || []);
 }
 
 // 逐小时活跃柱状图（纯 CSS，无第三方库）
-function renderChart(hourly) {
+// isToday=false 时不标「当前小时」——历史日期没有当前小时，标金色属于误导
+function renderChart(hourly, isToday = true) {
   const el = $("actChart");
   if (!el) return;
-  const now = new Date().getHours();
+  const now = isToday ? new Date().getHours() : -1;
   const max = Math.max(
     1,
     ...hourly.map((b) => (b.moves || 0) + (b.left || 0) + (b.keys || 0))
@@ -725,7 +825,10 @@ async function loadAppUsage() {
   }
   try {
     // 参数名用 camelCase：Tauri v2 的命令宏会把 Rust 的 snake_case 参数统一转成 camelCase
-    const s = await invoke("get_app_usage_summary", { knownIcons: knownIcons() });
+    const s = await invoke("get_app_usage_summary", {
+      knownIcons: knownIcons(),
+      date: histDate.appu,
+    });
     mergeIcons(s.apps || []); // 图标入缓存与当前视图无关，必须在这里做
     viewData.appu = s;
     paintAppUsage();
@@ -762,14 +865,16 @@ function paintAppUsage() {
   if (!s) return;
   const apps = s.apps || [];
   if (curView === "viewMain") {
+    if (!isToday(s.date)) return; // 同上：主界面只反映今天
     const home = $("appuHomeList");
     if (home) renderAppRows(home, apps, 6);
     return;
   }
   if (curView !== "viewApp") return;
+  updateDayNav("appu");
   const list = $("appuList");
-  if (list) renderAppRows(list, apps, 0);
-  renderHourChart($("appuChart"), s.hourly || []);
+  if (list) renderAppRows(list, apps, 0, dayEmpty(s.date, "应用使用记录"));
+  renderHourChart($("appuChart"), s.hourly || [], isToday(s.date));
 }
 
 // 应用行：图标 + 软件名 + 进度条 + 时长（按时长降序）。emptyText 自定义空态文案
@@ -826,9 +931,9 @@ function knownIcons() {
 }
 
 // 逐小时柱状图（复用 act-chart 样式；hourly 为 24 个秒数，空态文案自定义）
-function renderHourChart(el, hourly) {
+function renderHourChart(el, hourly, isToday = true) {
   if (!el) return;
-  const now = new Date().getHours();
+  const now = isToday ? new Date().getHours() : -1;
   const max = Math.max(1, ...hourly);
   el.innerHTML = "";
   hourly.forEach((sec, i) => {
@@ -851,7 +956,10 @@ async function loadAudioUsage() {
     return;
   }
   try {
-    const s = await invoke("get_audio_usage_summary", { knownIcons: knownIcons() });
+    const s = await invoke("get_audio_usage_summary", {
+      knownIcons: knownIcons(),
+      date: histDate.audio,
+    });
     mergeIcons(s.apps || []); // 与应用使用共用一份图标缓存，同样与当前视图无关
     viewData.audio = s;
     paintAudioUsage();
@@ -883,14 +991,16 @@ function paintAudioUsage() {
   if (!s) return;
   const apps = s.apps || [];
   if (curView === "viewMain") {
+    if (!isToday(s.date)) return; // 同上：主界面只反映今天
     const home = $("audioHomeList");
     if (home) renderAppRows(home, apps, 6, "今日暂无播放记录");
     return;
   }
   if (curView !== "viewAudio") return;
+  updateDayNav("audio");
   const list = $("audioList");
-  if (list) renderAppRows(list, apps, 0, "今日暂无播放记录");
-  renderHourChart($("audioChart"), s.hourly || []);
+  if (list) renderAppRows(list, apps, 0, dayEmpty(s.date, "播放记录"));
+  renderHourChart($("audioChart"), s.hourly || [], isToday(s.date));
 }
 
 // 文本/数字/时间控件：失去焦点时自动保存
@@ -988,6 +1098,7 @@ function showView(id) {
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
   target.classList.remove("hidden");
   curView = id;
+  if (id === "viewMain") resetHistDates();
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
   repaintCurrentView();
@@ -1013,11 +1124,21 @@ $("actBackBtn").addEventListener("click", () => showView("viewMain"));
 $("appuDetailBtn").addEventListener("click", () => showView("viewApp"));
 $("appuBackBtn").addEventListener("click", () => showView("viewMain"));
 // 主界面 ↔ 媒体播放明细二级页面切换
+// 三个二级页的日期导航：翻天后立即按新日期重新拉取
+$("actPrevDay").addEventListener("click", () => shiftHist("act", -1, loadActivity));
+$("actNextDay").addEventListener("click", () => shiftHist("act", 1, loadActivity));
+$("appuPrevDay").addEventListener("click", () => shiftHist("appu", -1, loadAppUsage));
+$("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsage));
+$("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
+$("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
 $("audioDetailBtn").addEventListener("click", () => showView("viewAudio"));
 $("audioBackBtn").addEventListener("click", () => showView("viewMain"));
 // 主界面 ↔ 设置二级页面切换
 $("settingsBtn").addEventListener("click", () => showView("viewSettings"));
 $("settingsBackBtn").addEventListener("click", () => showView("viewMain"));
+
+// 启动即把三页导航条初始化为「今天」，并禁用「后一天」
+for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
 
 // 关闭窗口：若有未保存改动先落盘再隐藏，不丢数据
 async function closeWindow() {

@@ -392,8 +392,8 @@ fn delete_overtime_record(
 
 /// 获取今日鼠标/键盘活动统计（逐小时 + 汇总 + 高频按键）
 #[tauri::command]
-fn get_activity_summary() -> activity::ActivitySummary {
-    activity::summary()
+fn get_activity_summary(date: Option<String>) -> activity::ActivitySummary {
+    activity::summary_for(date.as_deref())
 }
 
 /// 获取今日应用使用时长统计（各应用累计 + 24 小时分布）
@@ -401,14 +401,20 @@ fn get_activity_summary() -> activity::ActivitySummary {
 /// `known_icons`：前端已缓存图标的应用名，命中者不再回传 base64（图标是几 KB~几十 KB
 /// 的 data URL，每 2 秒轮询整批搬运纯属浪费，只有新应用才需要传一次）。
 #[tauri::command]
-fn get_app_usage_summary(known_icons: Vec<String>) -> app_usage::AppUsageSummary {
-    app_usage::summary(&known_icons)
+fn get_app_usage_summary(
+    known_icons: Vec<String>,
+    date: Option<String>,
+) -> app_usage::AppUsageSummary {
+    app_usage::summary(&known_icons, date.as_deref())
 }
 
 /// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）
 #[tauri::command]
-fn get_audio_usage_summary(known_icons: Vec<String>) -> audio_usage::AudioUsageSummary {
-    audio_usage::summary(&known_icons)
+fn get_audio_usage_summary(
+    known_icons: Vec<String>,
+    date: Option<String>,
+) -> audio_usage::AudioUsageSummary {
+    audio_usage::summary(&known_icons, date.as_deref())
 }
 
 /// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
