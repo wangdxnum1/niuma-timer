@@ -15,6 +15,10 @@ set "SRC=%ROOT%src-tauri"
 set "BIN=%ROOT%bin"
 set "REPO=wangdxnum1/niuma-timer"
 
+rem Cargo mirrors occasionally return 504; retry instead of failing outright.
+set "CARGO_NET_RETRY=10"
+set "CARGO_HTTP_TIMEOUT=180"
+
 set "AUTO=no"
 set "WANTVER=%~1"
 if /i "%~1"=="/y" ( set "AUTO=yes" & set "WANTVER=" )
@@ -47,7 +51,7 @@ echo   target  version : %VER%
 
 if not "%VER%"=="%CURVER%" (
   echo.
-  echo --^> syncing version %CURVER% to %VER% ...
+  echo   syncing version %CURVER% to %VER% ...
   powershell -NoProfile -Command "$f='%SRC%\Cargo.toml'; $t=[IO.File]::ReadAllText($f); $q=[char]34; $p='(?m)^version\s*=\s*'+$q+[regex]::Escape('%CURVER%')+$q; $r='version = '+$q+'%VER%'+$q; $t=[regex]::Replace($t,$p,$r); [IO.File]::WriteAllText($f,$t)"
   if errorlevel 1 ( echo [ERROR] failed to update Cargo.toml & exit /b 1 )
   powershell -NoProfile -Command "$f='%SRC%\tauri.conf.json'; $t=[IO.File]::ReadAllText($f); $q=[char]34; $p=$q+'version'+$q+':\s*'+$q+[regex]::Escape('%CURVER%')+$q; $r=$q+'version'+$q+': '+$q+'%VER%'+$q; $t=[regex]::Replace($t,$p,$r); [IO.File]::WriteAllText($f,$t)"
@@ -89,14 +93,14 @@ if errorlevel 1 (
   )
   if /i "!INST!"=="Y" set "INST=yes"
   if "!INST!"=="no" (
-    echo   Aborted. Install it manually:  cargo install tauri-cli --version "^^2"
+    echo   Aborted. Install it manually:  cargo install tauri-cli --version "2"
     exit /b 1
   )
   echo   Installing tauri-cli ...
-  echo   (if the download fails with a mirror 504, retry with:
+  echo   if the download fails with a mirror 504, retry with:
   echo    set CARGO_SOURCE_CRATES_IO_REPLACE_WITH=tuna
-  echo    set CARGO_SOURCE_TUNA_REGISTRY=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/)
-  cargo install tauri-cli --version "^^2"
+  echo    set CARGO_SOURCE_TUNA_REGISTRY=sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/
+  cargo install tauri-cli --version "2"
   if errorlevel 1 ( echo [ERROR] tauri-cli install failed & exit /b 1 )
   cargo tauri --version >nul 2>&1
   if errorlevel 1 ( echo [ERROR] tauri-cli still unavailable after install & exit /b 1 )
@@ -120,7 +124,7 @@ if "%AUTO%"=="no" (
 rem ---------------- 4. clean old artifacts ----------------
 if exist "%BIN%\package" (
   echo.
-  echo --^> clearing old artifacts in bin\package ...
+  echo   clearing old artifacts in bin\package ...
   del /q "%BIN%\package\*.*" >nul 2>&1
 )
 
