@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=18" />
+    <link rel="stylesheet" href="styles.css?v=19" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -46,7 +46,7 @@
         <h1>🐎 牛马计时器</h1>
         <button id="settingsBtn" class="ghost settings-btn">⚙ 设置</button>
       </div>
-      <p class="sub">实时计算你今天赚了多少钱</p>
+      <p class="sub" id="tagline">实时计算你今天赚了多少钱</p>
 
       <section class="card live">
         <h2>今日实时</h2>
@@ -179,6 +179,23 @@
           <span>托盘悬停显示彩色卡片</span>
           <input id="tray_hover_card" type="checkbox" class="switch" />
         </label>
+        <label>
+          <span>首页副标题文案</span>
+          <select id="tagline_style">
+            <option value="dynamic">动态状态（随开工 / 快下班自动变）</option>
+            <option value="price">你今天的每一分钟，都明码标价</option>
+            <option value="rise">每一秒，钱都在涨</option>
+            <option value="count">搬砖的每一分钟，都算数</option>
+            <option value="classic">实时计算你今天赚了多少钱（原版）</option>
+            <option value="none">不显示这一行</option>
+            <option value="custom">自定义…</option>
+          </select>
+        </label>
+        <label id="taglineCustomRow">
+          <span>自定义文案</span>
+          <input id="tagline_custom" type="text" maxlength="40" placeholder="写你想看到的那句话" />
+        </label>
+        <p class="hint">副标题显示在主界面顶部。选「动态状态」会随未开工、午休、快下班（剩 30 分钟内）、已下班、休息日自动切换</p>
         <label>
           <span>当月实际上班天数（留空=自动）</span>
           <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
@@ -349,6 +366,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=19"></script>
   </body>
 </html>

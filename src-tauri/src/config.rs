@@ -65,6 +65,17 @@ pub struct Config {
     /// 媒体播放监控
     #[serde(default = "default_true")]
     pub monitor_audio: bool,
+
+    // ---- 首页副标题文案 ----
+    /// 副标题风格：dynamic=随状态变化（默认，推荐）
+    /// price / rise / count / classic = 固定文案
+    /// none = 不显示这一行   custom = 显示 tagline_custom
+    #[serde(default = "default_tagline_style")]
+    pub tagline_style: String,
+    /// 自定义副标题文案；仅当 tagline_style == "custom" 时生效。
+    /// 纯前端消费，后端不参与计算。
+    #[serde(default)]
+    pub tagline_custom: String,
 }
 
 fn default_true() -> bool {
@@ -83,6 +94,10 @@ fn default_overtime_meal() -> f64 {
 
 fn default_duration_format() -> String {
     "hms".into()
+}
+
+fn default_tagline_style() -> String {
+    "dynamic".into()
 }
 
 impl Default for Config {
@@ -108,6 +123,8 @@ impl Default for Config {
             monitor_activity: true,
             monitor_app_usage: true,
             monitor_audio: true,
+            tagline_style: "dynamic".into(),
+            tagline_custom: String::new(),
         }
     }
 }

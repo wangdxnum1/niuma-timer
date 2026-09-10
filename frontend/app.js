@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-10.v18";
+const FE_VER = "2026-09-10.v19";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -56,6 +56,9 @@ async function load() {
     $("payday").value = cfg.payday;
     $("duration_format").value = cfg.duration_format || "hms";
     $("tray_hover_card").checked = !!cfg.tray_hover_card;
+    $("tagline_style").value = cfg.tagline_style || "dynamic";
+    $("tagline_custom").value = cfg.tagline_custom || "";
+    applyTaglineCustomVisibility($("tagline_style").value);
     // 开机自启读注册表真实状态（用户可能在任务管理器手工禁用过），不走 config
     loadAutostart();
     $("workdays_override").value = cfg.workdays_override ?? "";
@@ -181,6 +184,8 @@ function readCfg() {
     payday: parseInt($("payday").value) || 1,
     duration_format: $("duration_format").value || "hms",
     tray_hover_card: $("tray_hover_card").checked,
+    tagline_style: $("tagline_style").value || "dynamic",
+    tagline_custom: $("tagline_custom").value || "",
     workdays_override: $("workdays_override").value
       ? parseInt($("workdays_override").value)
       : null,
@@ -262,17 +267,97 @@ async function silentRefresh() {
   }
 }
 
+// 最近一次拿到的状态。改副标题设置时要立刻重画，靠它免掉一次多余 IPC。
+let lastStatus = null;
+
 async function tick() {
   try {
     const s = await invoke("get_status_cmd");
+    lastStatus = s;
     $("earned").textContent = "¥" + s.earned.toFixed(2);
     $("worked").textContent = s.worked_str || s.worked_h.toFixed(1) + "h";
     $("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
     $("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
     $("pay").textContent = s.days_to_pay + " 天";
+    renderTagline(s);
   } catch (e) {
     /* 忽略瞬时错误 */
   }
+}
+
+// ---- 首页副标题 ----
+
+// 固定文案表。key 与设置页下拉的 value 一一对应
+const FIXED_TAGLINES = {
+  price: "你今天的每一分钟，都明码标价",
+  rise: "每一秒，钱都在涨",
+  count: "搬砖的每一分钟，都算数",
+  classic: "实时计算你今天赚了多少钱",
+};
+
+function taglineStyle() {
+  const el = $("tagline_style");
+  const v = el ? el.value : "";
+  return v || "dynamic"; // 控件还没填好时退回动态，不显示空白
+}
+
+// "HH:MM" -> 当日分钟数；空值或格式不合法返回 null。
+// 不能用 0 兜底：否则「上午下班 00:00」这类合法值会被当成无效而跳过午休判断。
+function minutesOf(hhmm) {
+  const p = String(hhmm || "").split(":");
+  if (p.length !== 2) return null;
+  const h = parseInt(p[0], 10);
+  const m = parseInt(p[1], 10);
+  if (isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+// 动态副标题：把「实时」这个卖点用起来，而不是写死一句说明文。
+// 全部基于 tick 已拿到的状态，不发额外 IPC。
+function dynamicTagline(s) {
+  if (s.to_off_str === "今天休息") return "今天休息，钱也休息";
+  if (s.off_work) return "今天的钱，就到这儿了";
+  if (s.worked_h <= 0) return "还没开工，钱暂时没动";
+  // 午休：当前时刻落在上午下班与下午上班之间
+  const now = new Date().getHours() * 60 + new Date().getMinutes();
+  const amEnd = minutesOf($("am_end").value);
+  const pmStart = minutesOf($("pm_start").value);
+  if (amEnd !== null && pmStart !== null && pmStart > amEnd && now >= amEnd && now < pmStart) {
+    return "午休中，钱先歇会儿";
+  }
+  // 临近下班：剩 30 分钟以内，报具体分钟数
+  if (s.to_off_h > 0 && s.to_off_h <= 0.5) {
+    return "还有 " + Math.max(1, Math.round(s.to_off_h * 60)) + " 分钟，撑住";
+  }
+  return "正在搬砖，钱一直在涨";
+}
+
+function renderTagline(s) {
+  const el = $("tagline");
+  if (!el) return;
+  const style = taglineStyle();
+  if (style === "none") {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  if (style === "custom") {
+    // 自定义为空时退回动态句，不把界面留白
+    const t = ($("tagline_custom").value || "").trim();
+    el.textContent = t || dynamicTagline(s);
+    return;
+  }
+  if (style === "dynamic") {
+    el.textContent = dynamicTagline(s);
+    return;
+  }
+  el.textContent = FIXED_TAGLINES[style] || dynamicTagline(s);
+}
+
+// 只有选了「自定义」才露出输入框
+function applyTaglineCustomVisibility(v) {
+  const row = $("taglineCustomRow");
+  if (row) row.style.display = v === "custom" ? "" : "none";
 }
 
 // 加班开关关闭时隐藏主界面「加班总览」卡片；已有数据保留在库中不受影响
@@ -766,6 +851,17 @@ function paintAudioUsage() {
 ].forEach((id) => $(id).addEventListener("blur", saveIfChanged));
 // 下拉框：选择即保存
 $("duration_format").addEventListener("change", saveIfChanged);
+// 副标题风格：立即保存，并用最近一次状态重画（不发 IPC）
+$("tagline_style").addEventListener("change", () => {
+  applyTaglineCustomVisibility($("tagline_style").value);
+  saveNow();
+  if (lastStatus) renderTagline(lastStatus);
+  else tick();
+});
+// 自定义文案：输入时实时预览，失焦才写盘
+$("tagline_custom").addEventListener("input", () => {
+  if (taglineStyle() === "custom" && lastStatus) renderTagline(lastStatus);
+});
 // 开关：立即保存
 $("tray_hover_card").addEventListener("change", saveNow);
 // 加班设置：输入框失焦保存，开关立即保存
