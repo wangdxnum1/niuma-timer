@@ -17,6 +17,7 @@ set "TRIPLE="
 for /f "tokens=2" %%i in ('rustc -vV 2^>nul ^| findstr /C:"host:"') do set "TRIPLE=%%i"
 if "%TRIPLE%"=="" set "TRIPLE=x86_64-pc-windows-msvc"
 
+rem Usage: build.bat [debug|release|all|package]
 set "FLAVOR=%~1"
 if "%FLAVOR%"=="" set "FLAVOR=all"
 
@@ -27,6 +28,8 @@ if "%FLAVOR%"=="all" (
   if errorlevel 1 goto :fail
   call :do_build release
 )
+
+if "%FLAVOR%"=="package" call :do_package
 
 if errorlevel 1 goto :fail
 goto :done
@@ -56,6 +59,31 @@ if errorlevel 1 (
 echo Done: %BIN%\%F%\niuma-timer.exe
 goto :eof
 
+:do_package
+echo.
+echo =========================================
+echo   Packaging (NSIS + MSI) ...
+echo =========================================
+pushd "%SRC%"
+cargo tauri build
+set "RC=%errorlevel%"
+popd
+if %RC% neq 0 (
+  echo [ERROR] Package failed with code %RC%
+  echo Install tauri-cli first:  cargo install tauri-cli
+  echo NSIS will be downloaded automatically on first package run
+  exit /b 1
+)
+set "BUNDLE=%SRC%\target\%TRIPLE%\release\bundle"
+if not exist "%BUNDLE%" set "BUNDLE=%SRC%\target\release\bundle"
+if not exist "%BIN%\package" mkdir "%BIN%\package"
+copy /Y "%BUNDLE%\nsis\*.exe" "%BIN%\package\"
+copy /Y "%BUNDLE%\msi\*.msi" "%BIN%\package\"
+set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
+if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
+copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-1.0.0-portable.exe"
+echo Done: %BIN%\package\
+goto :eof
 :fail
 echo Build failed.
 exit /b 1
@@ -65,4 +93,5 @@ echo.
 echo Artifacts:
 echo   %BIN%\debug\niuma-timer.exe
 echo   %BIN%\release\niuma-timer.exe
+echo   %BIN%\package\    (build.bat package: NSIS installer / MSI / portable exe)
 endlocal

@@ -2,6 +2,7 @@
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
 > [中文文档](./README.zh-CN.md)
+> Current version **1.0.0** (2026-09-10) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
@@ -83,12 +84,29 @@ cargo build --release
 # Output: src-tauri/target/<triple>/release/niuma-timer.exe
 ```
 
-### Build an installer (.msi)
+### Packaging (NSIS installer / MSI / portable)
+
+Install the Tauri CLI once:
 
 ```bash
 cargo install tauri-cli --version "^2"
-cargo tauri build
 ```
+
+Then build everything with one command:
+
+```bat
+build.bat package
+```
+
+Artifacts land in `bin\package\`:
+
+| Artifact | Notes |
+|---|---|
+| `*-setup.exe` | NSIS wizard (Chinese UI, per-user install by default, no admin rights) |
+| `*.msi` | MSI package for enterprise deployment / silent install |
+| `niuma-timer-1.0.0-portable.exe` | Portable exe — no install, no registry writes |
+
+> NSIS is downloaded automatically on first run; MSI additionally needs [WiX 3](https://wixtoolset.org/).
 
 ## Usage
 

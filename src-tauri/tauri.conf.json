@@ -1,6 +1,6 @@
 {
   "productName": "niuma-timer",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.tim.niuma-timer",
   "build": {
     "beforeDevCommand": "",
@@ -35,6 +35,12 @@
       "icons/icon.ico"
     ],
     "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "牛马计时器"
+      },
       "wix": {
         "language": "zh-CN"
       }

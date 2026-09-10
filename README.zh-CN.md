@@ -2,6 +2,7 @@
 
 > 实时看看今天赚了多少钱，精确到秒——顺便看看这一天的班都怎么上的。
 > [English](./README.md)
+> 当前版本 **1.0.0**（2026-09-10）· [更新日志](./CHANGELOG.md)
 
 一个轻量级 Windows 托盘常驻工具，给打工人用。它蹲在系统托盘里，实时显示：
 
@@ -81,12 +82,29 @@ cargo build --release
 # 产物：src-tauri/target/<triple>/release/niuma-timer.exe
 ```
 
-### 打包成安装包（.msi）
+### 打包发布（NSIS 安装包 / MSI / 便携版）
+
+先安装 Tauri CLI（只需一次）：
 
 ```bash
 cargo install tauri-cli --version "^2"
-cargo tauri build
 ```
+
+然后一条命令打包：
+
+```bat
+build.bat package
+```
+
+产物统一输出到 `bin\package\`：
+
+| 产物 | 说明 |
+|---|---|
+| `*-setup.exe` | NSIS 安装向导（中文界面，默认当前用户安装，无需管理员权限） |
+| `*.msi` | MSI 安装包，适合企业分发 / 静默安装 |
+| `niuma-timer-1.0.0-portable.exe` | 便携版，双击即用，不安装、不写注册表 |
+
+> 首次打包会自动下载 NSIS；打出 MSI 还需要 [WiX 3](https://wixtoolset.org/) 工具链。
 
 ## 使用方法
 

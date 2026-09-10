@@ -1,6 +1,6 @@
 [package]
 name = "niuma-timer"
-version = "0.1.0"
+version = "1.0.0"
 description = "牛马计时器 - 实时显示今天赚了多少钱、上了多少小时班"
 authors = ["Tim"]
 edition = "2021"
