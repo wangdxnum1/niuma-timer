@@ -122,7 +122,9 @@ GitHub Release and upload the artifacts.
 - Requires `tauri-cli`; the script offers to install it when missing
 - Pushing always uses system Git with `wincred` + the `openssl` TLS backend (WorkBuddy's bundled
   Git has a broken credential manager); a local proxy on port 7890 is picked up automatically
-- Without `gh` (or without `gh auth login`) it opens the browser so you can publish manually
+- Publishing does **not** need the `gh` CLI: it reuses the GitHub token already stored by
+  Git Credential Manager (`scripts/publish_release.py` calls the GitHub API to create the
+  release and upload assets). The browser fallback is only used if that fails too
 - Bumping the version rewrites `Cargo.toml` and `tauri.conf.json`; if that fails, restore with
   `git checkout --` as printed by the script
 

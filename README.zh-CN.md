@@ -117,6 +117,8 @@ release.bat 1.1.0 /y    全程不询问
 按序执行：编译 release → 打包三种产物 → 提交并打 tag → 推送 → 创建 GitHub Release 并上传产物。
 
 - 依赖 `tauri-cli`，脚本检测到未安装会询问是否立即安装
+- 发布**不需要** `gh` CLI：脚本复用 Git 凭据管理器里已有的 GitHub 令牌
+  （`scripts/publish_release.py`，走 GitHub API 创建 Release 并上传附件）
 - 推送强制使用系统 Git + `wincred` + `openssl` 后端（WorkBuddy 自带 Git 的凭据管理器会崩溃）；
   检测到本机 7890 端口有代理时自动走代理
 - 未安装或未登录 `gh` 时，自动打开浏览器由你手动创建 Release 并上传 `bin\package\` 里的产物

@@ -8,6 +8,8 @@ rem  Usage:
 rem    release.bat              use current version from Cargo.toml
 rem    release.bat 1.1.0        bump to 1.1.0 (syncs Cargo.toml + tauri.conf.json)
 rem    release.bat 1.1.0 /y     no prompts (fully automatic)
+rem  Publishing needs no gh CLI: it reuses the GitHub token already
+rem  stored by Git Credential Manager (scripts/publish_release.py).
 rem ============================================================
 
 set "ROOT=%~dp0"
@@ -220,34 +222,61 @@ echo =========================================
 set "ASSETS="
 for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do set "ASSETS=!ASSETS! "%%f""
 
+rem  Pick a Python interpreter for the gh-less publish path
+set "PYEXE="
+where py >nul 2>&1
+if not errorlevel 1 set "PYEXE=py -3"
+if not defined PYEXE (
+  where python >nul 2>&1
+  if not errorlevel 1 set "PYEXE=python"
+)
+
+rem  Generate release notes up front so both publish paths can use them
+if defined PYEXE (
+  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --generate-notes-only
+)
+
 where gh >nul 2>&1
-if errorlevel 1 (
-  echo   gh CLI not found - falling back to browser.
-  echo   Please create the release manually and drag these files in:
-  for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%f
-  start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
-  popd
-  goto :summary
+if not errorlevel 1 (
+  gh auth status >nul 2>&1
+  if not errorlevel 1 goto :publish_gh
 )
 
-gh auth status >nul 2>&1
-if errorlevel 1 (
-  echo   gh is installed but not logged in. Run:  gh auth login
-  echo   Falling back to browser.
-  start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
-  popd
-  goto :summary
-)
+if defined PYEXE goto :publish_py
+goto :publish_browser
 
-gh release create "v%VER%" --repo "%REPO%" --title "v%VER%" --generate-notes --latest !ASSETS!
+:publish_gh
+echo   publishing with gh CLI ...
+if exist "%BIN%\package\RELEASE_NOTES.md" (
+  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --notes-file "%BIN%\package\RELEASE_NOTES.md" --latest !ASSETS!
+) else (
+  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --generate-notes --latest !ASSETS!
+)
 if errorlevel 1 (
-  echo [ERROR] gh release create failed; create it manually:
-  start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
-  popd
-  exit /b 1
+  echo [ERROR] gh release create failed; falling back to browser.
+  goto :publish_browser
 )
 echo     release v%VER% published
 popd
+goto :summary
+
+:publish_py
+echo   gh not available - publishing via GitHub API with the stored git credential ...
+%PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%"
+if errorlevel 1 (
+  echo [ERROR] API publish failed; falling back to browser.
+  goto :publish_browser
+)
+echo     release v%VER% published
+popd
+goto :summary
+
+:publish_browser
+echo   Create the release manually and drag these files in:
+for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%f
+start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
+popd
+goto :summary
 
 :summary
 echo.
