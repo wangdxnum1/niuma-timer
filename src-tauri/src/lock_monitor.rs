@@ -5,6 +5,7 @@
 //! AWAY 状态供「应用使用」「键鼠活动」等时间类统计在锁屏后暂停，
 //! 避免把锁屏界面 / 解锁输入误记为工作活动。媒体播放（听歌）不受影响。
 
+use crate::sync;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use chrono::Local;
@@ -39,7 +40,7 @@ pub fn is_away() -> bool {
 
 /// 查询最近一次锁屏时间戳
 pub fn last_lock_timestamp() -> Option<i64> {
-    *LAST_LOCK_TIME.lock().unwrap()
+    *sync::lock(&LAST_LOCK_TIME, "lock_monitor::LAST_LOCK_TIME")
 }
 
 /// 启动锁屏监听线程（幂等，重复调用仅首次生效）
@@ -90,7 +91,7 @@ extern "system" fn wnd_proc(
             WTS_SESSION_LOCK => {
                 AWAY.store(true, Ordering::Relaxed);
                 let now = Local::now().timestamp();
-                *LAST_LOCK_TIME.lock().unwrap() = Some(now);
+                *sync::lock(&LAST_LOCK_TIME, "lock_monitor::LAST_LOCK_TIME") = Some(now);
             }
             WTS_SESSION_UNLOCK => {
                 AWAY.store(false, Ordering::Relaxed);

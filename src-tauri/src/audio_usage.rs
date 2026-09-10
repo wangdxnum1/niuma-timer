@@ -11,6 +11,7 @@
 //! 与应用使用（app_usage）的关系：完全独立。app_usage 靠「前台窗口 + 输入」判定主动使用，
 //! audio_usage 靠「音频输出」判定媒体播放，两者并列、各自明细。
 
+use crate::sync;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -92,7 +93,7 @@ fn resolve_meters(meters: Vec<crate::win::AudioMeter>) -> Vec<(String, crate::wi
         }
         let display = crate::app_usage::display_name_of(&exe_path, &exe_name);
         // 不再于热轮询里同步提取图标：只记录「显示名→exe路径」，留给 summary() 懒提取
-        playing_exe().lock().unwrap().insert(display.clone(), exe_path);
+        sync::lock(playing_exe(), "audio_usage::PLAYING_EXE").insert(display.clone(), exe_path);
         found.push((display, m));
     }
     found
@@ -141,7 +142,7 @@ fn sample_round(meters: &[(String, crate::win::AudioMeter)]) -> HashMap<String, 
 
 /// 把本轮采样到的「各应用有声毫秒」记入数据库：满 1 秒才落盘，余量跨轮结转。
 fn credit(played_ms: &HashMap<String, u64>) {
-    let mut pending = pending_ms().lock().unwrap();
+    let mut pending = sync::lock(pending_ms(), "audio_usage::PENDING_MS");
     let mut due: Vec<(String, i64)> = Vec::new();
     for (app, ms) in played_ms {
         let total = pending.entry(app.clone()).or_insert(0);
@@ -277,7 +278,7 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary 
                 for row in rows.flatten() {
                     let app = row.0;
                     // 懒提取：若尚未缓存图标，用轮询时记录的 exe 路径补提取（GDI+PNG 一次，幂等）
-                    if let Some(exe) = playing_exe().lock().unwrap().get(&app).cloned() {
+                    if let Some(exe) = sync::lock(playing_exe(), "audio_usage::PLAYING_EXE").get(&app).cloned() {
                         crate::app_usage::ensure_icon(&app, &exe);
                     }
                     let icon = if known.contains(app.as_str()) {

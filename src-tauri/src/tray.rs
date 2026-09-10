@@ -8,6 +8,7 @@
 //! - 空闲时阻塞 `recv`，无空转；状态变更只发生在一个线程，结构上不可能数据竞争。
 //! 前端握手协议（hover_ready / hover_show / hover_hide / hover_data）保持不变。
 
+use crate::sync;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -245,12 +246,7 @@ impl HoverController {
 
     /// 显示卡片（淡入 + 首帧 hover_show + 分档重发调度）。幂等：已显示则刷新。
     fn do_show(&mut self, app: &AppHandle, anchor: PhysicalPosition<f64>) {
-        let cfg = app
-            .state::<crate::AppState>()
-            .config
-            .lock()
-            .unwrap()
-            .clone();
+        let cfg = sync::lock(&app.state::<crate::AppState>().config, "state.config").clone();
         if !cfg.tray_hover_card {
             return;
         }
@@ -674,12 +670,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
 /// - 彩色卡片关闭：恢复系统原生 tooltip
 /// 直接查询窗口可见性，不依赖任何全局状态。
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
-    let cfg = app
-        .state::<crate::AppState>()
-        .config
-        .lock()
-        .unwrap()
-        .clone();
+    let cfg = sync::lock(&app.state::<crate::AppState>().config, "state.config").clone();
     if let Some(tray) = app.tray_by_id("main") {
         if cfg.tray_hover_card {
             let _ = tray.set_tooltip::<&str>(None);

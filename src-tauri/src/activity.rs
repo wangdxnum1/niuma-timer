@@ -30,6 +30,7 @@
 //!
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计）。
 
+use crate::sync;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -486,7 +487,7 @@ fn load_today() {
     let mut d = DayState::new(date);
     d.hourly = hourly;
     d.key_detail = keys;
-    *day().lock().unwrap() = d;
+    *sync::lock(day(), "activity::DAY") = d;
 }
 
 /// 读取指定日期的活动统计（历史浏览用）。当天数据仍在内存中，走 `summary()`。
@@ -705,7 +706,7 @@ fn flush_pending_impl(persist: bool) {
     let date = now.date_naive().format("%Y-%m-%d").to_string();
     let hour = now.hour().min(23) as usize;
 
-    let mut d = day().lock().unwrap();
+    let mut d = sync::lock(day(), "activity::DAY");
     if d.date != date {
         save_day(&mut d); // 跨天：先把旧一天剩余增量落盘，再开新的一天
         *d = DayState::new(date.clone());
@@ -758,7 +759,7 @@ fn flush_pending_impl(persist: bool) {
 /// 今日活动汇总（查询前先刷内存，保证包含最近几秒的实时增量）。
 pub fn summary() -> ActivitySummary {
     flush_pending_mem();
-    let d = day().lock().unwrap();
+    let d = sync::lock(day(), "activity::DAY");
     assemble(&d.date, d.hourly.clone(), d.key_detail.clone())
 }
 
@@ -803,7 +804,7 @@ fn assemble(
 /// 能拿到最近几秒尚未落盘的实时增量；其它日期从 SQLite 读取
 /// （历史数据早已落盘，不存在实时增量一说）。
 pub fn summary_for(date: Option<&str>) -> ActivitySummary {
-    let mem_date = day().lock().unwrap().date.clone();
+    let mem_date = sync::lock(day(), "activity::DAY").date.clone();
     match date {
         Some(d) if d != mem_date => {
             let (hourly, keys) = load_day_from_db(d);

@@ -197,7 +197,8 @@ niuma-timer/
 │   │   ├── app_usage.rs    # 前台窗口应用使用时长监控（白名单）
 │   │   ├── audio_usage.rs  # 音频会话媒体播放监控
 │   │   ├── win.rs          # Win32 平台层（窗口/钩子/COM/GDI 的 RAII 守卫、进程与图标、Raw Input 解析）
-│   │   └── scheduler.rs    # 统一周期调度（1 秒节拍 → 1/5/10 秒任务）
+│   │   ├── scheduler.rs    # 统一周期调度（1 秒节拍 → 1/5/10 秒任务）
+│   │   └── sync.rs         # 锁访问收口（中毒自愈，禁止裸 .lock().unwrap()）
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri 构建（注册命令）
 │   ├── tauri.conf.json

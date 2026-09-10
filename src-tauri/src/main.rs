@@ -11,6 +11,7 @@ mod icon_render;
 mod lock_monitor;
 mod overtime;
 mod scheduler;
+mod sync;
 mod tray;
 mod win;
 
@@ -110,8 +111,8 @@ fn current_monthly_workdays(cfg: &config::Config, hol: &holiday::HolidayCache) -
 
 /// 计算当天状态快照
 pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
-    let cfg = state.config.lock().unwrap().clone();
-    let hol = state.holiday.lock().unwrap().clone();
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
     let now = Local::now();
     let is_workday = hol.is_workday(now.date_naive()).unwrap_or_else(|| {
         let wd = now.weekday().num_days_from_monday();
@@ -130,7 +131,7 @@ fn apply_holiday_cache(app: &tauri::AppHandle, mut c: holiday::HolidayCache, per
     }
     let state = app.state::<AppState>();
     {
-        let mut hol = state.holiday.lock().unwrap();
+        let mut hol = sync::lock(&state.holiday, "state.holiday");
         *hol = c;
         if persist {
             let snapshot = hol.clone();
@@ -176,14 +177,14 @@ pub fn spawn_holiday_refresh(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn load_config(state: State<AppState>) -> config::Config {
-    state.config.lock().unwrap().clone()
+    sync::lock(&state.config, "state.config").clone()
 }
 
 #[tauri::command]
 fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) {
     // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
     // （如未来新增的后端字段），避免整份替换把未传字段重置成默认值。
-    let existing = state.config.lock().unwrap().clone();
+    let existing = sync::lock(&state.config, "state.config").clone();
     let mut base = to_value(&existing).unwrap_or(Value::Null);
     if let Some(obj) = base.as_object_mut() {
         if let Some(incoming) = cfg.as_object() {
@@ -199,7 +200,7 @@ fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) {
             return;
         }
     };
-    *state.config.lock().unwrap() = merged.clone();
+    *sync::lock(&state.config, "state.config") = merged.clone();
     config::save(&merged);
     // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
     apply_monitor_switches(&merged);
@@ -236,7 +237,7 @@ fn refresh_tray(apph: &tauri::AppHandle, state: &AppState) {
 fn maybe_rollover_day(state: &AppState, apph: &tauri::AppHandle) {
     let today = Local::now().date_naive();
     let need_refresh = {
-        let mut last = state.last_date.lock().unwrap();
+        let mut last = sync::lock(&state.last_date, "state.last_date");
         if *last != today {
             *last = today;
             true
@@ -252,14 +253,14 @@ fn maybe_rollover_day(state: &AppState, apph: &tauri::AppHandle) {
 /// 加班锁屏检测：last_lock_timestamp 变化且开启加班、且为工作日时，计算并落盘加班记录。
 /// 原耦合在 1s 主循环里每秒轮询，现抽到低频业务线程，减少无谓的每秒锁竞争与计算。
 fn maybe_record_overtime_lock(state: &AppState) {
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = sync::lock(&state.config, "state.config").clone();
     if !cfg.overtime_enabled {
         return;
     }
     let Some(lock_ts) = lock_monitor::last_lock_timestamp() else {
         return;
     };
-    let mut seen = state.last_lock_seen.lock().unwrap();
+    let mut seen = sync::lock(&state.last_lock_seen, "state.last_lock_seen");
     if *seen == Some(lock_ts) {
         return;
     }
@@ -267,10 +268,7 @@ fn maybe_record_overtime_lock(state: &AppState) {
     drop(seen);
 
     let now = Local::now();
-    let is_workday = state
-        .holiday
-        .lock()
-        .unwrap()
+    let is_workday = sync::lock(&state.holiday, "state.holiday")
         .is_workday(now.date_naive())
         .unwrap_or_else(|| now.weekday().num_days_from_monday() < 5);
     if !is_workday {
@@ -297,7 +295,7 @@ async fn refresh_holidays(
                 fetched_at: 0,
                 days,
             };
-            let mw = current_monthly_workdays(&*state.config.lock().unwrap(), &c);
+            let mw = current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
             apply_holiday_cache(&app, c, true);
             Ok(mw)
         }
@@ -308,7 +306,7 @@ async fn refresh_holidays(
             match holiday::builtin_cache(year) {
                 Some(c) => {
                     db::debug_log(&format!("节假日：改用内置 {year} 年法定节假日表"));
-                    let mw = current_monthly_workdays(&*state.config.lock().unwrap(), &c);
+                    let mw = current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
                     apply_holiday_cache(&app, c, false);
                     Ok(mw)
                 }
@@ -374,7 +372,7 @@ fn save_overtime_record(
     let now = Local::now();
     let (y, m) = overtime::month_of(&input.date)
         .unwrap_or_else(|| (now.year(), now.month()));
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = sync::lock(&state.config, "state.config").clone();
     overtime::save_manual(input, &cfg)?;
     Ok(overtime::get_month(y, m).to_view(y, m))
 }
@@ -516,7 +514,7 @@ fn main() {
                 let year = Local::now().year();
                 if let Some(c) = holiday::load_cache(year).or_else(|| holiday::builtin_cache(year))
                 {
-                    *app.state::<AppState>().holiday.lock().unwrap() = c;
+                    *sync::lock(&app.state::<AppState>().holiday, "state.holiday") = c;
                 } else {
                     db::debug_log(&format!("节假日：无缓存且内置表未收录 {year} 年，退回周一至周五估算"));
                 }
@@ -553,7 +551,7 @@ fn main() {
 
             // 按配置初始化三个监控开关。活动监控关闭时会真正注销 Raw Input 设备
             // （而非回调里空转），故必须在 activity::start() 之前调用。
-            apply_monitor_switches(&app.state::<AppState>().config.lock().unwrap().clone());
+            apply_monitor_switches(&sync::lock(&app.state::<AppState>().config, "state.config").clone());
             trace_startup("setup: monitor switches applied");
 
             // 启动鼠标/键盘活动统计（Raw Input 旁路采集，常驻托盘即持续统计，输入法零延迟）

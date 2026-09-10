@@ -16,6 +16,7 @@
 //!
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计），跳过自身进程。
 
+use crate::sync;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -147,7 +148,7 @@ static WHITELIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// 运行时切换应用白名单（启动与保存配置时调用，立即生效）
 pub fn set_whitelist(enabled: bool, list: Vec<String>) {
     WHITELIST_ENABLED.store(enabled, Ordering::SeqCst);
-    *WHITELIST.lock().unwrap() = list;
+    *sync::lock(&WHITELIST, "app_usage::WHITELIST") = list;
 }
 
 /// 当前应用是否纳入统计：未开启白名单或名单为空 → 统计全部；否则按展示名（大小写不敏感）匹配。
@@ -155,7 +156,7 @@ fn in_whitelist(display: &str) -> bool {
     if !WHITELIST_ENABLED.load(Ordering::Relaxed) {
         return true;
     }
-    let list = WHITELIST.lock().unwrap();
+    let list = sync::lock(&WHITELIST, "app_usage::WHITELIST");
     if list.is_empty() {
         return true;
     }
@@ -264,7 +265,7 @@ fn png_data_url(png: &[u8]) -> String {
 /// 前台切换时确保图标已缓存（提取 + 落盘）。同一显示名只提取一次。
 /// （pub(crate) 供 audio_usage 复用）
 pub(crate) fn ensure_icon(display: &str, exe_path: &str) {
-    let mut cache = icon_cache().lock().unwrap();
+    let mut cache = sync::lock(icon_cache(), "app_usage::ICON_CACHE");
     if cache.contains_key(display) {
         return;
     }
@@ -282,14 +283,12 @@ pub(crate) fn ensure_icon(display: &str, exe_path: &str) {
 /// 查询图标 data URL：内存缓存 → 磁盘缓存。都没有返回 None（前端显示首字占位）。
 /// （pub(crate) 供 audio_usage 复用）
 pub(crate) fn cached_icon(display: &str) -> Option<String> {
-    if let Some(v) = icon_cache().lock().unwrap().get(display) {
+    if let Some(v) = sync::lock(icon_cache(), "app_usage::ICON_CACHE").get(display) {
         return v.clone();
     }
     if let Ok(png) = std::fs::read(icon_path(display)) {
         let url = png_data_url(&png);
-        icon_cache()
-            .lock()
-            .unwrap()
+        sync::lock(icon_cache(), "app_usage::ICON_CACHE")
             .insert(display.to_string(), Some(url.clone()));
         return Some(url);
     }
@@ -327,27 +326,25 @@ fn process_info_of(hwnd: HWND) -> Option<(String, String)> {
 /// 更新当前前台应用（全量：任何前台窗口都记录，跳过自身进程）
 fn update_cur_app(hwnd: HWND) {
     let Some((exe_path, exe_name)) = process_info_of(hwnd) else {
-        CUR.lock().unwrap().app = None;
+        sync::lock(&CUR, "app_usage::CUR").app = None;
         return;
     };
     if exe_name == SELF_EXE {
-        CUR.lock().unwrap().app = None;
+        sync::lock(&CUR, "app_usage::CUR").app = None;
         return;
     }
     let display = display_name_of(&exe_path, &exe_name);
     // 白名单过滤：开启且不在名单内 → 不纳入统计（app 置空，结算时不会累加该时段）
     if !in_whitelist(&display) {
-        CUR.lock().unwrap().app = None;
+        sync::lock(&CUR, "app_usage::CUR").app = None;
         return;
     }
     // 注意：图标不再在这里（前台切换回调，热路径）同步提取，改为在 tick() 后台线程懒提取，
     // 避免 GDI 提取 + PNG 编码 + 落盘阻塞切换识别造成卡顿。
     // 记录「显示名→exe路径」，供 summary() 懒提取覆盖 tick 未来得及提取的边界情况。
-    app_exe_map()
-        .lock()
-        .unwrap()
+    sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP")
         .insert(display.clone(), exe_path.clone());
-    CUR.lock().unwrap().app = Some(CurApp { display, exe_path });
+    sync::lock(&CUR, "app_usage::CUR").app = Some(CurApp { display, exe_path });
 }
 
 /// 前台应用切换的统一入口：**先把上一段时长结给「切走前」的应用，再记录新的前台应用**。
@@ -414,7 +411,7 @@ fn watch_thread() {
 /// 否则高频切换时每段零头都被抹掉（切 1000 次 × 0.9 秒 → 一天凭空丢 15 分钟）。
 /// 只有长时间未结算（睡眠 / 休眠）时才把起点直接推到 now，把超限部分丢弃。
 fn take_segment(now: u64) -> (Option<CurApp>, u64) {
-    let mut g = CUR.lock().unwrap();
+    let mut g = sync::lock(&CUR, "app_usage::CUR");
     let since = g.since_ms;
     if since == 0 {
         g.since_ms = now; // 首次只建立基准
@@ -635,7 +632,7 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
                 for row in rows.flatten() {
                     let app = row.0;
                     // 懒提取：若尚未缓存图标，用记录的 exe 路径补提取（GDI+PNG 一次，幂等）
-                    if let Some(exe) = app_exe_map().lock().unwrap().get(&app).cloned() {
+                    if let Some(exe) = sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP").get(&app).cloned() {
                         ensure_icon(&app, &exe);
                     }
                     let icon = if known.contains(app.as_str()) {
