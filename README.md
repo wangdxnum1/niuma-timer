@@ -22,7 +22,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Tray hover card** — optional gradient gold card shown on hover (toggle in settings); falls back to the native tooltip
 - **Configurable duration format** — `hms` (Xh Xm Xs) / `hm` (Xh Xm) / `h` (decimal hours)
 - **Single instance** — launching a second copy focuses the existing window instead
-- **Launch on boot** — toggle in settings; writes the current user's Run registry key (no admin rights), and self-heals when the install path changes
+- **Launch on boot** — toggle in settings; backed by the official `tauri-plugin-autostart` plugin (on Windows it writes the current user's Run registry key, no admin rights). The registry is the single source of truth, so disabling it in Task Manager is reflected honestly in the settings page
 - **Double-click tray to show** the main/settings window
 - **Auto holiday data** — fetches the official China holiday schedule (days off + make-up workdays) from a CDN, caches locally; offline it falls back to a built-in schedule table (2025/2026), and only to Mon–Fri for years not covered yet
 - **No runtime dependency** — the release `.exe` is self-contained (WebView2 Runtime is the only system prerequisite, pre-installed on Win10/11)
@@ -161,7 +161,7 @@ niuma-timer/
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
 │   │   ├── audio_usage.rs  # Audio-session media playback tracking
-│   │   ├── win.rs          # Win32 platform layer (RAII guards: window/hooks/COM/GDI/registry, process & icon, raw-input parsing)
+│   │   ├── win.rs          # Win32 platform layer (RAII guards: window/hooks/COM/GDI, process & icon, raw-input parsing)
 │   │   └── scheduler.rs    # Unified periodic scheduler (1s beat -> 1s/5s/10s tasks)
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri build (registers commands)
