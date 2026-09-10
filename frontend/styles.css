@@ -378,6 +378,46 @@ button:hover {
   background: #34425a;
   border-color: #5b9dff;
 }
+/* 加班明细月份切换：历史回看 */
+.month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.month-nav .mn-label {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 92px;
+  text-align: center;
+}
+.mn-btn {
+  background: #2a3446;
+  border: 1px solid #3b4558;
+  color: #cfe0ff;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.mn-btn:hover:not(:disabled) {
+  background: #34425a;
+  border-color: #5b9dff;
+}
+.mn-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mn-summary {
+  font-size: 12px;
+  color: #7fd99a;
+  text-align: center;
+  margin-bottom: 8px;
+  min-height: 16px;
+}
+
 /* 加班记录 操作列按钮 */
 .ot-op {
   white-space: nowrap;

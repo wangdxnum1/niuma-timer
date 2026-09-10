@@ -354,33 +354,40 @@ fn focus_window(app: tauri::AppHandle) {
     }
 }
 
-/// 获取当月加班记录（含预计算汇总字段）
+/// 获取指定月份的加班记录（含预计算汇总字段）。
+/// year / month 省略时取当前月——老调用方不传参也能正常工作。
 #[tauri::command]
-fn get_overtime_records() -> overtime::MonthlyOvertimeView {
+fn get_overtime_records(year: Option<i32>, month: Option<u32>) -> overtime::MonthlyOvertimeView {
     let now = Local::now();
-    overtime::get_month(now.year(), now.month()).to_view()
+    let y = year.unwrap_or_else(|| now.year());
+    let m = month.unwrap_or_else(|| now.month());
+    overtime::get_month(y, m).to_view(y, m)
 }
 
-/// 手动添加/修改某天加班记录（仅当月），返回刷新后的当月视图
+/// 手动添加/修改某天加班记录（可补录历史月份，但不能是未来日期）。
+/// 返回该记录**所属月份**的视图：补录 8 月时界面不会莫名跳回当月。
 #[tauri::command]
 fn save_overtime_record(
     state: State<AppState>,
     input: overtime::ManualOvertimeInput,
 ) -> Result<overtime::MonthlyOvertimeView, String> {
+    let now = Local::now();
+    let (y, m) = overtime::month_of(&input.date)
+        .unwrap_or_else(|| (now.year(), now.month()));
     let cfg = state.config.lock().unwrap().clone();
     overtime::save_manual(input, &cfg)?;
-    let now = Local::now();
-    Ok(overtime::get_month(now.year(), now.month()).to_view())
+    Ok(overtime::get_month(y, m).to_view(y, m))
 }
 
-/// 手动删除某天加班记录（仅当月），返回刷新后的当月视图
+/// 手动删除某天加班记录（历史月份同样可删）。返回该记录**所属月份**的视图。
 #[tauri::command]
 fn delete_overtime_record(
     date: String,
 ) -> Result<overtime::MonthlyOvertimeView, String> {
-    overtime::delete_manual(&date)?;
     let now = Local::now();
-    Ok(overtime::get_month(now.year(), now.month()).to_view())
+    let (y, m) = overtime::month_of(&date).unwrap_or_else(|| (now.year(), now.month()));
+    overtime::delete_manual(&date)?;
+    Ok(overtime::get_month(y, m).to_view(y, m))
 }
 
 /// 获取今日鼠标/键盘活动统计（逐小时 + 汇总 + 高频按键）

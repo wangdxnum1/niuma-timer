@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-10.v19";
+const FE_VER = "2026-09-10.v20";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -366,28 +366,77 @@ function applyOvertimeVisibility(enabled) {
   if (card) card.style.display = enabled ? "" : "none";
 }
 
+// 加班明细当前查看的年月；null = 跟随当月
+let otView = null;
+
 // 加班记录加载与渲染
 async function loadOvertime() {
   // 加班追踪关闭时不拉取、不展示（历史记录仍保留在 SQLite，开关不影响数据）
   if (!$("overtime_enabled").checked) return;
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  const vy = otView ? otView.year : curY;
+  const vm = otView ? otView.month : curM;
   try {
-    const ot = await invoke("get_overtime_records");
-    renderOt(ot);
+    const ot = await invoke("get_overtime_records", { year: vy, month: vm });
+    renderOtTable(ot);
+    // 主界面「加班总览」固定反映当月：翻到历史月份时要单独拉当月，
+    // 否则主界面会显示 8 月的合计却标着「本月合计」，属于数据错位。
+    if (vy === curY && vm === curM) {
+      renderOtHome(ot);
+    } else {
+      const home = await invoke("get_overtime_records", { year: curY, month: curM });
+      renderOtHome(home);
+    }
   } catch (e) {
     console.error("loadOvertime error:", e);
   }
 }
 
-function renderOt(ot) {
+// 翻月：delta = -1 上一月 / +1 下一月
+function shiftOtMonth(delta) {
   const now = new Date();
-  $("otMonthTitle").textContent =
-    now.getFullYear() + "年" + (now.getMonth() + 1) + "月 加班明细";
+  const base = otView || { year: now.getFullYear(), month: now.getMonth() + 1 };
+  let y = base.year;
+  let m = base.month + delta;
+  if (m < 1) {
+    m = 12;
+    y -= 1;
+  } else if (m > 12) {
+    m = 1;
+    y += 1;
+  }
+  otView = { year: y, month: m };
+  loadOvertime();
+}
+
+// 主界面「加班总览」卡片：只吃当月数据
+function renderOtHome(ot) {
   $("ot_total").textContent = "¥" + ot.total_all.toFixed(0);
   $("ot_hours").textContent = ot.total_hours.toFixed(1) + "h";
   $("ot_days").textContent = ot.days;
   $("ot_meal_total").textContent = "¥" + ot.total_meal.toFixed(0);
   $("ot_avg").textContent =
     ot.days > 0 ? "¥" + (ot.total_all / ot.days).toFixed(0) : "¥0";
+}
+
+// 加班明细页：表格 + 所选月份小计，跟随 otView
+function renderOtTable(ot) {
+  $("otMonthLabel").textContent = ot.year + " 年 " + ot.month + " 月";
+  const sum = $("otMonthSummary");
+  if (sum) {
+    sum.textContent = ot.records.length
+      ? "合计 ¥" + ot.total_all.toFixed(0) +
+        " · " + ot.total_hours.toFixed(1) + " 小时 · " + ot.days + " 天"
+      : "本月暂无加班记录";
+  }
+  // 下一月按钮翻到当前月为止：未来没有加班记录
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  $("otNextMonth").disabled =
+    ot.year > curY || (ot.year === curY && ot.month >= curM);
   const tbody = $("ot_tbody");
   tbody.innerHTML = "";
   if (ot.records.length === 0) {
@@ -481,20 +530,24 @@ async function submitOtForm() {
     showOtMsg("请填写日期和下班时间");
     return;
   }
-  // 前端先把关：只能当月
-  const parts = date.split("-");
-  const now = new Date();
-  if (+parts[0] !== now.getFullYear() || +parts[1] - 1 !== now.getMonth()) {
-    showOtMsg("只能添加/修改当月的数据");
+  // 前端先把关：不能是未来日期。历史月份允许补录——界面已能切月查看，
+  // 再把写入锁死在当月就没法补记忘掉的加班了。
+  const picked = new Date(date + "T00:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (picked > today) {
+    showOtMsg("不能添加未来日期的加班记录");
     return;
   }
   try {
     const view = await invoke("save_overtime_record", {
       input: { date, lock_time: lock, ot_start: start },
     });
-    renderOt(view);
+    // 跟到记录所属月份：补录 8 月时视图停在 8 月，不会莫名跳回当月
+    otView = { year: view.year, month: view.month };
     hideOtForm();
     showToast("已保存加班记录", "ok");
+    loadOvertime();
   } catch (e) {
     showOtMsg("保存失败：" + e);
   }
@@ -525,7 +578,8 @@ async function deleteOtRecord(date) {
   if (!ok) return;
   try {
     const view = await invoke("delete_overtime_record", { date });
-    renderOt(view);
+    otView = { year: view.year, month: view.month };
+    loadOvertime();
     showToast("已删除", "ok");
   } catch (e) {
     showToast("删除失败：" + e, "err");
@@ -923,6 +977,8 @@ $("launch_on_boot").addEventListener("change", async () => {
 $("refreshBtn").addEventListener("click", refresh);
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);
+$("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
+$("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
 $("otfSave").addEventListener("click", submitOtForm);
 $("otfCancel").addEventListener("click", hideOtForm);
 // 主界面 ↔ 加班明细二级页面切换
@@ -945,6 +1001,8 @@ function repaintCurrentView() {
   else loadAppUsage();
   if (viewData.audio) paintAudioUsage();
   else loadAudioUsage();
+  // 加班明细是 10 秒轮询，切进去立即拉一次，免得最多等 10 秒才出内容
+  if (curView === "viewOt") loadOvertime();
 }
 $("otDetailBtn").addEventListener("click", () => showView("viewOt"));
 $("otBackBtn").addEventListener("click", () => showView("viewMain"));

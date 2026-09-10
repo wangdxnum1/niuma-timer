@@ -44,6 +44,10 @@ pub struct MonthlyOvertime {
 /// 月度加班汇总视图（含预计算汇总字段，序列化返回前端）
 #[derive(Clone, Debug, Serialize)]
 pub struct MonthlyOvertimeView {
+    /// 这份视图对应的年份（前端标题直接用它，避免前后端各算一次导致不一致）
+    pub year: i32,
+    /// 这份视图对应的月份（1-12）
+    pub month: u32,
     pub records: Vec<OvertimeRecord>,
     pub total_hours: f64,
     pub total_fee: f64,
@@ -69,9 +73,12 @@ impl MonthlyOvertime {
         self.records.len()
     }
 
-    /// 转为前端响应视图（records + 预计算汇总）
-    pub fn to_view(&self) -> MonthlyOvertimeView {
+    /// 转为前端响应视图（records + 预计算汇总）。
+    /// year/month 由调用方传入：MonthlyOvertime 只存 records，自己不知道是哪个月。
+    pub fn to_view(&self, year: i32, month: u32) -> MonthlyOvertimeView {
         MonthlyOvertimeView {
+            year,
+            month,
             total_hours: self.total_hours(),
             total_fee: self.total_fee(),
             total_meal: self.total_meal(),
@@ -203,13 +210,20 @@ fn parse_lock_datetime(date: &str, time: &str) -> Option<DateTime<Local>> {
 }
 
 /// 判断给定日期字符串是否属于当前月份
-pub fn is_current_month(date: &str) -> bool {
-    let d = match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    let now = Local::now();
-    d.year() == now.year() && d.month() == now.month()
+/// 从 "YYYY-MM-DD" 取 (年, 月)；格式错误返回 None
+pub fn month_of(date: &str) -> Option<(i32, u32)> {
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    Some((d.year(), d.month()))
+}
+
+/// 日期是否晚于今天。加班是既成事实，不允许补录未来日期；
+/// 但允许补录/修正任意历史月份——界面已支持切月，再把写入锁死在当月没有意义。
+/// 日期解析不了时也返回 true（当非法日期拒绝）。
+fn is_future(date: &str) -> bool {
+    match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+        Ok(d) => d > Local::now().date_naive(),
+        Err(_) => true,
+    }
 }
 
 /// 手动添加/修改某天加班记录（按日期 upsert）。
@@ -220,8 +234,8 @@ pub fn save_manual(
 ) -> Result<OvertimeRecord, String> {
     let date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
-    if !is_current_month(&input.date) {
-        return Err("只能添加或修改当月的数据".to_string());
+    if is_future(&input.date) {
+        return Err("不能添加未来日期的加班记录".to_string());
     }
     // 周末加班受开关约束：手动录入周末且未开启开关时给出明确提示
     if !cfg.weekend_overtime && matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
@@ -260,8 +274,9 @@ pub fn save_manual(
 
 /// 手动删除某天加班记录。仅允许当前月份。
 pub fn delete_manual(date: &str) -> Result<(), String> {
-    if !is_current_month(date) {
-        return Err("只能删除当月的数据".to_string());
+    // 历史月份的记录同样允许删除（界面可切月查看），只挡未来日期
+    if is_future(date) {
+        return Err("不能删除未来日期的记录".to_string());
     }
     NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
