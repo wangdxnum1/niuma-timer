@@ -310,6 +310,9 @@ pub struct ManualOvertimeInput {
     /// 可选：覆盖加班起算时间 "HH:MM"；None 用配置默认值
     pub ot_start: Option<String>,
     /// 下班时间是否在次日凌晨（熬过午夜）。true 时 lock_time 按 +24h 计。
+    ///
+    /// 前端 invoke 的嵌套对象**不会**被 Tauri 转成 camelCase，键必须是
+    /// `cross_midnight`。写成 `crossMidnight` 会命中 `#[serde(default)]` 变成 false。
     #[serde(default)]
     pub cross_midnight: bool,
 }
@@ -399,7 +402,7 @@ pub fn save_manual(
     )
     .ok_or_else(|| "无法生成加班记录".to_string())?;
     // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
-    upsert_manual(rec.clone());
+    upsert_manual(rec.clone())?;
     Ok(rec)
 }
 
@@ -472,17 +475,34 @@ fn upsert_into(g: &Connection, record: &OvertimeRecord, force: bool) -> rusqlite
 ///
 /// 关键保护：只覆盖同为自动来源的记录。用户手动改过某天（`source = 1`）之后，
 /// 当晚再次锁屏产生的自动数据不会把手改值顶掉——改之前这个动作是静默发生的。
-pub fn upsert_auto(record: OvertimeRecord) {
+///
+/// 写入失败返回 Err：调用方不得把这次锁屏标成已处理，否则下拍不会重试。
+pub fn upsert_auto(record: OvertimeRecord) -> Result<(), String> {
     let mut rec = record;
     rec.source = SOURCE_AUTO; // 来源由路径决定，不信任调用方传入的值
-    let _ = crate::db::with_db(|g| upsert_into(g, &rec, false));
+    crate::db::with_db(|g| upsert_into(g, &rec, false))
+        .map_err(|e| format!("加班记录写入失败: {e}"))
 }
 
 /// **手动**路径 upsert（加班明细页增删改）。手改是用户明确意图，优先级最高，无条件覆盖。
-pub fn upsert_manual(record: OvertimeRecord) {
+pub fn upsert_manual(record: OvertimeRecord) -> Result<(), String> {
     let mut rec = record;
     rec.source = SOURCE_MANUAL;
-    let _ = crate::db::with_db(|g| upsert_into(g, &rec, true));
+    crate::db::with_db(|g| upsert_into(g, &rec, true))
+        .map_err(|e| format!("加班记录写入失败: {e}"))
+}
+
+/// 这次锁屏事件能否标成已处理（写入 `last_lock_seen`）。
+///
+/// - `None`：无需落盘（无加班 / 休息日开关关闭）——已处理
+/// - `Some(Ok)`：写入成功——已处理
+/// - `Some(Err)`：写入失败——**不**消费时间戳，下拍重试
+pub(crate) fn should_mark_lock_seen(persist: Option<Result<(), String>>) -> bool {
+    match persist {
+        None => true,
+        Some(Ok(())) => true,
+        Some(Err(_)) => false,
+    }
 }
 
 /// 获取指定月份的加班记录（SQL 按日期前缀过滤，历史月与当月同表，无需归档）。
@@ -867,6 +887,26 @@ mod tests {
         assert_eq!(r.lock_time, "01:30");
     }
 
+    /// 嵌套 IPC 对象不转 camelCase：`crossMidnight` 被 serde default 成 false。
+    /// 前端必须发 `cross_midnight`（见 scripts/test_ot_input.js）。
+    #[test]
+    fn manual_input_nested_keys_are_snake_case() {
+        let ok: ManualOvertimeInput = serde_json::from_str(
+            r#"{"date":"2026-09-11","lock_time":"01:30","ot_start":null,"cross_midnight":true}"#,
+        )
+        .expect("snake_case 应能反序列化");
+        assert!(ok.cross_midnight);
+
+        let camel: ManualOvertimeInput = serde_json::from_str(
+            r#"{"date":"2026-09-11","lock_time":"01:30","crossMidnight":true}"#,
+        )
+        .expect("未知字段默认忽略");
+        assert!(
+            !camel.cross_midnight,
+            "camelCase 不得被当成 cross_midnight，否则前端契约测试会失效"
+        );
+    }
+
     /// 手动补录忘勾「次日」时给明确报错，而不是静默生成一条离谱的记录
     #[test]
     fn save_manual_without_cross_flag_reports_error() {
@@ -950,6 +990,26 @@ mod tests {
         assert_eq!(got.lock_time, "21:30", "手改记录被自动记录覆盖了");
         assert!(approx(got.valid_hours, 3.5));
         assert_eq!(got.source, SOURCE_MANUAL);
+    }
+
+    #[test]
+    fn lock_write_failure_is_not_consumed() {
+        assert!(should_mark_lock_seen(None), "无需落盘也应标已处理，避免每 5 秒空转");
+        assert!(should_mark_lock_seen(Some(Ok(()))));
+        assert!(
+            !should_mark_lock_seen(Some(Err("disk full".into()))),
+            "写入失败不得消费锁屏时间戳，否则当天加班永不重试"
+        );
+    }
+
+    #[test]
+    fn upsert_into_fails_without_table() {
+        let db = Connection::open_in_memory().unwrap();
+        let rec = rec_at("2026-08-19", "20:00", 2.0);
+        assert!(
+            upsert_into(&db, &rec, true).is_err(),
+            "表不存在时应把 SQL 错误交给调用方，不能 let _ 吞掉"
+        );
     }
 
     #[test]

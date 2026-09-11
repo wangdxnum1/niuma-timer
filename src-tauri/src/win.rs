@@ -20,7 +20,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
     BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
@@ -85,7 +85,7 @@ static RAW_CLASS_READY: AtomicBool = AtomicBool::new(false);
 /// 注册（仅一次）一个 message-only 窗口类，随后每次「启用」都基于它创建窗口。
 ///
 fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
-    if RAW_CLASS_READY.swap(true, Ordering::SeqCst) {
+    if RAW_CLASS_READY.load(Ordering::SeqCst) {
         return;
     }
     let wc = WNDCLASSW {
@@ -95,7 +95,10 @@ fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
         cbWndExtra: 0,
         hInstance: match unsafe { GetModuleHandleW(None) } {
             Ok(h) => h.into(),
-            Err(_) => return,
+            Err(e) => {
+                crate::db::debug_log(&format!("[win] GetModuleHandleW 失败，Raw Input 窗口类未注册: {e}"));
+                return;
+            }
         },
         hIcon: Default::default(),
         hCursor: Default::default(),
@@ -103,9 +106,16 @@ fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
         lpszMenuName: PCWSTR::null(),
         lpszClassName: PCWSTR(class_name.as_ptr()),
     };
-    // RegisterClassW 返回类原子（0 表示失败）。本进程类名唯一，仅「已注册」这一种
-    // 失败需要忽略；真实失败会在后续 CreateWindowExW 处暴露。不区分 GetLastError。
-    let _ = unsafe { RegisterClassW(&wc) };
+    // RegisterClassW 返回类原子（0 表示失败）。类名已被本进程注册过算成功。
+    let atom = unsafe { RegisterClassW(&wc) };
+    if atom == 0 {
+        let err = unsafe { GetLastError() };
+        if err != ERROR_CLASS_ALREADY_EXISTS {
+            crate::db::debug_log(&format!("[win] RegisterClassW 失败: {err:?}"));
+            return;
+        }
+    }
+    RAW_CLASS_READY.store(true, Ordering::SeqCst);
 }
 
 /// message-only 窗口的 RAII 守卫：Drop 时自动注销 Raw Input 并销毁窗口。

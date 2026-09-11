@@ -273,9 +273,15 @@ fn expand_year(overrides: &HashMap<NaiveDate, bool>, year: i32) -> HashMap<Naive
                 let wd = dt.weekday().num_days_from_monday(); // 0=Mon
                 // 基础：周一到周五=工作日(0)，周六日=周末(1)
                 let mut t: u8 = if wd < 5 { 0 } else { 1 };
-                // 覆盖：法定节假日(3) 或 补班(2)
+                // 覆盖：补班(2)；放假日里工作日才是法定节假日(3)，周末放假仍是周末(1)。
+                // holiday-cn 不区分「法定」与「调休连休」——把周六日也标成 3，
+                // 会让 overtime_rate_holiday（劳动法 300%）误套到普通周末。
                 if let Some(is_off) = overrides.get(&dt) {
-                    t = if *is_off { 3 } else { 2 };
+                    t = if *is_off {
+                        if wd < 5 { 3 } else { 1 }
+                    } else {
+                        2
+                    };
                 }
                 map.insert(dt, t);
             }
@@ -304,16 +310,26 @@ mod tests {
         assert_eq!(c25.month_workdays(2025, 10), Some(18));
     }
 
-    /// 放假区间内的日子标记为法定节假日(3)，调休补班日标记为补班(2)
+    /// 放假区间内的**工作日**标记为法定节假日(3)，调休补班日标记为补班(2)
     #[test]
     fn builtin_spring_festival_and_makeup_day() {
         let c = builtin_cache(2026).unwrap();
-        assert_eq!(c.days[&d("2026-02-17")], 3); // 正月初一
+        assert_eq!(c.days[&d("2026-02-17")], 3); // 正月初一（周二）
         assert_eq!(c.is_workday(d("2026-02-17")), Some(false));
         assert_eq!(c.days[&d("2026-02-14")], 2); // 调休补班（周六）
         assert_eq!(c.is_workday(d("2026-02-14")), Some(true));
         assert_eq!(c.days[&d("2026-02-28")], 2); // 调休补班（周六）
         assert_eq!(c.is_workday(d("2026-02-28")), Some(true));
+    }
+
+    /// 国庆连休里的周六日仍是周末(1)，不得标成法定(3)——否则 300% 费率会误套周末。
+    #[test]
+    fn weekend_inside_holiday_range_stays_weekend() {
+        let c = builtin_cache(2026).unwrap();
+        assert_eq!(c.days[&d("2026-10-01")], 3); // 周四 国庆
+        assert_eq!(c.days[&d("2026-10-03")], 1); // 周六
+        assert_eq!(c.days[&d("2026-10-04")], 1); // 周日
+        assert_eq!(c.month_workdays(2026, 10), Some(18));
     }
 
     /// 未收录的年份返回 None，调用方据此退回 weekday_count

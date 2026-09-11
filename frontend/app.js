@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v1bdffe92";
+const FE_VER = "v8b7c5f49";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -180,21 +180,25 @@ function addWhitelistItem() {
   saveNow();
 }
 
+function currentYearMonth() {
+  const d = new Date();
+  const m = d.getMonth() + 1;
+  return d.getFullYear() + "-" + (m < 10 ? "0" + m : "" + m);
+}
+
 function readCfg() {
-  return {
-    monthly_salary: parseFloat($("monthly_salary").value) || 0,
+  const salaryRaw = $("monthly_salary").value.trim();
+  const paydayRaw = $("payday").value.trim();
+  const overrideRaw = $("workdays_override").value.trim();
+  const cfg = {
     am_start: $("am_start").value,
     am_end: $("am_end").value,
     pm_start: $("pm_start").value,
     pm_end: $("pm_end").value,
-    payday: parseInt($("payday").value) || 1,
     duration_format: $("duration_format").value || "hms",
     tray_hover_card: $("tray_hover_card").checked,
     tagline_style: $("tagline_style").value || "dynamic",
     tagline_custom: $("tagline_custom").value || "",
-    workdays_override: $("workdays_override").value
-      ? parseInt($("workdays_override").value)
-      : null,
     overtime_enabled: $("overtime_enabled").checked,
     overtime_start: $("overtime_start").value || null,
     overtime_rate: parseFloat($("overtime_rate").value) || 0,
@@ -211,6 +215,17 @@ function readCfg() {
     app_whitelist: readWhitelist(),
     retention_days: parseInt($("retention_days").value) || 0,
   };
+  // 月薪/发薪日留空：不传该字段，后端合并时保留旧值，避免误存 0/1，也不挡住其它开关保存
+  if (salaryRaw !== "") cfg.monthly_salary = parseFloat(salaryRaw) || 0;
+  if (paydayRaw !== "") cfg.payday = parseInt(paydayRaw) || 1;
+  if (overrideRaw) {
+    cfg.workdays_override = parseInt(overrideRaw);
+    cfg.workdays_override_for = currentYearMonth();
+  } else {
+    cfg.workdays_override = null;
+    cfg.workdays_override_for = null;
+  }
+  return cfg;
 }
 
 // 数字输入：留空返回 null（表示沿用上一级费率），有值才解析
@@ -233,10 +248,6 @@ function saveNow() {
 }
 
 async function doSave() {
-  // 月薪/发薪日为空时（用户清空了输入）不保存，保留旧值，避免误存 0/1
-  if ($("monthly_salary").value.trim() === "" || $("payday").value.trim() === "") {
-    return;
-  }
   const cfg = readCfg();
   try {
     await invoke("save_config", { cfg });
@@ -553,8 +564,9 @@ async function submitOtForm() {
   const date = $("otf_date").value;
   const lock = $("otf_lock").value;
   const start = $("otf_start").value || null;
-  // 后端字段是 cross_midnight（snake_case），Tauri 命令参数在 JS 侧必须写 camelCase
-  const crossMidnight = $("otf_cross").checked;
+  // 嵌套 input 按 serde 原样反序列化（只有顶层命令参数才转 camelCase），
+  // 字段必须与 ManualOvertimeInput 一致：写成 crossMidnight 会被丢掉，永远是 false。
+  const cross_midnight = $("otf_cross").checked;
   if (!date || !lock) {
     showOtMsg("请填写日期和下班时间");
     return;
@@ -570,7 +582,7 @@ async function submitOtForm() {
   }
   try {
     const view = await invoke("save_overtime_record", {
-      input: { date, lock_time: lock, ot_start: start, crossMidnight },
+      input: { date, lock_time: lock, ot_start: start, cross_midnight },
     });
     // 跟到记录所属月份：补录 8 月时视图停在 8 月，不会莫名跳回当月
     otView = { year: view.year, month: view.month };
@@ -631,11 +643,21 @@ function escapeHtml(s) {
   }[c]));
 }
 
+function bucketEvents(b) {
+  if (!b) return 0;
+  return (b.moves || 0) + (b.left || 0) + (b.dbl || 0) + (b.right || 0) +
+    (b.wheel || 0) + (b.mid || 0) + (b.xbtn || 0) + (b.keys || 0);
+}
+
 // 某小时桶的简要描述（tooltip 用）
 function fmtBucket(b, i) {
   const parts = [];
   if (b.moves) parts.push("移动 " + b.moves.toLocaleString());
-  if (b.left) parts.push("点击 " + b.left.toLocaleString());
+  if (b.left) parts.push("左键 " + b.left.toLocaleString());
+  if (b.dbl) parts.push("双击 " + b.dbl.toLocaleString());
+  if (b.right) parts.push("右键 " + b.right.toLocaleString());
+  if (b.mid) parts.push("中键 " + b.mid.toLocaleString());
+  if (b.xbtn) parts.push("侧键 " + b.xbtn.toLocaleString());
   if (b.keys) parts.push("按键 " + b.keys.toLocaleString());
   if (b.wheel) parts.push("滚轮 " + b.wheel + " 次");
   return i + "时 · " + (parts.length ? parts.join("、") : "无活动");
@@ -793,15 +815,10 @@ function renderChart(hourly, isToday = true) {
   const el = $("actChart");
   if (!el) return;
   const now = isToday ? new Date().getHours() : -1;
-  const max = Math.max(
-    1,
-    ...hourly.map((b) => (b.moves || 0) + (b.left || 0) + (b.keys || 0))
-  );
+  const max = Math.max(1, ...hourly.map((b) => bucketEvents(b)));
   el.innerHTML = "";
   hourly.forEach((b, i) => {
-    const v =
-      (b.moves || 0) + (b.left || 0) + (b.dbl || 0) + (b.right || 0) +
-      (b.wheel || 0) + (b.mid || 0) + (b.xbtn || 0) + (b.keys || 0);
+    const v = bucketEvents(b);
     const hgt = v > 0 ? Math.max(5, Math.round((v / max) * 100)) : 2;
     const d = document.createElement("div");
     d.className = "bar" + (v > 0 ? "" : " empty") + (i === now ? " cur" : "");
@@ -1058,6 +1075,7 @@ $("tagline_style").addEventListener("change", () => {
 $("tagline_custom").addEventListener("input", () => {
   if (taglineStyle() === "custom" && lastStatus) renderTagline(lastStatus);
 });
+$("tagline_custom").addEventListener("blur", saveIfChanged);
 // 开关：立即保存
 $("tray_hover_card").addEventListener("change", saveNow);
 // 加班设置：输入框失焦保存，开关立即保存
@@ -1239,6 +1257,9 @@ $("otfCancel").addEventListener("click", hideOtForm);
 function showView(id) {
   const target = $(id);
   if (!target) return; // 目标视图不存在则不操作，避免误隐藏所有视图
+  if (curView === "viewSettings" && id !== "viewSettings") {
+    saveIfChanged(); // 自定义副标题等可能还没失焦
+  }
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
   target.classList.remove("hidden");
   curView = id;
@@ -1318,7 +1339,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=1bdffe92 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=8b7c5f49 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

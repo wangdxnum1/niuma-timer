@@ -8,10 +8,11 @@
 use crate::sync;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use chrono::Local;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
@@ -45,7 +46,30 @@ pub fn last_lock_timestamp() -> Option<i64> {
 
 /// 启动锁屏监听线程（幂等，重复调用仅首次生效）
 pub fn start() {
-    std::thread::spawn(|| unsafe {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let mut delay = Duration::from_secs(1);
+        loop {
+            match try_run() {
+                Ok(()) => return,
+                Err(e) => {
+                    crate::db::debug_log(&format!(
+                        "[lock_monitor] {e}，{}s 后重试",
+                        delay.as_secs()
+                    ));
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_secs(60));
+                }
+            }
+        }
+    });
+}
+
+fn try_run() -> Result<(), String> {
+    unsafe {
         let class_name = w!("NiumaLockMonitor");
 
         let wc = WNDCLASSW {
@@ -56,7 +80,10 @@ pub fn start() {
 
         let atom = RegisterClassW(&wc);
         if atom == 0 {
-            return;
+            let err = GetLastError();
+            if err != ERROR_CLASS_ALREADY_EXISTS {
+                return Err(format!("RegisterClassW 失败: {err:?}"));
+            }
         }
 
         let hwnd = CreateWindowExW(
@@ -66,17 +93,15 @@ pub fn start() {
             WINDOW_STYLE::default(),
             0, 0, 0, 0,
             None, None, None, None,
-        );
+        )
+        .map_err(|e| format!("CreateWindowExW 失败: {e}"))?;
 
-        let hwnd = match hwnd {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+        WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION)
+            .map_err(|e| format!("WTSRegisterSessionNotification 失败: {e}"))?;
 
         crate::win::run_message_loop();
-    });
+        Ok(())
+    }
 }
 
 /// 窗口过程：接收 WM_WTSSESSION_CHANGE 消息

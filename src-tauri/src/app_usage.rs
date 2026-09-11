@@ -264,6 +264,9 @@ fn png_data_url(png: &[u8]) -> String {
 
 /// 前台切换时确保图标已缓存（提取 + 落盘）。同一显示名只提取一次。
 /// （pub(crate) 供 audio_usage 复用）
+///
+/// **禁止在 `with_db` 回调里调用**：持 DB 锁再拿 ICON_CACHE，会与
+/// `settle()`（ICON_CACHE → DB）构成 ABBA 死锁。
 pub(crate) fn ensure_icon(display: &str, exe_path: &str) {
     let mut cache = sync::lock(icon_cache(), "app_usage::ICON_CACHE");
     if cache.contains_key(display) {
@@ -282,6 +285,9 @@ pub(crate) fn ensure_icon(display: &str, exe_path: &str) {
 
 /// 查询图标 data URL：内存缓存 → 磁盘缓存。都没有返回 None（前端显示首字占位）。
 /// （pub(crate) 供 audio_usage 复用）
+///
+/// **禁止在 `with_db` 回调里调用**（含 [`ensure_icon`]）：调度器 tick 的
+/// `settle()` 是 ICON_CACHE → DB，IPC summary 若反过来就会 ABBA 死锁。
 pub(crate) fn cached_icon(display: &str) -> Option<String> {
     if let Some(v) = sync::lock(icon_cache(), "app_usage::ICON_CACHE").get(display) {
         return v.clone();
@@ -293,6 +299,20 @@ pub(crate) fn cached_icon(display: &str) -> Option<String> {
         return Some(url);
     }
     None
+}
+
+/// 在 DB 锁外补图标。`known=true` 时不回传（前端已有缓存）。
+pub(crate) fn icon_for(display: &str, exe_path: Option<&str>, known: bool) -> Option<String> {
+    if let Some(exe) = exe_path {
+        if !exe.is_empty() {
+            ensure_icon(display, exe);
+        }
+    }
+    if known {
+        None
+    } else {
+        cached_icon(display)
+    }
 }
 
 /// 提取 exe 第一个图标 → PNG 字节。无图标资源 / 失败返回 None。
@@ -438,8 +458,9 @@ fn take_segment(now: u64) -> (Option<CurApp>, u64) {
 /// upsert 几十微秒、不做 fsync，而 Windows 对事件回调的容忍在数百毫秒级，
 /// 即便疯狂切窗口也不会触发系统弃用回调，故不必为此再引入一层队列。
 fn settle(now_mono: u64, with_icon: bool) {
-    // 段已取出、段起点已推进：下面任何一道门控命中都只是「丢弃这一段」，
-    // 不会造成基准滞留（解锁 / 重开监控后从当前时刻起算，无跳变）。
+    // 写库失败时要还原段起点，所以先记下推进前的值。
+    // 门控丢弃（锁屏 / 停用 / 挂机）故意不还原——那些秒本来就不该记。
+    let old_since = sync::lock(&CUR, "app_usage::CUR").since_ms;
     let (app, secs) = take_segment(now_mono);
     if secs == 0 {
         return;
@@ -447,48 +468,47 @@ fn settle(now_mono: u64, with_icon: bool) {
     let Some(cur) = app else {
         return; // 无前台 / 自身进程 / 不在白名单内
     };
-    // 锁屏离开期间不统计应用使用时间
     if crate::lock_monitor::is_away() {
         return;
     }
-    // 关闭期间不累计
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    // 挂机判定：距最后一次输入超过阈值 → 整段不算。
-    // 这里必须用墙钟 `now_ms()`：`activity::last_input_ms()` 返回的也是墙钟毫秒，
-    // 只有同域相减才有意义（段时长已改用单调时钟，两者不可混用）。
     let idle = now_ms().saturating_sub(crate::activity::last_input_ms());
     if idle > IDLE_THRESHOLD_MS {
         return;
     }
     if with_icon {
-        // 懒提取当前应用图标（后台线程，非热路径）：首次命中时 GDI+PNG 一次，之后走缓存
         ensure_icon(&cur.display, &cur.exe_path);
     }
-    // 本段覆盖的墙钟区间：时长 `secs` 取自单调时钟（准确），结束时刻取结算瞬间的墙钟。
-    // 段长恰为 secs 秒（不足 1 秒的零头留给下一段），故按 [end - secs*1000, end) 还原。
-    // 注意：零头会让整段位置有 <1 秒的偏移，仅影响边界处 1 秒的归属，可接受——
-    // 相比旧行为「整段（最长 60 秒）被吞并到边界后的桶」，误差小了两个数量级。
     let end_wall = now_ms();
     let start_wall = end_wall.saturating_sub(secs.saturating_mul(1000));
-    // 按整点 / 跨天边界切分后分桶记账，避免整段被吞并到结算时刻所在的那个桶（A5）。
     let parts = split_by_hour(start_wall, end_wall, secs);
-    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
-        for (date, hour, s) in parts {
-            g.execute(
-                "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-                params![date, cur.display, s],
-            )?;
-            g.execute(
-                "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-                params![date, hour, cur.display, s],
-            )?;
-        }
-        Ok(())
-    });
+    if crate::db::with_db(|g| write_usage_parts(g, &cur.display, &parts)).is_err() {
+        sync::lock(&CUR, "app_usage::CUR").since_ms = old_since;
+    }
+}
+
+/// 日表 + 小时表同一事务：任一条失败整体回滚，避免「日累计已加、小时桶没有」。
+fn write_usage_parts(
+    g: &mut rusqlite::Connection,
+    display: &str,
+    parts: &[(String, i64, i64)],
+) -> rusqlite::Result<()> {
+    let tx = g.transaction()?;
+    for (date, hour, s) in parts {
+        tx.execute(
+            "INSERT INTO app_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+            params![date, display, s],
+        )?;
+        tx.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+            params![date, hour, display, s],
+        )?;
+    }
+    tx.commit()
 }
 
 /// 把一段墙钟区间按「整点（含跨天）」边界切分，供落库时分桶记账。
@@ -621,7 +641,8 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
     };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
     // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
-    let (apps, hourly) = crate::db::with_db(|g| {
+    // 图标提取必须在 DB 锁外：settle() 是 ICON_CACHE → DB，这里若反过来会 ABBA 死锁。
+    let (rows, hourly) = crate::db::with_db(|g| {
         let mut apps = Vec::new();
         if let Ok(mut stmt) = g.prepare(
             "SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC",
@@ -630,21 +651,7 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             }) {
                 for row in rows.flatten() {
-                    let app = row.0;
-                    // 懒提取：若尚未缓存图标，用记录的 exe 路径补提取（GDI+PNG 一次，幂等）
-                    if let Some(exe) = sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP").get(&app).cloned() {
-                        ensure_icon(&app, &exe);
-                    }
-                    let icon = if known.contains(app.as_str()) {
-                        None // 前端已有，本次不再回传
-                    } else {
-                        cached_icon(&app)
-                    };
-                    apps.push(AppUsageItem {
-                        app,
-                        seconds: row.1,
-                        icon,
-                    });
+                    apps.push(row);
                 }
             }
         }
@@ -667,6 +674,20 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
         Ok((apps, hourly))
     })
     .unwrap_or_else(|_| (Vec::new(), vec![0i64; 24]));
+
+    let apps = rows
+        .into_iter()
+        .map(|(app, seconds)| {
+            let exe = sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP")
+                .get(&app)
+                .cloned();
+            AppUsageItem {
+                icon: icon_for(&app, exe.as_deref(), known.contains(app.as_str())),
+                app,
+                seconds,
+            }
+        })
+        .collect();
 
     AppUsageSummary {
         date,
@@ -869,5 +890,18 @@ mod tests {
             let sum: i64 = parts.iter().map(|p| p.2).sum();
             assert_eq!(sum, secs as i64, "切分后总秒数必须守恒: {parts:?}");
         }
+    }
+
+    /// 小时表缺失时整笔回滚：日表不得留下半截秒数。
+    #[test]
+    fn write_usage_parts_rolls_back_when_hourly_table_missing() {
+        let mut c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::CREATE_APP_USAGE).unwrap();
+        let parts = vec![("2026-09-11".into(), 10i64, 5i64)];
+        assert!(write_usage_parts(&mut c, "微信", &parts).is_err());
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM app_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "事务回滚后日表应为空");
     }
 }

@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -18,6 +18,10 @@ pub struct Config {
     pub pm_end: String,
     /// 手动覆盖当月实际上班天数；None = 用自动计算
     pub workdays_override: Option<u32>,
+    /// 覆盖值所属年月 `"YYYY-MM"`。与 `workdays_override` 成对：换月后自动失效，
+    /// 避免 10 月填的 18 一直当 11 月的分母。旧配置缺此字段时，首次加载会戳成当前月。
+    #[serde(default)]
+    pub workdays_override_for: Option<String>,
     /// 发薪日（每月几号），用于距发薪日倒计时
     pub payday: u32,
     /// 时长显示格式：hms=几小时几分几秒（默认） hm=几小时几分 h=小数小时
@@ -133,6 +137,7 @@ impl Default for Config {
             pm_start: "13:00".into(),
             pm_end: "18:00".into(),
             workdays_override: None,
+            workdays_override_for: None,
             payday: 10,
             duration_format: "hms".into(),
             tray_hover_card: true,
@@ -173,7 +178,10 @@ fn config_path() -> PathBuf {
 pub fn load() -> Config {
     let path = config_path();
     if let Ok(s) = fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str::<Config>(&s) {
+        if let Ok(mut cfg) = serde_json::from_str::<Config>(&s) {
+            if stamp_override_month(&mut cfg) {
+                save(&cfg);
+            }
             return cfg;
         }
         // 解析失败：原文件损坏，先备份再回退默认
@@ -207,5 +215,88 @@ pub fn save(cfg: &Config) {
             // rename 失败（如跨卷）：退回直接覆盖写
             let _ = fs::write(config_path(), &s);
         }
+    }
+}
+
+/// 把前端传来的部分字段合并进现有配置。失败时返回 Err，调用方不得假装保存成功。
+pub fn merge_from_value(existing: &Config, incoming: &serde_json::Value) -> Result<Config, String> {
+    let mut base = serde_json::to_value(existing).map_err(|e| format!("配置序列化失败: {e}"))?;
+    if let Some(obj) = base.as_object_mut() {
+        if let Some(inc) = incoming.as_object() {
+            for (k, v) in inc {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    serde_json::from_value(base).map_err(|e| format!("配置合并失败: {e}"))
+}
+
+/// 旧配置只有 `workdays_override`、没有所属月：戳成当前月并返回 true（调用方应落盘）。
+/// 这样本月覆盖仍生效，下月启动后 `effective_workdays_override` 会忽略它。
+pub fn stamp_override_month(cfg: &mut Config) -> bool {
+    if cfg.workdays_override.is_some() && cfg.workdays_override_for.is_none() {
+        let now = Local::now();
+        cfg.workdays_override_for = Some(format!("{:04}-{:02}", now.year(), now.month()));
+        true
+    } else {
+        false
+    }
+}
+
+/// 仅当覆盖值属于指定年月时才采用；过期或未设置返回 None。
+pub fn effective_workdays_override(cfg: &Config, year: i32, month: u32) -> Option<u32> {
+    let n = cfg.workdays_override?;
+    let ym = format!("{:04}-{:02}", year, month);
+    match cfg.workdays_override_for.as_deref() {
+        Some(for_ym) if for_ym == ym => Some(n),
+        Some(_) => None,
+        None => Some(n),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_rejects_invalid_types() {
+        let cfg = Config::default();
+        let incoming = serde_json::json!({"monthly_salary": "not-a-number"});
+        let err = merge_from_value(&cfg, &incoming).unwrap_err();
+        assert!(err.contains("合并失败"), "实际: {err}");
+    }
+
+    #[test]
+    fn merge_keeps_fields_not_in_payload() {
+        let mut cfg = Config::default();
+        cfg.monthly_salary = 15000.0;
+        let incoming = serde_json::json!({"monitor_activity": false});
+        let merged = merge_from_value(&cfg, &incoming).unwrap();
+        assert_eq!(merged.monthly_salary, 15000.0);
+        assert!(!merged.monitor_activity);
+    }
+
+    #[test]
+    fn override_from_other_month_is_ignored() {
+        let mut cfg = Config::default();
+        cfg.workdays_override = Some(18);
+        cfg.workdays_override_for = Some("2026-10".into());
+        assert_eq!(effective_workdays_override(&cfg, 2026, 10), Some(18));
+        assert_eq!(
+            effective_workdays_override(&cfg, 2026, 11),
+            None,
+            "10 月的覆盖不得当 11 月时薪分母"
+        );
+    }
+
+    #[test]
+    fn stamp_override_month_only_once() {
+        let mut cfg = Config::default();
+        cfg.workdays_override = Some(18);
+        assert!(stamp_override_month(&mut cfg));
+        let stamped = cfg.workdays_override_for.clone();
+        assert!(stamped.is_some());
+        assert!(!stamp_override_month(&mut cfg), "已有所属月不应再改");
+        assert_eq!(cfg.workdays_override_for, stamped);
     }
 }

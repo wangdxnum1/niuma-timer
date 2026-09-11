@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS act_keys (
 );
 "#;
 
-const CREATE_APP_USAGE: &str = r#"
+pub(crate) const CREATE_APP_USAGE: &str = r#"
 CREATE TABLE IF NOT EXISTS app_usage (
     date    TEXT NOT NULL,
     app     TEXT NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS app_usage (
 );
 "#;
 
-const CREATE_APP_USAGE_HOURLY: &str = r#"
+pub(crate) const CREATE_APP_USAGE_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS app_usage_hourly (
     date    TEXT NOT NULL,
     hour    INTEGER NOT NULL,
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS app_usage_hourly (
 );
 "#;
 
-const CREATE_AUDIO_USAGE: &str = r#"
+pub(crate) const CREATE_AUDIO_USAGE: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_usage (
     date    TEXT NOT NULL,
     app     TEXT NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS audio_usage (
 );
 "#;
 
-const CREATE_AUDIO_USAGE_HOURLY: &str = r#"
+pub(crate) const CREATE_AUDIO_USAGE_HOURLY: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_usage_hourly (
     date    TEXT NOT NULL,
     hour    INTEGER NOT NULL,

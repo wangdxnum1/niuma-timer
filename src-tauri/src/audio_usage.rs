@@ -141,9 +141,28 @@ fn sample_round(meters: &[(String, crate::win::AudioMeter)]) -> HashMap<String, 
 }
 
 /// 把本轮采样到的「各应用有声毫秒」记入数据库：满 1 秒才落盘，余量跨轮结转。
+/// 写库失败时把已扣除的整秒加回 pending，避免静默丢播放时长。
 fn credit(played_ms: &HashMap<String, u64>) {
     let mut pending = sync::lock(pending_ms(), "audio_usage::PENDING_MS");
-    let mut due: Vec<(String, i64)> = Vec::new();
+    let due = take_due(&mut pending, played_ms);
+    drop(pending);
+    if due.is_empty() {
+        return;
+    }
+    let now_dt = Local::now();
+    let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
+    let hour = now_dt.hour().min(23) as i64;
+    if crate::db::with_db(|g| write_audio_due(g, &date, hour, &due)).is_err() {
+        let mut pending = sync::lock(pending_ms(), "audio_usage::PENDING_MS");
+        restore_due(&mut pending, &due);
+    }
+}
+
+fn take_due(
+    pending: &mut HashMap<String, u64>,
+    played_ms: &HashMap<String, u64>,
+) -> Vec<(String, i64)> {
+    let mut due = Vec::new();
     for (app, ms) in played_ms {
         let total = pending.entry(app.clone()).or_insert(0);
         *total += ms;
@@ -153,28 +172,35 @@ fn credit(played_ms: &HashMap<String, u64>) {
             due.push((app.clone(), secs as i64));
         }
     }
-    drop(pending); // 先放锁再碰数据库
-    if due.is_empty() {
-        return;
+    due
+}
+
+fn restore_due(pending: &mut HashMap<String, u64>, due: &[(String, i64)]) {
+    for (app, secs) in due {
+        *pending.entry(app.clone()).or_insert(0) += (*secs as u64).saturating_mul(1000);
     }
-    let now_dt = Local::now();
-    let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
-    let hour = now_dt.hour().min(23) as i64;
-    let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
-        for (app, secs) in due {
-            g.execute(
-                "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
-                params![date, app, secs],
-            )?;
-            g.execute(
-                "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
-                params![date, hour, app, secs],
-            )?;
-        }
-        Ok(())
-    });
+}
+
+fn write_audio_due(
+    g: &mut rusqlite::Connection,
+    date: &str,
+    hour: i64,
+    due: &[(String, i64)],
+) -> rusqlite::Result<()> {
+    let tx = g.transaction()?;
+    for (app, secs) in due {
+        tx.execute(
+            "INSERT INTO audio_usage (date, app, seconds) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(date, app) DO UPDATE SET seconds = seconds + ?3",
+            params![date, app, secs],
+        )?;
+        tx.execute(
+            "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
+            params![date, hour, app, secs],
+        )?;
+    }
+    tx.commit()
 }
 
 /// 枚举 + 采样 + 落盘的主循环。
@@ -267,7 +293,8 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary 
     };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
     // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
-    let (apps, hourly) = crate::db::with_db(|g| {
+    // 图标提取必须在 DB 锁外，理由同 app_usage::summary。
+    let (rows, hourly) = crate::db::with_db(|g| {
         let mut apps = Vec::new();
         if let Ok(mut stmt) = g.prepare(
             "SELECT app, seconds FROM audio_usage WHERE date = ?1 ORDER BY seconds DESC",
@@ -276,21 +303,7 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary 
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             }) {
                 for row in rows.flatten() {
-                    let app = row.0;
-                    // 懒提取：若尚未缓存图标，用轮询时记录的 exe 路径补提取（GDI+PNG 一次，幂等）
-                    if let Some(exe) = sync::lock(playing_exe(), "audio_usage::PLAYING_EXE").get(&app).cloned() {
-                        crate::app_usage::ensure_icon(&app, &exe);
-                    }
-                    let icon = if known.contains(app.as_str()) {
-                        None // 前端已有，本次不再回传
-                    } else {
-                        crate::app_usage::cached_icon(&app)
-                    };
-                    apps.push(AudioUsageItem {
-                        app,
-                        seconds: row.1,
-                        icon,
-                    });
+                    apps.push(row);
                 }
             }
         }
@@ -314,10 +327,57 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary 
     })
     .unwrap_or_else(|_| (Vec::new(), vec![0i64; 24]));
 
+    let apps = rows
+        .into_iter()
+        .map(|(app, seconds)| {
+            let exe = sync::lock(playing_exe(), "audio_usage::PLAYING_EXE")
+                .get(&app)
+                .cloned();
+            AudioUsageItem {
+                icon: crate::app_usage::icon_for(
+                    &app,
+                    exe.as_deref(),
+                    known.contains(app.as_str()),
+                ),
+                app,
+                seconds,
+            }
+        })
+        .collect();
+
     AudioUsageSummary {
         date,
         apps,
         hourly,
         watch_ok,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credit_due_is_restored_on_failure() {
+        let mut pending = HashMap::new();
+        let mut played = HashMap::new();
+        played.insert("Spotify".into(), 2500);
+        let due = take_due(&mut pending, &played);
+        assert_eq!(due, vec![("Spotify".into(), 2)]);
+        assert_eq!(pending["Spotify"], 500);
+        restore_due(&mut pending, &due);
+        assert_eq!(pending["Spotify"], 2500, "写失败必须把整秒加回 pending");
+    }
+
+    #[test]
+    fn write_audio_due_rolls_back_when_hourly_table_missing() {
+        let mut c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::CREATE_AUDIO_USAGE).unwrap();
+        let due = vec![("Spotify".into(), 3i64)];
+        assert!(write_audio_due(&mut c, "2026-09-11", 10, &due).is_err());
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM audio_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "事务回滚后日表应为空");
     }
 }

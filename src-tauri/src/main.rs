@@ -21,7 +21,7 @@ use std::panic;
 use std::sync::Mutex;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
-use serde_json::{from_value, to_value, Value};
+use serde_json::Value;
 use tauri::{Manager, State};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
@@ -100,10 +100,10 @@ fn show_fatal(msg: &str) {
 
 /// 计算当月实际上班天数（手动覆盖 > 缓存 > 兜底周末数）
 fn current_monthly_workdays(cfg: &config::Config, hol: &holiday::HolidayCache) -> u32 {
-    if let Some(n) = cfg.workdays_override {
+    let now = Local::now();
+    if let Some(n) = config::effective_workdays_override(cfg, now.year(), now.month()) {
         return n;
     }
-    let now = Local::now();
     if let Some(n) = hol.month_workdays(now.year(), now.month()) {
         return n;
     }
@@ -182,31 +182,18 @@ fn load_config(state: State<AppState>) -> config::Config {
 }
 
 #[tauri::command]
-fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) {
+fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) -> Result<(), String> {
     // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
     // （如未来新增的后端字段），避免整份替换把未传字段重置成默认值。
     let existing = sync::lock(&state.config, "state.config").clone();
-    let mut base = to_value(&existing).unwrap_or(Value::Null);
-    if let Some(obj) = base.as_object_mut() {
-        if let Some(incoming) = cfg.as_object() {
-            for (k, v) in incoming {
-                obj.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    let merged: config::Config = match from_value(base) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[config] save_config 合并失败，保留原配置: {e}");
-            return;
-        }
-    };
+    let merged = config::merge_from_value(&existing, &cfg)?;
     *sync::lock(&state.config, "state.config") = merged.clone();
     config::save(&merged);
     // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
     apply_monitor_switches(&merged);
     let st = get_status(state.inner());
     tray::update_tray(&app, &st);
+    Ok(())
 }
 
 /// 把配置里的三个监控开关同步到各监控模块（启动时与保存配置后调用）。
@@ -261,15 +248,15 @@ fn maybe_record_overtime_lock(state: &AppState) {
     let Some(lock_ts) = lock_monitor::last_lock_timestamp() else {
         return;
     };
-    let mut seen = sync::lock(&state.last_lock_seen, "state.last_lock_seen");
-    if *seen == Some(lock_ts) {
-        return;
+    {
+        let seen = sync::lock(&state.last_lock_seen, "state.last_lock_seen");
+        if *seen == Some(lock_ts) {
+            return;
+        }
     }
-    *seen = Some(lock_ts);
-    drop(seen);
 
     let hol = sync::lock(&state.holiday, "state.holiday");
-    if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
+    let persist = if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
         // 归属日由**锁屏时刻**自己决定，不能用「检测时刻」的日期：检测每 5 秒一次，
         // 23:59:58 锁屏可能在 00:00:02 才被处理，而凌晨锁屏要归属前一天。
         let (day, _, _) = overtime::resolve_overtime_day(lt);
@@ -277,12 +264,18 @@ fn maybe_record_overtime_lock(state: &AppState) {
         // 非工作日只在开关打开时才算加班。此前这里直接 `if !is_workday { return }`，
         // 导致 weekend_overtime 开关形同虚设——开了也永远走不到计算。
         if kind.is_rest() && !cfg.weekend_overtime {
-            return;
-        }
-        if let Some(record) = overtime::calc_record_auto(lt, &cfg, Some(&hol)) {
+            None
+        } else if let Some(record) = overtime::calc_record_auto(lt, &cfg, Some(&hol)) {
             // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
-            overtime::upsert_auto(record);
+            Some(overtime::upsert_auto(record))
+        } else {
+            None
         }
+    } else {
+        None
+    };
+    if overtime::should_mark_lock_seen(persist) {
+        *sync::lock(&state.last_lock_seen, "state.last_lock_seen") = Some(lock_ts);
     }
 }
 
