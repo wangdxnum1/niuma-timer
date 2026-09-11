@@ -1,4 +1,6 @@
 @echo off
+rem 本文件为 UTF-8 编码：不切代码页的话，默认 GBK 控制台会把中文显示成乱码（release.bat 同款）
+chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0"
 set "SRC=%ROOT%src-tauri"
@@ -6,9 +8,20 @@ set "BIN=%ROOT%bin"
 
 if not exist "%BIN%" mkdir "%BIN%"
 
+rem 镜像偶发抽风的兜底参数（与 release.bat 一致）。另注：cargo 会继承 ~/.gitconfig
+rem 的全局 http.proxy——全局代理会把 cargo 的 TLS 握手掐断（Clash 的 SOCKS5 下必现），
+rem 该代理已改为仅对 github.com 生效，cargo 直连 rsproxy 毫无压力，勿改回全局。
+set "CARGO_NET_RETRY=10"
+set "CARGO_HTTP_TIMEOUT=180"
+
+rem cargo 兜底：rustup 安装时只更新注册表里的用户 PATH，装完后才新开的终端才能看到；
+rem 安装前就开着的窗口拿不到（环境变量是启动时的快照），这里自行探测补上
+where cargo >nul 2>&1
+if errorlevel 1 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 where cargo >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] 未在 PATH 中找到 cargo，请先安装 Rust 或在 VS Developer Command Prompt 中运行。
+  echo         如刚安装 Rust，请重新打开终端窗口让新 PATH 生效后再试。
   exit /b 1
 )
 
