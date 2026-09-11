@@ -32,6 +32,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **App usage monitoring** — foreground-window hook measures time spent per application (whitelist-based, e.g. WeChat)
 - **Media playback monitoring** — audio-session peak polling measures playback time per app
 - **Local persistence** — all history (overtime, activity, app/audio usage) is stored in a WAL SQLite database; config & holiday cache remain JSON
+- **Storage visibility** — Settings shows total footprint plus a nine-way breakdown (overtime / activity / app usage / media / index & free pages / WAL / icon cache / config & holidays / logs), sorted by size; per-table figures come from SQLite `dbstat`. Retention is configurable (permanent by default) with one-click cleanup, and the WAL is shrunk on first launch each day
 
 ## How it works
 
@@ -205,7 +206,7 @@ niuma-timer/
 │   │   ├── win.rs          # Win32 platform layer (RAII guards: window/hooks/COM/GDI, process & icon, raw-input parsing)
 │   │   ├── scheduler.rs    # Unified periodic scheduler (1s beat -> 1s/5s/10s tasks)
 │   │   ├── sync.rs         # Lock access gateway (poison recovery; no bare .lock().unwrap())
-│   │   └── maintain.rs     # Data lifecycle (WAL shrink / expired data & icon cleanup)
+│   │   └── maintain.rs     # Data lifecycle (usage stats / WAL shrink / expired data & icon cleanup)
 │   ├── Cargo.toml
 │   ├── build.rs           # Tauri build (registers commands)
 │   ├── tauri.conf.json

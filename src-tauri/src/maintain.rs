@@ -43,6 +43,62 @@ const DATED_TABLES: &[(&str, &str)] = &[
 /// 迁移遗留文件：8-21 从 JSON 迁到 SQLite 时的备份，早已无用
 const LEGACY_FILES: &[&str] = &["overtime.json.legacy.bak"];
 
+/// 表 → 业务分类（表名, 分类 key, 展示名）。
+///
+/// 一份业务数据通常落在两张表上（日汇总 + 逐小时明细），用户关心的是
+/// 「键鼠活动占多少」而不是「act_hourly 占多少」，故按业务合并展示。
+/// 新增表时这里与 `DATED_TABLES` 一起改。
+const TABLE_GROUPS: &[(&str, &str, &str)] = &[
+    ("ot_records", "overtime", "加班记录"),
+    ("act_hourly", "activity", "键鼠活动"),
+    ("act_keys", "activity", "键鼠活动"),
+    ("app_usage", "app", "应用使用"),
+    ("app_usage_hourly", "app", "应用使用"),
+    ("audio_usage", "audio", "媒体播放"),
+    ("audio_usage_hourly", "audio", "媒体播放"),
+];
+
+/// 分类展示顺序（key, 展示名）。key 与 `TABLE_GROUPS` 一一对应。
+const GROUP_ORDER: &[(&str, &str)] = &[
+    ("overtime", "加班记录"),
+    ("activity", "键鼠活动"),
+    ("app", "应用使用"),
+    ("audio", "媒体播放"),
+];
+
+/// 表结构之外、但同在数据目录里的文件（配置 / 节假日缓存 / 日志），
+/// 单独统计而非混进「其它」，因为它们是用户可以直观理解的东西。
+fn other_files(dir: &Path) -> (u64, u64) {
+    let mut cfg = 0u64;
+    let mut logs = 0u64;
+    let Ok(rd) = fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let size = file_size(&p);
+        if name == "config.json" || (name.starts_with("holiday_") && name.ends_with(".json")) {
+            cfg += size;
+        } else if name == "debug.log" || name == "panic.log" {
+            logs += size;
+        }
+    }
+    (cfg, logs)
+}
+
+fn group_key(table: &str) -> Option<&'static str> {
+    TABLE_GROUPS
+        .iter()
+        .find(|(t, _, _)| *t == table)
+        .map(|(_, k, _)| *k)
+}
+
 fn config_dir() -> PathBuf {
     crate::config::config_dir()
 }
@@ -55,6 +111,46 @@ fn wal_path() -> PathBuf {
 /// 维护逻辑只用它做展示与日志，拿不到也不该让整个维护失败。
 fn file_size(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// 一个存储分类的占用（设置页细分列表的一行）
+#[derive(Clone, serde::Serialize)]
+pub struct StorageSlice {
+    /// 稳定标识，前端据此上色；也是测试断言用的键
+    pub key: String,
+    /// 展示名
+    pub label: String,
+    pub bytes: u64,
+    /// 行数；文件类分类这里是文件数，其余为 0
+    pub rows: u64,
+    /// 计数单位（"行" / "个"）；为空表示不计
+    pub unit: String,
+}
+
+/// 单表占用（内部统计用，组装时才按业务合并）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableUsage {
+    pub table: String,
+    pub bytes: u64,
+    pub rows: u64,
+}
+
+/// 组装快照所需的各部分字节数。
+///
+/// 抽成结构是因为 `build_storage_info` 的参数已多到容易传错顺序；
+/// 同时它不含任何 DB / 文件系统依赖，可以在单测里直接构造。
+pub(crate) struct StorageParts {
+    pub db_bytes: u64,
+    pub wal_bytes: u64,
+    pub shm_bytes: u64,
+    pub icon_files: u32,
+    pub icon_bytes: u64,
+    pub config_bytes: u64,
+    pub log_bytes: u64,
+    pub tables: Vec<TableUsage>,
+    /// 是否为估算值（dbstat 不可用时按行数比例分摊）
+    pub approx: bool,
+    pub earliest: Option<String>,
 }
 
 /// 存储占用快照（供设置页展示）
@@ -72,6 +168,12 @@ pub struct StorageInfo {
     pub earliest_date: Option<String>,
     /// 当前保留策略（天；0 = 永久保留）
     pub retention_days: u32,
+    /// 全部占用之和（主库 + 写前日志 + 图标 + 配置与日志）
+    pub total_bytes: u64,
+    /// 细分项，按占用降序
+    pub slices: Vec<StorageSlice>,
+    /// true 表示表级占用是按行数比例估算的（dbstat 虚拟表不可用）
+    pub approx: bool,
 }
 
 /// 在一次连接上执行 WAL checkpoint（TRUNCATE 模式），返回 SQLite 的 busy 标志。
@@ -205,10 +307,164 @@ fn icon_usage(dir: &Path) -> (u32, u64) {
     (files, bytes)
 }
 
+/// 用 dbstat 虚拟表精确统计每张表的占用（含索引与溢出页）。
+///
+/// dbstat 需要 SQLite 编译时开 `SQLITE_ENABLE_DBSTAT_VTAB`；rusqlite 的
+/// `bundled` feature 默认开了（0.30.1 的 build.rs 里有该 flag）。不可用时返回
+/// Err，由调用方退化到按行数估算——宁可给个近似值也不要整块统计失败。
+pub fn table_usage_conn(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<TableUsage>> {
+    let mut sizes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    {
+        let mut st = conn.prepare("SELECT name, SUM(pgsize) FROM dbstat GROUP BY name")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        for r in rows {
+            let (name, bytes) = r?;
+            if bytes > 0 {
+                *sizes.entry(name).or_default() += bytes as u64;
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(TABLE_GROUPS.len());
+    for (table, _, _) in TABLE_GROUPS {
+        let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+        out.push(TableUsage {
+            table: (*table).to_string(),
+            bytes: sizes.get(*table).copied().unwrap_or(0),
+            rows: n.max(0) as u64,
+        });
+    }
+    Ok(out)
+}
+
+/// dbstat 不可用时的兜底：按行数占比把整库有效页分摊到各表。
+/// 只用于展示，宁可粗略也不要让「存储占用」整块消失。
+pub fn estimate_usage_conn(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<TableUsage>> {
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    let pages: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+    let free: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+    let used = ((pages - free).max(0) as u64).saturating_mul(page_size.max(1) as u64);
+
+    let mut counts: Vec<u64> = Vec::with_capacity(TABLE_GROUPS.len());
+    let mut total_rows = 0u64;
+    for (table, _, _) in TABLE_GROUPS {
+        let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+        let n = n.max(0) as u64;
+        total_rows += n;
+        counts.push(n);
+    }
+    let out = TABLE_GROUPS
+        .iter()
+        .zip(counts)
+        .map(|((table, _, _), n)| TableUsage {
+            table: (*table).to_string(),
+            bytes: if total_rows == 0 {
+                0
+            } else {
+                used.saturating_mul(n) / total_rows
+            },
+            rows: n,
+        })
+        .collect();
+    Ok(out)
+}
+
+/// 把各表占用按业务合并，再加上文件类分类，组装成展示用的快照。
+///
+/// 纯函数：不读文件系统也不碰 DB，便于单测覆盖「分组 / 排序 / 兜底」这些
+/// 容易出错的分支（真实库上的效果留给手工验证）。
+pub(crate) fn build_storage_info(cfg: &Config, p: StorageParts) -> StorageInfo {
+    let mut slices: Vec<StorageSlice> = Vec::new();
+    for (key, label) in GROUP_ORDER {
+        let bytes = p
+            .tables
+            .iter()
+            .filter(|t| group_key(&t.table) == Some(*key))
+            .map(|t| t.bytes)
+            .sum();
+        let rows = p
+            .tables
+            .iter()
+            .filter(|t| group_key(&t.table) == Some(*key))
+            .map(|t| t.rows)
+            .sum();
+        slices.push(StorageSlice {
+            key: (*key).to_string(),
+            label: (*label).to_string(),
+            bytes,
+            rows,
+            unit: "行".to_string(),
+        });
+    }
+
+    // 主库里不属于这 7 张表的部分：索引、空闲页、表结构开销。
+    // saturating_sub：dbstat 精确值理论上不会超，但估算路径可能，不能让它下溢成天文数字
+    let counted: u64 = slices.iter().map(|s| s.bytes).sum();
+    slices.push(StorageSlice {
+        key: "other".to_string(),
+        label: "索引与空闲页".to_string(),
+        bytes: p.db_bytes.saturating_sub(counted),
+        rows: 0,
+        unit: String::new(),
+    });
+    slices.push(StorageSlice {
+        key: "wal".to_string(),
+        label: "写前日志".to_string(),
+        bytes: p.wal_bytes.saturating_add(p.shm_bytes),
+        rows: 0,
+        unit: String::new(),
+    });
+    slices.push(StorageSlice {
+        key: "icons".to_string(),
+        label: "图标缓存".to_string(),
+        bytes: p.icon_bytes,
+        rows: p.icon_files as u64,
+        unit: "个".to_string(),
+    });
+    slices.push(StorageSlice {
+        key: "config".to_string(),
+        label: "配置与节假日".to_string(),
+        bytes: p.config_bytes,
+        rows: 0,
+        unit: String::new(),
+    });
+    slices.push(StorageSlice {
+        key: "logs".to_string(),
+        label: "运行日志".to_string(),
+        bytes: p.log_bytes,
+        rows: 0,
+        unit: String::new(),
+    });
+
+    let total = p
+        .db_bytes
+        .saturating_add(p.wal_bytes)
+        .saturating_add(p.shm_bytes)
+        .saturating_add(p.icon_bytes)
+        .saturating_add(p.config_bytes)
+        .saturating_add(p.log_bytes);
+
+    // 降序：用户第一眼看的是「谁占得最多」
+    slices.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+
+    StorageInfo {
+        db_bytes: p.db_bytes,
+        wal_bytes: p.wal_bytes,
+        icon_files: p.icon_files,
+        icon_bytes: p.icon_bytes,
+        earliest_date: p.earliest,
+        retention_days: cfg.retention_days,
+        total_bytes: total,
+        slices,
+        approx: p.approx,
+    }
+}
+
 /// 当前存储占用快照
 pub fn storage_info(cfg: &Config) -> StorageInfo {
     let dir = config_dir();
     let (icon_files, icon_bytes) = icon_usage(&dir.join("icons"));
+    let (config_bytes, log_bytes) = other_files(&dir);
+
     let earliest = crate::db::with_db(|g| {
         let mut min: Option<String> = None;
         for (table, col) in DATED_TABLES {
@@ -224,14 +480,40 @@ pub fn storage_info(cfg: &Config) -> StorageInfo {
     .ok()
     .flatten();
 
-    StorageInfo {
-        db_bytes: file_size(&dir.join("niuma.db")),
-        wal_bytes: file_size(&wal_path()),
-        icon_files,
-        icon_bytes,
-        earliest_date: earliest,
-        retention_days: cfg.retention_days,
-    }
+    // 精确统计失败时退化到估算，绝不因为统计出错就让整块「存储占用」消失
+    // 闭包返回的是 rusqlite::Result，故兜底分支也要回 rusqlite::Error（with_db 负责转 String）
+    let (tables, approx) = crate::db::with_db(|g| match table_usage_conn(g) {
+        Ok(v) => Ok((v, false)),
+        Err(first) => match estimate_usage_conn(g) {
+            Ok(v) => {
+                crate::db::debug_log(&format!(
+                    "[maintain] dbstat 不可用，改用行数估算: {first}"
+                ));
+                Ok((v, true))
+            }
+            Err(_) => Err(first),
+        },
+    })
+    .unwrap_or_else(|e| {
+        crate::db::debug_log(&format!("[maintain] 存储占用统计失败: {e}"));
+        (Vec::new(), true)
+    });
+
+    build_storage_info(
+        cfg,
+        StorageParts {
+            db_bytes: file_size(&dir.join("niuma.db")),
+            wal_bytes: file_size(&wal_path()),
+            shm_bytes: file_size(&dir.join("niuma.db-shm")),
+            icon_files,
+            icon_bytes,
+            config_bytes,
+            log_bytes,
+            tables,
+            approx,
+            earliest,
+        },
+    )
 }
 
 /// 每日维护（调度器每天调一次，设置页「立即整理」也走这里）。
@@ -416,6 +698,176 @@ mod tests {
         let _ = fs::remove_file(&walp);
         let _ = fs::remove_file(dir.join("t.db-shm"));
         let _ = fs::remove_dir(&dir);
+    }
+
+    fn slice_of(info: &StorageInfo, key: &str) -> StorageSlice {
+        info.slices
+            .iter()
+            .find(|s| s.key == key)
+            .unwrap_or_else(|| panic!("缺少分类 {key}"))
+            .clone()
+    }
+
+    fn parts_with(tables: Vec<TableUsage>, db_bytes: u64) -> StorageParts {
+        StorageParts {
+            db_bytes,
+            wal_bytes: 1000,
+            shm_bytes: 24,
+            icon_files: 3,
+            icon_bytes: 300,
+            config_bytes: 40,
+            log_bytes: 60,
+            tables,
+            approx: false,
+            earliest: None,
+        }
+    }
+
+    fn tu(table: &str, bytes: u64, rows: u64) -> TableUsage {
+        TableUsage {
+            table: table.to_string(),
+            bytes,
+            rows,
+        }
+    }
+
+    /// 回归：同一业务的两张表（日汇总 + 逐小时明细）必须合并成一行，
+    /// 字节数与行数都相加——用户不认识 act_hourly / act_keys 这种表名
+    #[test]
+    fn build_groups_tables_by_business() {
+        let cfg = crate::config::Config::default();
+        let tables = vec![
+            tu("ot_records", 100, 10),
+            tu("act_hourly", 200, 24),
+            tu("act_keys", 50, 300),
+            tu("app_usage", 10, 5),
+            tu("app_usage_hourly", 20, 40),
+            tu("audio_usage", 5, 2),
+            tu("audio_usage_hourly", 5, 8),
+        ];
+        let info = build_storage_info(&cfg, parts_with(tables, 1000));
+
+        let act = slice_of(&info, "activity");
+        assert_eq!(act.bytes, 250, "键鼠活动 = act_hourly + act_keys");
+        assert_eq!(act.rows, 324, "行数同样要合并");
+        assert_eq!(slice_of(&info, "overtime").bytes, 100);
+        assert_eq!(slice_of(&info, "app").bytes, 30);
+        assert_eq!(slice_of(&info, "audio").bytes, 10);
+    }
+
+    /// 回归：主库里不属于 7 张表的部分（索引、空闲页）归入「索引与空闲页」，
+    /// 且用 saturating_sub——估算路径下可能出现表总和 > 主库，不能下溢
+    #[test]
+    fn build_other_is_db_minus_tables_and_never_negative() {
+        let cfg = crate::config::Config::default();
+        let tables = vec![tu("ot_records", 300, 1)];
+        let info = build_storage_info(&cfg, parts_with(tables, 1000));
+        assert_eq!(slice_of(&info, "other").bytes, 700);
+
+        // 表总和 > 主库（估算路径可能如此）：必须为 0，不能绕回巨大值
+        let tables = vec![tu("ot_records", 5000, 1)];
+        let info = build_storage_info(&cfg, parts_with(tables, 1000));
+        assert_eq!(
+            slice_of(&info, "other").bytes,
+            0,
+            "下溢会显示成几百 PB，必须夹到 0"
+        );
+    }
+
+    /// 回归：总计 = 主库 + 写前日志 + shm + 图标 + 配置 + 日志
+    #[test]
+    fn build_total_is_sum_of_all_parts() {
+        let cfg = crate::config::Config::default();
+        let info = build_storage_info(&cfg, parts_with(vec![tu("ot_records", 300, 1)], 1000));
+        assert_eq!(info.total_bytes, 1000 + 1000 + 24 + 300 + 40 + 60);
+    }
+
+    /// 回归：细分项按占用降序，占用最多的排第一（用户第一眼看的就是它）
+    #[test]
+    fn build_slices_sorted_by_bytes_desc() {
+        let cfg = crate::config::Config::default();
+        let info = build_storage_info(&cfg, parts_with(vec![tu("ot_records", 900, 1)], 1000));
+        let bytes: Vec<u64> = info.slices.iter().map(|s| s.bytes).collect();
+        let mut sorted = bytes.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(bytes, sorted, "细分项必须降序: {bytes:?}");
+        assert_eq!(info.slices[0].key, "wal", "写前日志 1024 应排第一");
+    }
+
+    /// 回归：分类 key 稳定（前端据此上色），且覆盖全部业务 + 4 个文件类
+    #[test]
+    fn build_slices_cover_every_category() {
+        let cfg = crate::config::Config::default();
+        let info = build_storage_info(&cfg, parts_with(Vec::new(), 100));
+        let mut keys: Vec<&str> = info.slices.iter().map(|s| s.key.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["activity", "app", "audio", "config", "icons", "logs", "other", "overtime", "wal"]
+        );
+    }
+
+    /// 回归：dbstat 精确统计出来的字节数必须 > 0（否则说明虚拟表没编译进去，
+    /// 用户看到的每个分类都是 0 而总计却有几 MB，自相矛盾）
+    #[test]
+    fn table_usage_reads_real_bytes_from_dbstat() {
+        let db = mem_db();
+        db.execute(
+            "INSERT INTO ot_records (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source)
+             VALUES ('2026-09-11','22:00','18:00',4,4,80,20,100,0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO act_hourly (date, hour, moves) VALUES ('2026-09-11', 10, 5)",
+            [],
+        )
+        .unwrap();
+
+        let usage = table_usage_conn(&db).expect("dbstat 应可用（rusqlite bundled）");
+        let ot = usage.iter().find(|t| t.table == "ot_records").unwrap();
+        assert_eq!(ot.rows, 1);
+        assert!(ot.bytes > 0, "dbstat 应给出真实字节数，实测 {}", ot.bytes);
+
+        let act = usage.iter().find(|t| t.table == "act_hourly").unwrap();
+        assert_eq!(act.rows, 1);
+        assert!(act.bytes > 0);
+        // 没插数据的表行数为 0
+        let app = usage.iter().find(|t| t.table == "app_usage").unwrap();
+        assert_eq!(app.rows, 0);
+    }
+
+    /// 回归：dbstat 不可用时的兜底按行数比例分摊，且行数必须准确
+    #[test]
+    fn estimate_splits_by_row_count_when_dbstat_missing() {
+        let db = mem_db();
+        for i in 0..3 {
+            db.execute(
+                "INSERT INTO act_hourly (date, hour, moves) VALUES ('2026-09-11', ?1, 5)",
+                rusqlite::params![i],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO ot_records (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source)
+             VALUES ('2026-09-11','22:00','18:00',4,4,80,20,100,0)",
+            [],
+        )
+        .unwrap();
+
+        let usage = estimate_usage_conn(&db).unwrap();
+        let act = usage.iter().find(|t| t.table == "act_hourly").unwrap();
+        let ot = usage.iter().find(|t| t.table == "ot_records").unwrap();
+        assert_eq!(act.rows, 3);
+        assert_eq!(ot.rows, 1);
+        assert!(
+            act.bytes >= ot.bytes,
+            "3 行应不少于 1 行: act={} ot={}",
+            act.bytes,
+            ot.bytes
+        );
+        let empty = usage.iter().find(|t| t.table == "app_usage").unwrap();
+        assert_eq!(empty.bytes, 0, "0 行的表不该分到字节");
     }
 
     /// 回归：图标清理只认 .png，目录里的其它文件必须原样保留

@@ -702,3 +702,84 @@ button:hover {
   margin: 0;
 }
 
+/* ---- 数据存储：总占用 + 分类细分 ---- */
+.storage-box {
+  margin: 10px 0;
+}
+.stg-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8a90a2;
+}
+.stg-total b {
+  font-size: 17px;
+  color: #e6e8ef;
+}
+/* 堆叠条形：一眼看出谁占大头 */
+.stg-bar {
+  display: flex;
+  height: 8px;
+  margin: 6px 0 9px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.stg-seg {
+  height: 100%;
+  /* 极小的分类也要留出可见的一丝，否则条形上完全看不到 */
+  min-width: 2px;
+}
+.stg-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.stg-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #c9cdd9;
+}
+.stg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.stg-name {
+  flex: 1;
+}
+.stg-val {
+  font-variant-numeric: tabular-nums;
+}
+.stg-val em {
+  font-style: normal;
+  color: #8a90a2;
+  margin-left: 6px;
+}
+.stg-sub {
+  width: 56px;
+  text-align: right;
+  color: #7d8394;
+  font-variant-numeric: tabular-nums;
+}
+.stg-note {
+  font-size: 11px;
+  color: #7d8394;
+  margin-top: 6px;
+}
+/* 分类配色（key 由后端给出，稳定不变） */
+.k-overtime { background: #f0a04b; }
+.k-activity { background: #5b9cf8; }
+.k-app { background: #57c7a5; }
+.k-audio { background: #b98cf0; }
+.k-other { background: #6b7280; }
+.k-wal { background: #e0605f; }
+.k-icons { background: #d9c04a; }
+.k-config { background: #8a90a2; }
+.k-logs { background: #7f8a6a; }
+

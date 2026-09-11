@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vd44f335d";
+const FE_VER = "ve78b3d16";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -1129,20 +1129,61 @@ function fmtBytes(n) {
   return (v / 1024 / 1024).toFixed(2) + " MB";
 }
 
+// 占比文案：极小的项（<0.1%）不能显示成 0.0%，否则看起来像没占空间
+function stgPct(bytes, total) {
+  if (!(total > 0)) return "0%";
+  const p = ((Number(bytes) || 0) / total) * 100;
+  if (p <= 0) return "0%";
+  if (p < 0.1) return "<0.1%";
+  return p.toFixed(1) + "%";
+}
+
 function renderStorageInfo(info) {
   const el = $("storageInfo");
   if (!el || !info) return;
-  let s =
-    "主库 " +
-    fmtBytes(info.dbBytes) +
-    " · 写前日志 " +
-    fmtBytes(info.walBytes) +
-    " · 图标 " +
-    info.iconFiles +
-    " 个 / " +
-    fmtBytes(info.iconBytes);
-  if (info.earliestDate) s += " · 最早 " + info.earliestDate;
-  el.textContent = s;
+  // 0 字节的项不展示：空库时不该列一堆 0 出来占版面
+  const slices = (info.slices || []).filter((s) => s.bytes > 0);
+  if (!slices.length) {
+    el.innerHTML = '<span class="hint">暂无占用数据</span>';
+    return;
+  }
+  const total = Number(info.totalBytes) || 0;
+  let h =
+    '<div class="stg-total"><span>共占用</span><b>' +
+    fmtBytes(total) +
+    "</b></div>";
+  h += '<div class="stg-bar">';
+  slices.forEach(function (s) {
+    h +=
+      '<i class="stg-seg k-' +
+      s.key +
+      '" style="width:' +
+      (total > 0 ? (s.bytes / total) * 100 : 0) +
+      '%"></i>';
+  });
+  h += "</div><ul class=\"stg-list\">";
+  slices.forEach(function (s) {
+    h +=
+      '<li><i class="stg-dot k-' +
+      s.key +
+      '"></i><span class="stg-name">' +
+      s.label +
+      '</span><span class="stg-val">' +
+      fmtBytes(s.bytes) +
+      "<em>" +
+      stgPct(s.bytes, total) +
+      "</em></span>" +
+      (s.rows && s.unit
+        ? '<span class="stg-sub">' + s.rows + " " + s.unit + "</span>"
+        : "") +
+      "</li>";
+  });
+  h += "</ul>";
+  if (info.approx) h += '<p class="stg-note">表级占用按行数比例估算</p>';
+  if (info.earliestDate) {
+    h += '<p class="stg-note">最早数据 ' + info.earliestDate + "</p>";
+  }
+  el.innerHTML = h;
 }
 
 async function loadStorageInfo() {
@@ -1262,7 +1303,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=d44f335d = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=e78b3d16 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
