@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vfbaff1af";
+const FE_VER = "v2c423c57";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -80,6 +80,8 @@ async function load() {
     $("monitor_app_usage").checked = cfg.monitor_app_usage !== false;
     $("monitor_audio").checked = cfg.monitor_audio !== false;
     syncMonitorState();
+    $("retention_days").value = String(cfg.retention_days || 0);
+    loadStorageInfo();
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
   } catch (e) {
@@ -207,6 +209,7 @@ function readCfg() {
     overtime_rate_holiday: numOrNull($("overtime_rate_holiday").value),
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
     app_whitelist: readWhitelist(),
+    retention_days: parseInt($("retention_days").value) || 0,
   };
 }
 
@@ -1112,6 +1115,59 @@ $("launch_on_boot").addEventListener("change", async () => {
 });
 
 $("refreshBtn").addEventListener("click", refresh);
+
+// ---- 数据存储：占用展示与立即整理 ----
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + " B";
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + " KB";
+  return (v / 1024 / 1024).toFixed(2) + " MB";
+}
+
+function renderStorageInfo(info) {
+  const el = $("storageInfo");
+  if (!el || !info) return;
+  let s =
+    "主库 " +
+    fmtBytes(info.dbBytes) +
+    " · 写前日志 " +
+    fmtBytes(info.walBytes) +
+    " · 图标 " +
+    info.iconFiles +
+    " 个 / " +
+    fmtBytes(info.iconBytes);
+  if (info.earliestDate) s += " · 最早 " + info.earliestDate;
+  el.textContent = s;
+}
+
+async function loadStorageInfo() {
+  try {
+    renderStorageInfo(await invoke("get_storage_info"));
+  } catch (e) {
+    flog("get_storage_info ERR: " + (e && e.message ? e.message : String(e)));
+    const el = $("storageInfo");
+    if (el) el.textContent = "占用信息读取失败";
+  }
+}
+
+async function runCleanup() {
+  const btn = $("cleanupBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "整理中…"; }
+  try {
+    const info = await invoke("run_maintenance");
+    renderStorageInfo(info);
+    showToast("整理完成，写前日志 " + fmtBytes(info.walBytes), "ok");
+  } catch (e) {
+    const detail = e && e.message ? e.message : String(e);
+    flog("run_maintenance ERR: " + detail);
+    showToast("整理失败：" + detail, "err");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "立即整理"; }
+  }
+}
+
+$("retention_days").addEventListener("change", saveNow);
+$("cleanupBtn").addEventListener("click", runCleanup);
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);
 $("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
@@ -1201,7 +1257,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=fbaff1af = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=2c423c57 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

@@ -122,7 +122,7 @@ const TABLE_DDL: &[&str] = &[
 /// 程序从未发布、不存在需要升级的旧库，因此**不做任何版本化迁移**：
 /// schema 变更直接改上方 DDL，开发期删掉 `%APPDATA%/niuma-timer/niuma.db` 重建即可。
 /// （版本化迁移曾引发全新库「duplicate column name: source」首跑 panic，已整体移除。）
-fn init_tables(db: &Connection) {
+pub(crate) fn init_tables(db: &Connection) {
     for ddl in TABLE_DDL {
         db.execute_batch(ddl).expect("初始化数据库表失败");
     }

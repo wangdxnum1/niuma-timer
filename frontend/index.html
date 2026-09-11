@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=fbaff1af" />
+    <link rel="stylesheet" href="styles.css?v=2c423c57" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -130,6 +130,22 @@
           <input id="monitor_audio" type="checkbox" class="switch" />
         </label>
         <p class="hint">监控在后台持续运行会占用少量 CPU，不需要的功能可关闭，已统计的数据不受影响</p>
+      </section>
+
+      <section class="card">
+        <h2>数据存储</h2>
+        <label>
+          <span>历史数据保留</span>
+          <select id="retention_days">
+            <option value="0">永久保留（默认）</option>
+            <option value="180">半年</option>
+            <option value="365">1 年</option>
+            <option value="730">2 年</option>
+          </select>
+        </label>
+        <div id="storageInfo" class="hint">读取中…</div>
+        <button id="cleanupBtn" class="ghost">立即整理</button>
+        <p class="hint">每天首次启动会自动整理一次。写前日志（WAL）是 SQLite 的临时写入区，程序常驻不退出时它不会自动收缩，整理后通常能从数 MB 降到几十 KB；图标缓存超过 180 天会重新提取。以上都不影响你的数据，只有「保留期」会真正删除历史记录</p>
       </section>
 
       <section class="card">
@@ -402,6 +418,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=fbaff1af"></script>
+    <script src="app.js?v=2c423c57"></script>
   </body>
 </html>

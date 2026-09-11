@@ -27,6 +27,9 @@ const TICK: Duration = Duration::from_secs(1);
 const EVERY_5S: u64 = 5;
 /// 活动统计落盘 + 应用使用结算的周期（单位：拍）
 const EVERY_10S: u64 = 10;
+/// 判断「是否到了新的一天」的检查周期（单位：拍）。每分钟看一次足够，
+/// 不必每拍都取系统日期。
+const EVERY_60S: u64 = 60;
 
 /// 启动调度线程。幂等，仅首次生效。
 ///
@@ -40,6 +43,7 @@ pub fn start(app: AppHandle) {
     thread::spawn(move || {
         let mut beats: u64 = 0;
         let mut last_visible: Option<bool> = None;
+        let mut last_maint: Option<chrono::NaiveDate> = None;
         loop {
             thread::sleep(TICK);
             beats = beats.wrapping_add(1);
@@ -79,6 +83,22 @@ pub fn start(app: AppHandle) {
             if beats % EVERY_10S == 0 {
                 run("activity_flush", crate::activity::flush_now);
                 run("app_usage_tick", crate::app_usage::tick_now);
+            }
+
+            // ── 每日一次：数据生命周期维护（WAL 收缩 + 过期图标 / 数据清理）──
+            // 用「日期变了」而不是纯节拍计数：程序重启后当天还能补跑一次，
+            // 不会因计数归零而漏掉一整天的维护（WAL 会一直胖着）。
+            if beats % EVERY_60S == 0 {
+                let today = chrono::Local::now().date_naive();
+                if last_maint != Some(today) {
+                    last_maint = Some(today);
+                    let app2 = app.clone();
+                    run("maintenance", move || {
+                        let state = app2.state::<crate::AppState>();
+                        let cfg = crate::sync::lock(&state.config, "state.config").clone();
+                        crate::maintain::run_daily(&cfg);
+                    });
+                }
             }
         }
     });

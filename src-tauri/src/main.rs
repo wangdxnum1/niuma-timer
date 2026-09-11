@@ -9,6 +9,7 @@ mod db;
 mod holiday;
 mod icon_render;
 mod lock_monitor;
+mod maintain;
 mod overtime;
 mod scheduler;
 mod sync;
@@ -448,6 +449,22 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<String, String>
     }
 }
 
+/// 存储占用快照：设置页「数据存储」卡片展示用
+#[tauri::command]
+fn get_storage_info(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    Ok(maintain::storage_info(&cfg))
+}
+
+/// 立即执行一次维护（WAL 收缩 + 过期图标 + 过期数据），返回执行后的占用快照。
+/// 与调度器每日自动跑的是同一套逻辑，用户点按钮只是提前触发。
+#[tauri::command]
+fn run_maintenance(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    maintain::run_daily(&cfg);
+    Ok(maintain::storage_info(&cfg))
+}
+
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -608,7 +625,9 @@ fn main() {
             get_audio_usage_summary,
             write_debug_log,
             get_autostart,
-            set_autostart
+            set_autostart,
+            get_storage_info,
+            run_maintenance
         ])
         .build(tauri::generate_context!())
     ;

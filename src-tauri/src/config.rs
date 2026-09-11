@@ -89,6 +89,17 @@ pub struct Config {
     /// 纯前端消费，后端不参与计算。
     #[serde(default)]
     pub tagline_custom: String,
+
+    // ---- 数据保留 ----
+    /// 历史数据保留天数（加班 / 活动 / 应用 / 媒体，共 7 张表）。
+    /// **0 = 永久保留**（默认）：不删任何用户数据。
+    ///
+    /// 之所以默认不删：数据体量本身很小（实测约 11KB/天，一年 4MB），
+    /// 保留策略的真实价值是「用户想清理」，而不是「不清理会爆」。
+    /// 与此解耦的是图标缓存——它可从 exe 重新提取，由 maintain 模块按固定
+    /// 180 天清理，不受本配置影响。
+    #[serde(default)]
+    pub retention_days: u32,
 }
 
 fn default_true() -> bool {
@@ -141,6 +152,7 @@ impl Default for Config {
             monitor_audio: true,
             tagline_style: "dynamic".into(),
             tagline_custom: String::new(),
+            retention_days: 0,
         }
     }
 }
