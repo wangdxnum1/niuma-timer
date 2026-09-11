@@ -737,10 +737,13 @@ button:hover {
   flex-direction: column;
   gap: 5px;
 }
+/* 每行用 grid 固定列宽，行与行之间的大小/占比才会真正对齐
+   （flex + 自适应宽度下，数字长短一不一样就会参差） */
 .stg-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) 66px 46px 58px;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   font-size: 12px;
   color: #c9cdd9;
 }
@@ -748,24 +751,23 @@ button:hover {
   width: 8px;
   height: 8px;
   border-radius: 2px;
-  flex-shrink: 0;
 }
 .stg-name {
-  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.stg-val {
+.stg-size,
+.stg-pct,
+.stg-sub {
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.stg-val em {
-  font-style: normal;
+.stg-pct {
   color: #8a90a2;
-  margin-left: 6px;
 }
 .stg-sub {
-  width: 56px;
-  text-align: right;
   color: #7d8394;
-  font-variant-numeric: tabular-nums;
 }
 .stg-note {
   font-size: 11px;

@@ -123,7 +123,7 @@ pub struct StorageSlice {
     pub bytes: u64,
     /// 行数；文件类分类这里是文件数，其余为 0
     pub rows: u64,
-    /// 计数单位（"行" / "个"）；为空表示不计
+    /// 计数单位（"行" / "个文件"）；为空表示不计
     pub unit: String,
 }
 
@@ -418,7 +418,7 @@ pub(crate) fn build_storage_info(cfg: &Config, p: StorageParts) -> StorageInfo {
         label: "图标缓存".to_string(),
         bytes: p.icon_bytes,
         rows: p.icon_files as u64,
-        unit: "个".to_string(),
+        unit: "个文件".to_string(),
     });
     slices.push(StorageSlice {
         key: "config".to_string(),
@@ -805,6 +805,42 @@ mod tests {
             keys,
             vec!["activity", "app", "audio", "config", "icons", "logs", "other", "overtime", "wal"]
         );
+    }
+
+    /// 回归：StorageInfo 的 JSON 键必须就是字段名本身（snake_case）。
+    ///
+    /// 前端按 `info.total_bytes` / `info.earliest_date` 取值。若谁给结构体加上
+    /// `#[serde(rename_all = "camelCase")]`，键会变成 totalBytes，前端读不到又
+    /// 不会报错——只会静默显示「共占用 0 B、每行占比 0%」，正是本次修掉的 bug。
+    #[test]
+    fn storage_info_json_keys_match_field_names() {
+        let cfg = crate::config::Config::default();
+        let info = build_storage_info(&cfg, parts_with(vec![tu("ot_records", 300, 1)], 1000));
+        let v: serde_json::Value = serde_json::to_value(&info).expect("StorageInfo 应可序列化");
+
+        let mut keys: Vec<&str> = v.as_object().expect("应为 JSON 对象").keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "approx",
+                "db_bytes",
+                "earliest_date",
+                "icon_bytes",
+                "icon_files",
+                "retention_days",
+                "slices",
+                "total_bytes",
+                "wal_bytes",
+            ],
+            "字段名变了就必须同步 frontend/app.js"
+        );
+
+        // 细分项字段同样不能被改名：前端读 s.key / s.bytes / s.rows / s.unit
+        let slice = v["slices"][0].as_object().expect("细分项应为 JSON 对象");
+        let mut skeys: Vec<&str> = slice.keys().map(String::as_str).collect();
+        skeys.sort();
+        assert_eq!(skeys, vec!["bytes", "key", "label", "rows", "unit"]);
     }
 
     /// 回归：dbstat 精确统计出来的字节数必须 > 0（否则说明虚拟表没编译进去，
