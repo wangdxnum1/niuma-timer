@@ -225,6 +225,12 @@
           "markdownDescription": "Enables the get_status_cmd command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_storage_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-storage-info",
+          "markdownDescription": "Enables the get_storage_info command without any pre-configured scope."
+        },
+        {
           "description": "Enables the hide_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-hide-window",
@@ -241,6 +247,12 @@
           "type": "string",
           "const": "allow-refresh-holidays",
           "markdownDescription": "Enables the refresh_holidays command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_maintenance command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-maintenance",
+          "markdownDescription": "Enables the run_maintenance command without any pre-configured scope."
         },
         {
           "description": "Enables the save_config command without any pre-configured scope.",
@@ -321,6 +333,12 @@
           "markdownDescription": "Denies the get_status_cmd command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_storage_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-storage-info",
+          "markdownDescription": "Denies the get_storage_info command without any pre-configured scope."
+        },
+        {
           "description": "Denies the hide_window command without any pre-configured scope.",
           "type": "string",
           "const": "deny-hide-window",
@@ -337,6 +355,12 @@
           "type": "string",
           "const": "deny-refresh-holidays",
           "markdownDescription": "Denies the refresh_holidays command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_maintenance command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-maintenance",
+          "markdownDescription": "Denies the run_maintenance command without any pre-configured scope."
         },
         {
           "description": "Denies the save_config command without any pre-configured scope.",
