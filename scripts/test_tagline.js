@@ -4,6 +4,22 @@ const fs = require("fs");
 const path = require("path");
 const src = fs.readFileSync(path.join(__dirname, "..", "frontend", "app.js"), "utf8");
 
+// 固定「现在」为 2026-09-10 15:30。
+// dynamicTagline 内部用 `new Date().getHours()` 取**当前时刻**判断是否午休，
+// 不固定时刻的话，在 12:00–13:00 之间运行本测试会让所有「搬砖中 / 快下班」
+// 用例全部误判成「午休中」而失败——测试就变成了随运行时间漂移的定时炸弹。
+const RealDate = Date;
+const FIXED_MS = new RealDate(2026, 8, 10, 15, 30, 0).getTime();
+class FakeDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [FIXED_MS]));
+  }
+  static now() {
+    return FIXED_MS;
+  }
+}
+global.Date = FakeDate;
+
 function pick(re, name) {
   const m = src.match(re);
   if (!m) {
@@ -75,6 +91,24 @@ check("未开工", dynamicTagline(work({ worked_h: 0 })), "还没开工，钱暂
 store.am_end = "00:00";
 store.pm_start = "23:59";
 check("午休（区间覆盖当前时刻）", dynamicTagline(work()), "午休中，钱先歇会儿");
+
+// 固定时刻 15:30，用区间边界验证午休判断本身（而不是碰运气避开午休时段）
+store.am_end = "15:00";
+store.pm_start = "16:00";
+check("午休（时刻落在区间内）", dynamicTagline(work()), "午休中，钱先歇会儿");
+store.am_end = "15:30";
+store.pm_start = "16:00";
+check("午休（左边界含等号）", dynamicTagline(work()), "午休中，钱先歇会儿");
+store.am_end = "14:00";
+store.pm_start = "15:30";
+check("午休（右边界不含等号）", dynamicTagline(work()), "正在搬砖，钱一直在涨");
+store.am_end = "16:00";
+store.pm_start = "15:00";
+check("午休（区间反了不算午休）", dynamicTagline(work()), "正在搬砖，钱一直在涨");
+store.am_end = "";
+store.pm_start = "16:00";
+check("午休（时间未配置则不判断）", dynamicTagline(work()), "正在搬砖，钱一直在涨");
+
 store.am_end = "12:00";
 store.pm_start = "13:00";
 
