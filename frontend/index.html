@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=2c423c57" />
+    <link rel="stylesheet" href="styles.css?v=d44f335d" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -397,6 +397,7 @@
           <label>下班时间<input id="otf_lock" type="time" /></label>
         </div>
         <label class="ot-form-wide">加班起算时间（留空=配置值）<input id="otf_start" type="time" placeholder="配置默认值" /></label>
+        <label class="ot-form-wide ot-check"><input id="otf_cross" type="checkbox" />下班时间在次日凌晨（熬过午夜，如 01:30 才算在前一天）</label>
         <div class="ot-form-actions">
           <button id="otfSave" class="primary">保存</button>
           <button id="otfCancel" class="ghost">取消</button>
@@ -418,6 +419,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=2c423c57"></script>
+    <script src="app.js?v=d44f335d"></script>
   </body>
 </html>

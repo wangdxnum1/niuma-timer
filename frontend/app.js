@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v2c423c57";
+const FE_VER = "vd44f335d";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -474,7 +474,8 @@ function renderOtTable(ot) {
     const isManual = r.source === 1;
     const cells = [
       r.date.slice(5),
-      r.lock_time,
+      // 跨午夜的离开时刻是次日凌晨，光看 "01:30" 会被误读成当天凌晨
+      r.cross_midnight ? "次日 " + r.lock_time : r.lock_time,
       r.valid_hours.toFixed(1) + "h",
       "¥" + r.fee.toFixed(0),
       r.meal > 0 ? "¥" + r.meal.toFixed(0) : "—",
@@ -526,6 +527,7 @@ function openOtForm() {
     d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
   $("otf_lock").value = pad(d.getHours()) + ":" + pad(d.getMinutes());
   $("otf_start").value = "";
+  $("otf_cross").checked = false;
   $("otfTitle").textContent = "添加加班记录";
   $("otfSave").textContent = "保存";
   showOtMsg("");
@@ -538,6 +540,7 @@ function editOtRecord(r) {
   $("otf_date").value = r.date;
   $("otf_lock").value = r.lock_time;
   $("otf_start").value = r.ot_start && r.ot_start !== "" ? r.ot_start : "";
+  $("otf_cross").checked = !!r.cross_midnight;
   $("otfTitle").textContent = "编辑加班记录";
   $("otfSave").textContent = "更新";
   showOtMsg("");
@@ -550,6 +553,8 @@ async function submitOtForm() {
   const date = $("otf_date").value;
   const lock = $("otf_lock").value;
   const start = $("otf_start").value || null;
+  // 后端字段是 cross_midnight（snake_case），Tauri 命令参数在 JS 侧必须写 camelCase
+  const crossMidnight = $("otf_cross").checked;
   if (!date || !lock) {
     showOtMsg("请填写日期和下班时间");
     return;
@@ -565,7 +570,7 @@ async function submitOtForm() {
   }
   try {
     const view = await invoke("save_overtime_record", {
-      input: { date, lock_time: lock, ot_start: start },
+      input: { date, lock_time: lock, ot_start: start, crossMidnight },
     });
     // 跟到记录所属月份：补录 8 月时视图停在 8 月，不会莫名跳回当月
     otView = { year: view.year, month: view.month };
@@ -1257,7 +1262,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=2c423c57 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=d44f335d = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

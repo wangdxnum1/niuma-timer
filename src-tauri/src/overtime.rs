@@ -34,6 +34,10 @@ pub struct OvertimeRecord {
     /// 来源：`SOURCE_AUTO`(0) 自动 / `SOURCE_MANUAL`(1) 手动。
     /// 自动 upsert 只覆盖自动记录，手改过的记录不会被当晚的锁屏数据顶掉。
     pub source: i32,
+    /// 离开时刻是否跨过午夜：`lock_time` 是次日凌晨的时刻（归属前一天的加班）。
+    /// 只影响展示（`lock_time` 仍存 "01:30" 这样的当日时刻），不参与计算。
+    #[serde(default)]
+    pub cross_midnight: bool,
 }
 
 /// 月度加班记录集合（持久化结构体，只存原始 records）
@@ -120,6 +124,37 @@ impl DayKind {
 /// 因为 `lock_min <= ot_start` 而一分钱算不到，且毫无提示——默认给 09:00 才符合实际。
 pub const DEFAULT_REST_OT_START: &str = "09:00";
 
+/// 跨午夜归属阈值（当日分钟数）。锁屏离开时刻早于它 → 视为熬过午夜才走，
+/// 加班归属**前一天**，结束时刻按 +24h 参与时长计算。
+///
+/// 取 06:00 是权衡：通宵加班基本都在这个点之前收工，而再往后挪就会把
+/// 「早上到公司后又锁屏离开」误判成前一天的加班。
+pub const CROSS_MIDNIGHT_BEFORE_MIN: f64 = 6.0 * 60.0;
+
+/// 一天的分钟数
+const DAY_MIN: f64 = 24.0 * 60.0;
+
+/// 把「锁屏离开时刻」解析为加班归属三元组：`(归属日, 该归属日内的结束分钟数, 是否跨午夜)`。
+///
+/// 归属日**由锁屏时刻自己决定，而不是由检测时刻决定**：检测每 5 秒一次，
+/// 23:59:58 锁屏完全可能在 00:00:02 才被处理，用「当前日期」会把记录错记到第二天。
+///
+/// 凌晨锁屏（早于 [`CROSS_MIDNIGHT_BEFORE_MIN`]）说明是熬过午夜才离开，
+/// 归属前一天、结束时刻 +24h，这样与起算时间（如 18:00）相减才得到真实时长——
+/// 否则 `01:30 <= 18:00` 会被当成「下班早于起算」直接判无加班，通宵一分钱不算。
+pub fn resolve_overtime_day(lock_time: DateTime<Local>) -> (NaiveDate, f64, bool) {
+    let day_min = lock_time.hour() as f64 * 60.0
+        + lock_time.minute() as f64
+        + lock_time.second() as f64 / 60.0;
+    if day_min < CROSS_MIDNIGHT_BEFORE_MIN {
+        // pred_opt 理论上不会失败（日期已是合法值），失败就退回当天而非 panic
+        let prev = lock_time.date_naive().pred_opt().unwrap_or_else(|| lock_time.date_naive());
+        (prev, day_min + DAY_MIN, true)
+    } else {
+        (lock_time.date_naive(), day_min, false)
+    }
+}
+
 /// 判定某天属于哪一类。节假日数据缺失（未联网且无内置表）时降级为按自然周几判断。
 pub fn day_kind(date: NaiveDate, holiday: Option<&HolidayCache>) -> DayKind {
     if let Some(c) = holiday {
@@ -192,25 +227,31 @@ fn format_hm(min: f64) -> String {
     format!("{:02}:{:02}", h, m)
 }
 
-/// 根据锁屏时间（=下班离开时刻）和配置计算单日加班记录（自动锁屏路径）
-/// 返回 None 表示无有效加班（下班早于起算时间、不足 1 小时等）
-pub fn calc_record(
-    date: NaiveDate,
+/// 根据锁屏时间（=下班离开时刻）和配置计算单日加班记录（自动锁屏路径）。
+/// 返回 None 表示无有效加班（下班早于起算时间、不足 1 小时等）。
+///
+/// 归属日由 `lock_time` 自己决定（见 [`resolve_overtime_day`]），**不接收日期参数**：
+/// 调用方若传「检测时刻的日期」，凌晨的锁屏会被算成新一天，通宵加班直接丢失。
+pub fn calc_record_auto(
     lock_time: DateTime<Local>,
     cfg: &Config,
     holiday: Option<&HolidayCache>,
 ) -> Option<OvertimeRecord> {
-    compute_record(date, lock_time, None, cfg, day_kind(date, holiday))
+    let (date, end_min, cross) = resolve_overtime_day(lock_time);
+    compute_record(date, end_min, cross, None, cfg, day_kind(date, holiday))
 }
 
 /// 核心计算：给定明确的加班起算时间字符串，计算单日记录。
 /// 抽出来供自动锁屏路径与手动录入路径共用，保证规则一致。
 ///
+/// `lock_min` 是**归属日内**的结束分钟数，跨午夜时已由调用方 +24h（可超过 1440）；
+/// `cross_midnight` 仅用于回填记录的展示标记。
 /// `ot_start_override` 只在手动录入时由调用方给出（用户在表单里覆盖起算时间），
 /// 否则按 [`ot_start_of`] 依日期类型选取。
 fn compute_record(
     date: NaiveDate,
-    lock_time: DateTime<Local>,
+    lock_min: f64,
+    cross_midnight: bool,
     ot_start_override: Option<&str>,
     cfg: &Config,
     kind: DayKind,
@@ -223,10 +264,6 @@ fn compute_record(
 
     let ot_start_str = ot_start_override.unwrap_or_else(|| ot_start_of(cfg, kind));
     let ot_start_min = to_min(ot_start_str)?;
-
-    let lock_min = lock_time.hour() as f64 * 60.0
-        + lock_time.minute() as f64
-        + lock_time.second() as f64 / 60.0;
 
     // 下班（锁屏离开）必须晚于起算时间
     if lock_min <= ot_start_min {
@@ -250,7 +287,8 @@ fn compute_record(
 
     Some(OvertimeRecord {
         date: date.format("%Y-%m-%d").to_string(),
-        lock_time: lock_time.format("%H:%M").to_string(),
+        // 跨午夜时 lock_min 已 +24h，展示要还原成当日时刻（"次日"由 cross_midnight 表达）
+        lock_time: format_hm(if cross_midnight { lock_min - DAY_MIN } else { lock_min }),
         ot_start: format_hm(ot_start_min),
         raw_hours: (raw_hours * 10.0).round() / 10.0, // 保留 1 位小数
         valid_hours,
@@ -258,6 +296,7 @@ fn compute_record(
         meal,
         total,
         source: SOURCE_AUTO, // 计算出来的记录一律是自动来源，手改由 save_manual 改写
+        cross_midnight,
     })
 }
 
@@ -270,6 +309,9 @@ pub struct ManualOvertimeInput {
     pub lock_time: String,
     /// 可选：覆盖加班起算时间 "HH:MM"；None 用配置默认值
     pub ot_start: Option<String>,
+    /// 下班时间是否在次日凌晨（熬过午夜）。true 时 lock_time 按 +24h 计。
+    #[serde(default)]
+    pub cross_midnight: bool,
 }
 
 /// "YYYY-MM-DD" + "HH:MM" → 当天本地 DateTime
@@ -335,7 +377,8 @@ pub fn save_manual(
         .ok_or_else(|| "加班起算时间格式错误".to_string())?;
     let lock_min = lock_dt.hour() as f64 * 60.0
         + lock_dt.minute() as f64
-        + lock_dt.second() as f64 / 60.0;
+        + lock_dt.second() as f64 / 60.0
+        + if input.cross_midnight { DAY_MIN } else { 0.0 };
     if lock_min <= ot_start_min {
         return Err(format!(
             "下班时间 {} 需晚于加班起算时间 {}",
@@ -346,8 +389,15 @@ pub fn save_manual(
     if calc_valid_hours(raw_hours) < 1.0 {
         return Err("加班时长不足 1 小时，无法生成有效记录".to_string());
     }
-    let rec = compute_record(date, lock_dt, Some(ot_start_str), cfg, kind)
-        .ok_or_else(|| "无法生成加班记录".to_string())?;
+    let rec = compute_record(
+        date,
+        lock_min,
+        input.cross_midnight,
+        Some(ot_start_str),
+        cfg,
+        kind,
+    )
+    .ok_or_else(|| "无法生成加班记录".to_string())?;
     // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
     upsert_manual(rec.clone());
     Ok(rec)
@@ -387,18 +437,20 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
 fn upsert_into(g: &Connection, record: &OvertimeRecord, force: bool) -> rusqlite::Result<()> {
     g.execute(
         "INSERT INTO ot_records \
-         (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+         (date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source, \
+          cross_midnight) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
          ON CONFLICT(date) DO UPDATE SET \
-           lock_time   = excluded.lock_time, \
-           ot_start    = excluded.ot_start, \
-           raw_hours   = excluded.raw_hours, \
-           valid_hours = excluded.valid_hours, \
-           fee         = excluded.fee, \
-           meal        = excluded.meal, \
-           total       = excluded.total, \
-           source      = excluded.source \
-         WHERE ?10 <> 0 OR ot_records.source = 0",
+           lock_time      = excluded.lock_time, \
+           ot_start       = excluded.ot_start, \
+           raw_hours      = excluded.raw_hours, \
+           valid_hours    = excluded.valid_hours, \
+           fee            = excluded.fee, \
+           meal           = excluded.meal, \
+           total          = excluded.total, \
+           source         = excluded.source, \
+           cross_midnight = excluded.cross_midnight \
+         WHERE ?11 <> 0 OR ot_records.source = 0",
         params![
             record.date,
             record.lock_time,
@@ -409,6 +461,7 @@ fn upsert_into(g: &Connection, record: &OvertimeRecord, force: bool) -> rusqlite
             record.meal,
             record.total,
             record.source,
+            record.cross_midnight as i32,
             force as i32
         ],
     )?;
@@ -438,7 +491,8 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
     // 查询失败（表未建 / SQL 出错）时降级为空月报，不再 panic；错误已由 with_db 记入 debug.log
     crate::db::with_db(|g| {
         let mut stmt = g.prepare(
-            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
+            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source, \
+             cross_midnight \
              FROM ot_records WHERE date LIKE ?1 ORDER BY date",
         )?;
         let rows = stmt.query_map(params![format!("{prefix}%")], |r| {
@@ -452,6 +506,7 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
                 meal: r.get(6)?,
                 total: r.get(7)?,
                 source: r.get(8)?,
+                cross_midnight: r.get::<_, i32>(9).unwrap_or(0) != 0,
             })
         })?;
         Ok(MonthlyOvertime {
@@ -469,6 +524,12 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    /// DateTime -> 当日分钟数。compute_record 收的是归属日内的分钟数，
+    /// 与 resolve_overtime_day 的口径保持一致，测试里不要自己另算一遍。
+    fn mins_of(dt: DateTime<Local>) -> f64 {
+        dt.hour() as f64 * 60.0 + dt.minute() as f64 + dt.second() as f64 / 60.0
     }
 
     /// 构造本地下班时刻（锁屏离开时刻）
@@ -526,7 +587,8 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(); // 周三
         let r = compute_record(
             date,
-            lock_dt(2026, 8, 19, 20, 30),
+            mins_of(lock_dt(2026, 8, 19, 20, 30)),
+            false,
             Some("18:00"),
             &cfg,
             DayKind::Workday,
@@ -548,7 +610,14 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         // 18:30 离开，加班 0.5h < 1h → 无有效记录
         assert!(
-            compute_record(date, lock_dt(2026, 8, 19, 18, 30), Some("18:00"), &cfg, DayKind::Workday)
+            compute_record(
+                date,
+                mins_of(lock_dt(2026, 8, 19, 18, 30)),
+                false,
+                Some("18:00"),
+                &cfg,
+                DayKind::Workday,
+            )
                 .is_none()
         );
     }
@@ -558,7 +627,14 @@ mod tests {
         let cfg = Config::default(); // weekend_overtime=false
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
         assert!(
-            compute_record(date, lock_dt(2026, 8, 22, 22, 0), Some("18:00"), &cfg, DayKind::Weekend)
+            compute_record(
+                date,
+                mins_of(lock_dt(2026, 8, 22, 22, 0)),
+                false,
+                Some("18:00"),
+                &cfg,
+                DayKind::Weekend,
+            )
                 .is_none()
         );
     }
@@ -570,7 +646,8 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
         let r = compute_record(
             date,
-            lock_dt(2026, 8, 22, 22, 0),
+            mins_of(lock_dt(2026, 8, 22, 22, 0)),
+            false,
             Some("18:00"),
             &cfg,
             DayKind::Weekend,
@@ -588,7 +665,8 @@ mod tests {
         // 自定义起算 19:00，20:30 离开 → 1.5h
         let r = compute_record(
             date,
-            lock_dt(2026, 8, 19, 20, 30),
+            mins_of(lock_dt(2026, 8, 19, 20, 30)),
+            false,
             Some("19:00"),
             &cfg,
             DayKind::Workday,
@@ -604,8 +682,7 @@ mod tests {
     #[test]
     fn calc_record_defaults_to_pm_end() {
         let cfg = Config::default(); // overtime_start=None → 用 pm_end 18:00
-        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
-        let r = calc_record(date, lock_dt(2026, 8, 19, 20, 0), &cfg, None).expect("应生成");
+        let r = calc_record_auto(lock_dt(2026, 8, 19, 20, 0), &cfg, None).expect("应生成");
         assert_eq!(r.ot_start, "18:00");
         assert!(approx(r.valid_hours, 2.0));
     }
@@ -654,8 +731,7 @@ mod tests {
     fn rest_day_starts_at_09_by_default() {
         let mut cfg = Config::default();
         cfg.weekend_overtime = true;
-        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
-        let r = calc_record(date, lock_dt(2026, 8, 22, 14, 0), &cfg, None).expect("休息日应生成");
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 14, 0), &cfg, None).expect("休息日应生成");
         assert_eq!(r.ot_start, "09:00");
         assert!(approx(r.valid_hours, 5.0));
         assert!(approx(r.fee, 100.0)); // 5h * 20
@@ -666,8 +742,7 @@ mod tests {
     #[test]
     fn rest_day_switch_off_means_none() {
         let cfg = Config::default(); // weekend_overtime = false
-        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
-        assert!(calc_record(date, lock_dt(2026, 8, 22, 22, 0), &cfg, None).is_none());
+        assert!(calc_record_auto(lock_dt(2026, 8, 22, 22, 0), &cfg, None).is_none());
     }
 
     /// 费率回退链：法定节假日 -> 休息日 -> 工作日。老配置没有新字段时不改变行为
@@ -694,8 +769,7 @@ mod tests {
         cfg.weekend_overtime = true;
         cfg.overtime_rate_holiday = Some(60.0);
         let c = holiday_with(&[(2026, 10, 1, 3)]);
-        let date = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let r = calc_record(date, lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");
+        let r = calc_record_auto(lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");
         assert_eq!(r.ot_start, "09:00");
         assert!(approx(r.valid_hours, 8.0));
         assert!(approx(r.fee, 480.0)); // 8h * 60
@@ -706,8 +780,7 @@ mod tests {
     fn makeup_workday_ignores_rest_switch() {
         let cfg = Config::default(); // weekend_overtime = false
         let c = holiday_with(&[(2026, 9, 27, 2)]);
-        let date = NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(); // 周日补班
-        let r = calc_record(date, lock_dt(2026, 9, 27, 21, 0), &cfg, Some(&c))
+        let r = calc_record_auto(lock_dt(2026, 9, 27, 21, 0), &cfg, Some(&c))
             .expect("补班日应按工作日算");
         assert_eq!(r.ot_start, "18:00"); // 工作日起算，而非休息日的 09:00
         assert!(approx(r.valid_hours, 3.0));
@@ -721,9 +794,94 @@ mod tests {
             date: "2026-08-22".into(), // 周六
             lock_time: "20:00".into(),
             ot_start: None,
+            cross_midnight: false,
         };
         let err = save_manual(input, &cfg, None).unwrap_err();
         assert!(err.contains("休息日"), "报错应说明是休息日，实际: {err}");
+    }
+
+    // ---- 跨午夜：加班归属日与时长 ----
+
+    /// 正常时段：归属日就是锁屏当天
+    #[test]
+    fn resolve_overtime_day_normal_hours() {
+        let (d, m, c) = resolve_overtime_day(lock_dt(2026, 9, 11, 20, 30));
+        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 9, 11).unwrap());
+        assert!(approx(m, 1230.0));
+        assert!(!c);
+    }
+
+    /// 修复前的核心 bug：9/11 加班到 9/12 01:30 才锁屏离开，归属日被取成「检测当天」9/12，
+    /// 于是 `lock_min(90) <= ot_start(1080)` 直接 return None——通宵一分钱不算，且毫无提示。
+    #[test]
+    fn resolve_overtime_day_after_midnight_belongs_to_previous_day() {
+        let (d, m, c) = resolve_overtime_day(lock_dt(2026, 9, 12, 1, 30));
+        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 9, 11).unwrap());
+        assert!(approx(m, 1530.0)); // 01:30 + 24h
+        assert!(c);
+    }
+
+    /// 阈值两侧：06:00 是分界，早于它才算熬过午夜（再晚会把早上到公司后的锁屏误判成前一天加班）
+    #[test]
+    fn resolve_overtime_day_threshold_is_0600() {
+        let (d1, _, c1) = resolve_overtime_day(lock_dt(2026, 9, 12, 5, 59));
+        assert_eq!(d1, NaiveDate::from_ymd_opt(2026, 9, 11).unwrap());
+        assert!(c1, "05:59 应归属前一天");
+
+        let (d2, _, c2) = resolve_overtime_day(lock_dt(2026, 9, 12, 6, 0));
+        assert_eq!(d2, NaiveDate::from_ymd_opt(2026, 9, 12).unwrap());
+        assert!(!c2, "06:00 起不再算跨午夜");
+    }
+
+    /// 端到端：9/11 通宵到 9/12 01:30 锁屏 → 记在 9/11，7.5h，且标记跨午夜
+    #[test]
+    fn calc_record_auto_crosses_midnight() {
+        let cfg = Config::default();
+        let r = calc_record_auto(lock_dt(2026, 9, 12, 1, 30), &cfg, None).expect("通宵应生成记录");
+        assert_eq!(r.date, "2026-09-11");
+        assert_eq!(r.lock_time, "01:30"); // 展示仍是当日时刻，"次日"由 cross_midnight 表达
+        assert!(r.cross_midnight);
+        assert!(approx(r.raw_hours, 7.5));
+        assert!(approx(r.valid_hours, 7.5));
+        assert!(approx(r.fee, 150.0)); // 7.5h * 20
+        assert!(approx(r.total, 170.0)); // + 20 饭补
+    }
+
+    /// 固定「修复了什么」：同一时刻在旧口径下（归属 9/12、结束时刻不加 24h）一分钱都算不到
+    #[test]
+    fn old_behavior_cross_midnight_yielded_nothing() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 9, 12).unwrap();
+        assert!(compute_record(date, 90.0, false, Some("18:00"), &cfg, DayKind::Workday).is_none());
+    }
+
+    /// 手动补录跨午夜：01:30 + 勾选「次日」→ 与自动路径同一套规则（+24h）
+    #[test]
+    fn manual_cross_midnight_uses_same_rule() {
+        let cfg = Config::default();
+        let date = NaiveDate::from_ymd_opt(2026, 9, 11).unwrap();
+        let r = compute_record(date, 90.0 + DAY_MIN, true, Some("18:00"), &cfg, DayKind::Workday)
+            .expect("手动跨午夜应生成");
+        assert!(approx(r.valid_hours, 7.5));
+        assert!(r.cross_midnight);
+        assert_eq!(r.lock_time, "01:30");
+    }
+
+    /// 手动补录忘勾「次日」时给明确报错，而不是静默生成一条离谱的记录
+    #[test]
+    fn save_manual_without_cross_flag_reports_error() {
+        let cfg = Config::default();
+        let input = ManualOvertimeInput {
+            date: "2026-09-11".into(), // 周五，工作日
+            lock_time: "01:30".into(),
+            ot_start: None,
+            cross_midnight: false,
+        };
+        let err = save_manual(input, &cfg, None).unwrap_err();
+        assert!(
+            err.contains("晚于"),
+            "报错应说明下班时间需晚于起算时间，实际: {err}"
+        );
     }
 
     // ---- 覆盖语义：手动记录必须保住，不能被自动锁屏记录顶掉 ----
@@ -748,12 +906,14 @@ mod tests {
             meal: 20.0,
             total: valid_hours * 20.0 + 20.0,
             source: SOURCE_AUTO,
+            cross_midnight: false,
         }
     }
 
     fn query_one(db: &Connection, date: &str) -> OvertimeRecord {
         db.query_row(
-            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source \
+            "SELECT date, lock_time, ot_start, raw_hours, valid_hours, fee, meal, total, source, \
+             cross_midnight \
              FROM ot_records WHERE date = ?1",
             params![date],
             |r| {
@@ -767,6 +927,7 @@ mod tests {
                     meal: r.get(6)?,
                     total: r.get(7)?,
                     source: r.get(8)?,
+                    cross_midnight: r.get::<_, i32>(9).unwrap_or(0) != 0,
                 })
             },
         )

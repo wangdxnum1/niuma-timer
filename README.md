@@ -48,6 +48,8 @@ Lunch break is excluded automatically (morning + afternoon segments configured s
 
 Overtime is detected via the Windows lock-screen event: leaving (locking) the machine after the configured overtime start time records a daily overtime record (`raw_hours` → valid hours floored to 0.5h, fee = valid × rate, plus optional meal allowance).
 
+The overtime day is derived from the **lock timestamp itself**: a leave time before 06:00 counts as past-midnight, so it is attributed to the **previous day** with +24h added to the end time — locking at 01:30 on 9/12 after working through the night is recorded as 7.5h on 9/11, shown as "次日 01:30" (next day 01:30) in the detail view.
+
 ## Requirements
 
 - **Windows 10 / 11**

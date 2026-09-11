@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 /// `ot_records` 建表语句。单独拆成常量：overtime 模块的单测要在 in-memory 库上
 /// 按它建表，以免测试碰到真实库 `%APPDATA%/niuma-timer/niuma.db`。
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS ot_records (
     fee         REAL NOT NULL,
     meal        REAL NOT NULL,
     total       REAL NOT NULL,
-    source      INTEGER NOT NULL DEFAULT 0
+    source      INTEGER NOT NULL DEFAULT 0,
+    cross_midnight INTEGER NOT NULL DEFAULT 0
 );
 "#;
 
@@ -119,12 +120,49 @@ const TABLE_DDL: &[&str] = &[
 
 /// 建全部数据表（幂等，重复执行无副作用）。
 ///
-/// 程序从未发布、不存在需要升级的旧库，因此**不做任何版本化迁移**：
-/// schema 变更直接改上方 DDL，开发期删掉 `%APPDATA%/niuma-timer/niuma.db` 重建即可。
-/// （版本化迁移曾引发全新库「duplicate column name: source」首跑 panic，已整体移除。）
+/// v1.0.0 起已有真实用户库，schema 变更**不能**再靠删库重建：建表后再按
+/// [`EXTRA_COLUMNS`] 幂等补列（见 [`ensure_column`]）。
 pub(crate) fn init_tables(db: &Connection) {
     for ddl in TABLE_DDL {
         db.execute_batch(ddl).expect("初始化数据库表失败");
+    }
+    for (table, col, decl) in EXTRA_COLUMNS {
+        ensure_column(db, table, col, decl);
+    }
+}
+
+/// 历史库需要补上的列：`(表名, 列名, 列声明)`。
+///
+/// 全新库的建表 DDL 里已含这些列，只有 v1.0.0 及更早的库才需要 ALTER。
+/// 列一旦长期稳定可把声明并进 DDL、从这里移除。
+const EXTRA_COLUMNS: &[(&str, &str, &str)] = &[(
+    "ot_records",
+    "cross_midnight",
+    "INTEGER NOT NULL DEFAULT 0",
+)];
+
+/// 幂等补列：仅当列不存在时 `ALTER TABLE ... ADD COLUMN`。
+///
+/// **必须先查 `pragma_table_info` 再 ALTER**。直接无条件 ALTER 会让全新库报
+/// 「duplicate column name」（它的建表 DDL 里已有该列）——历史上正是这么翻的车，
+/// 当时的结论是「不做迁移」，代价是老库永远升不了级。
+fn ensure_column(db: &Connection, table: &str, col: &str, decl: &str) {
+    let exists: i32 = db
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+            params![table, col],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if exists > 0 {
+        return;
+    }
+    if let Err(e) = db.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), []) {
+        // 补列失败不阻断启动：缺的只是「跨午夜」标记，已有记录照常读写，
+        // 仅写入新记录时会因列缺失报错——把原因记下来便于排查。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            debug_log(&format!("补列 {table}.{col} 失败: {e}"))
+        }));
     }
 }
 
@@ -214,5 +252,37 @@ mod tests {
             )
             .unwrap_or(0);
         assert_eq!(has_source, 1);
+    }
+
+    /// 老库补列：v1.0.0 建的库没有 cross_midnight，init_tables 必须补上而不是崩。
+    /// 这正是历史上「duplicate column name」翻车的场景——所以 ensure_column
+    /// 必须先查 pragma_table_info 再 ALTER，不能无条件加。
+    #[test]
+    fn init_tables_adds_missing_column_to_legacy_db() {
+        let db = Connection::open_in_memory().unwrap();
+        // 模拟 v1.0.0 的旧 schema：少一列 cross_midnight
+        db.execute_batch(
+            "CREATE TABLE ot_records (
+                date        TEXT PRIMARY KEY,
+                lock_time   TEXT NOT NULL,
+                ot_start    TEXT NOT NULL,
+                raw_hours   REAL NOT NULL,
+                valid_hours REAL NOT NULL,
+                fee         REAL NOT NULL,
+                meal        REAL NOT NULL,
+                total       REAL NOT NULL,
+                source      INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .unwrap();
+        init_tables(&db);
+        let n: i32 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ot_records') WHERE name = 'cross_midnight'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "老库应补上 cross_midnight 列");
     }
 }

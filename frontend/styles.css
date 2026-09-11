@@ -474,6 +474,17 @@ button:hover {
   gap: 4px;
   flex: 1;
 }
+.ot-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  cursor: pointer;
+}
+.ot-check input {
+  width: auto;
+  margin: 0;
+}
 .ot-form input {
   background: #11141b;
   border: 1px solid #2a2e3a;

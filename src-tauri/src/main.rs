@@ -268,16 +268,18 @@ fn maybe_record_overtime_lock(state: &AppState) {
     *seen = Some(lock_ts);
     drop(seen);
 
-    let now = Local::now();
     let hol = sync::lock(&state.holiday, "state.holiday");
-    let kind = overtime::day_kind(now.date_naive(), Some(&hol));
-    // 非工作日只在开关打开时才算加班。此前这里直接 `if !is_workday { return }`，
-    // 导致 weekend_overtime 开关形同虚设——开了也永远走不到计算。
-    if kind.is_rest() && !cfg.weekend_overtime {
-        return;
-    }
     if let Some(lt) = Local.timestamp_opt(lock_ts, 0).single() {
-        if let Some(record) = overtime::calc_record(now.date_naive(), lt, &cfg, Some(&hol)) {
+        // 归属日由**锁屏时刻**自己决定，不能用「检测时刻」的日期：检测每 5 秒一次，
+        // 23:59:58 锁屏可能在 00:00:02 才被处理，而凌晨锁屏要归属前一天。
+        let (day, _, _) = overtime::resolve_overtime_day(lt);
+        let kind = overtime::day_kind(day, Some(&hol));
+        // 非工作日只在开关打开时才算加班。此前这里直接 `if !is_workday { return }`，
+        // 导致 weekend_overtime 开关形同虚设——开了也永远走不到计算。
+        if kind.is_rest() && !cfg.weekend_overtime {
+            return;
+        }
+        if let Some(record) = overtime::calc_record_auto(lt, &cfg, Some(&hol)) {
             // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
             overtime::upsert_auto(record);
         }
