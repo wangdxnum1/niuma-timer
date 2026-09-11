@@ -16,6 +16,11 @@ pub struct HolidayCache {
 }
 
 impl HolidayCache {
+    /// 该日期的原始类型：0=工作日 1=周末 2=补班 3=法定节假日。未知返回 None
+    pub fn day_type(&self, date: NaiveDate) -> Option<u8> {
+        self.days.get(&date).copied()
+    }
+
     /// 该日期是否为工作日（班/补班）。未知返回 None
     pub fn is_workday(&self, date: NaiveDate) -> Option<bool> {
         self.days

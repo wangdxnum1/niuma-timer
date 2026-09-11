@@ -43,9 +43,22 @@ pub struct Config {
     /// 饭补金额（元）
     #[serde(default = "default_overtime_meal")]
     pub overtime_meal: f64,
-    /// 周末加班开关：周六/周日是否计入加班（默认关闭；开启后周末下班晚也记加班）
+    /// 休息日 / 节假日加班开关：非工作日是否计入加班（默认关闭）
+    ///
+    /// 关闭时，周末与法定节假日一律不计加班（调休补班日仍按工作日正常计算）。
     #[serde(default)]
     pub weekend_overtime: bool,
+    /// 休息日 / 法定节假日加班的起算时间 "HH:MM"（None = 用 [`DEFAULT_REST_OT_START`]）。
+    /// 休息日没有「下班时间」概念，沿用工作日的 pm_end 会让上午来、下午走的人算不到加班，
+    /// 故单独给一个默认 09:00 的起算点。
+    #[serde(default)]
+    pub weekend_ot_start: Option<String>,
+    /// 休息日加班费率（元/小时）。None = 沿用 [`Config::overtime_rate`]
+    #[serde(default)]
+    pub overtime_rate_weekend: Option<f64>,
+    /// 法定节假日加班费率（元/小时）。None = 沿用休息日费率，再没有则沿用工作日费率
+    #[serde(default)]
+    pub overtime_rate_holiday: Option<f64>,
 
     // ---- 应用使用白名单 ----
     /// 仅统计白名单内应用（关闭或空名单=统计全部前台应用，兼容现状）
@@ -118,6 +131,9 @@ impl Default for Config {
             overtime_meal_enabled: true,
             overtime_meal: 20.0,
             weekend_overtime: false,
+            weekend_ot_start: None,
+            overtime_rate_weekend: None,
+            overtime_rate_holiday: None,
             app_whitelist_enabled: false,
             app_whitelist: Vec::new(),
             monitor_activity: true,

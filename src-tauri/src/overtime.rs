@@ -1,5 +1,6 @@
 //! 加班记录：数据结构、费用计算、SQLite 持久化（ot_records 表）。
 
+use crate::holiday::HolidayCache;
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Weekday};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,78 @@ impl MonthlyOvertime {
     }
 }
 
+/// 加班日类型，决定「起算时间」与「费率」两件事
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DayKind {
+    /// 工作日；含调休补班日（那天的班是正常的，加班按工作日规则算）
+    Workday,
+    /// 普通周末，含因法定假日调休而来的休息日
+    Weekend,
+    /// 法定节假日
+    Holiday,
+}
+
+impl DayKind {
+    /// 是否非工作日（受 weekend_overtime 开关约束）
+    pub fn is_rest(self) -> bool {
+        !matches!(self, DayKind::Workday)
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            DayKind::Workday => "工作日",
+            DayKind::Weekend => "休息日",
+            DayKind::Holiday => "法定节假日",
+        }
+    }
+}
+
+/// 休息日加班的默认起算时间。
+/// 休息日没有「下班时间」概念，沿用工作日的 pm_end（18:00）会让上午来、下午 5 点走的人
+/// 因为 `lock_min <= ot_start` 而一分钱算不到，且毫无提示——默认给 09:00 才符合实际。
+pub const DEFAULT_REST_OT_START: &str = "09:00";
+
+/// 判定某天属于哪一类。节假日数据缺失（未联网且无内置表）时降级为按自然周几判断。
+pub fn day_kind(date: NaiveDate, holiday: Option<&HolidayCache>) -> DayKind {
+    if let Some(c) = holiday {
+        // 0=工作日 1=周末 2=补班 3=法定节假日
+        match c.day_type(date) {
+            Some(0) | Some(2) => return DayKind::Workday,
+            Some(1) => return DayKind::Weekend,
+            Some(3) => return DayKind::Holiday,
+            _ => {}
+        }
+    }
+    if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        DayKind::Weekend
+    } else {
+        DayKind::Workday
+    }
+}
+
+/// 该类型的加班起算时间：休息日/法定节假日有独立配置，工作日沿用原有规则
+fn ot_start_of(cfg: &Config, kind: DayKind) -> &str {
+    match kind {
+        DayKind::Workday => cfg.overtime_start.as_deref().unwrap_or(&cfg.pm_end),
+        _ => cfg
+            .weekend_ot_start
+            .as_deref()
+            .unwrap_or(DEFAULT_REST_OT_START),
+    }
+}
+
+/// 该类型的加班费率（元/小时）。未单独配置时逐级回退，老配置不受影响：
+/// 法定节假日 → 休息日 → 工作日
+fn rate_of(cfg: &Config, kind: DayKind) -> f64 {
+    match kind {
+        DayKind::Workday => cfg.overtime_rate,
+        DayKind::Weekend => cfg.overtime_rate_weekend.unwrap_or(cfg.overtime_rate),
+        DayKind::Holiday => cfg
+            .overtime_rate_holiday
+            .or(cfg.overtime_rate_weekend)
+            .unwrap_or(cfg.overtime_rate),
+    }
+}
+
 /// 方案一：有效时长计算
 /// - 不足 1 小时 → 0（无效）
 /// - >= 1 小时 → 向下取 0.5 小时
@@ -125,26 +198,30 @@ pub fn calc_record(
     date: NaiveDate,
     lock_time: DateTime<Local>,
     cfg: &Config,
+    holiday: Option<&HolidayCache>,
 ) -> Option<OvertimeRecord> {
-    // 加班起算时间：overtime_start 有值则用，否则用 pm_end
-    let ot_start_str = cfg.overtime_start.as_deref().unwrap_or(&cfg.pm_end);
-    compute_record(date, lock_time, ot_start_str, cfg)
+    compute_record(date, lock_time, None, cfg, day_kind(date, holiday))
 }
 
 /// 核心计算：给定明确的加班起算时间字符串，计算单日记录。
 /// 抽出来供自动锁屏路径与手动录入路径共用，保证规则一致。
+///
+/// `ot_start_override` 只在手动录入时由调用方给出（用户在表单里覆盖起算时间），
+/// 否则按 [`ot_start_of`] 依日期类型选取。
 fn compute_record(
     date: NaiveDate,
     lock_time: DateTime<Local>,
-    ot_start_str: &str,
+    ot_start_override: Option<&str>,
     cfg: &Config,
+    kind: DayKind,
 ) -> Option<OvertimeRecord> {
-    // 周末加班受配置开关约束：周六/周日且未开启 weekend_overtime 时不计入加班。
-    // 按自然周几判断；调休补班日暂按周末处理（加班计算未接入 holiday 日类型）。
-    if !cfg.weekend_overtime && matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+    // 非工作日受配置开关约束：未开启 weekend_overtime 时休息日/法定节假日不计加班。
+    // 工作日（含调休补班日）不受此开关影响。
+    if kind.is_rest() && !cfg.weekend_overtime {
         return None;
     }
 
+    let ot_start_str = ot_start_override.unwrap_or_else(|| ot_start_of(cfg, kind));
     let ot_start_min = to_min(ot_start_str)?;
 
     let lock_min = lock_time.hour() as f64 * 60.0
@@ -163,7 +240,7 @@ fn compute_record(
         return None; // 不足 1 小时
     }
 
-    let fee = valid_hours * cfg.overtime_rate;
+    let fee = valid_hours * rate_of(cfg, kind);
     let meal = if cfg.overtime_meal_enabled {
         cfg.overtime_meal
     } else {
@@ -231,24 +308,28 @@ fn is_future(date: &str) -> bool {
 pub fn save_manual(
     input: ManualOvertimeInput,
     cfg: &Config,
+    holiday: Option<&HolidayCache>,
 ) -> Result<OvertimeRecord, String> {
     let date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
     if is_future(&input.date) {
         return Err("不能添加未来日期的加班记录".to_string());
     }
-    // 周末加班受开关约束：手动录入周末且未开启开关时给出明确提示
-    if !cfg.weekend_overtime && matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
-        return Err("周末加班功能未开启，请在设置中开启「周末加班」".to_string());
+    let kind = day_kind(date, holiday);
+    // 非工作日受开关约束：手动录入休息日/法定节假日且未开启时给出明确提示
+    if kind.is_rest() && !cfg.weekend_overtime {
+        return Err(format!(
+            "{}加班功能未开启，请在设置中开启「休息日 / 节假日加班」",
+            kind.label()
+        ));
     }
     let lock_dt = parse_lock_datetime(&input.date, &input.lock_time)
         .ok_or_else(|| "下班时间格式错误，应为 HH:MM".to_string())?;
-    // 起算时间：手动覆盖 > 配置 overtime_start > pm_end
+    // 起算时间：手动覆盖 > 按日期类型选取（工作日 overtime_start/pm_end、休息日 weekend_ot_start）
     let ot_start_str = input
         .ot_start
         .as_deref()
-        .or(cfg.overtime_start.as_deref())
-        .unwrap_or(&cfg.pm_end);
+        .unwrap_or_else(|| ot_start_of(cfg, kind));
     // 预校验，给出明确错误（compute_record 返回 None 时无法区分原因）
     let ot_start_min = to_min(ot_start_str)
         .ok_or_else(|| "加班起算时间格式错误".to_string())?;
@@ -265,7 +346,7 @@ pub fn save_manual(
     if calc_valid_hours(raw_hours) < 1.0 {
         return Err("加班时长不足 1 小时，无法生成有效记录".to_string());
     }
-    let rec = compute_record(date, lock_dt, ot_start_str, cfg)
+    let rec = compute_record(date, lock_dt, Some(ot_start_str), cfg, kind)
         .ok_or_else(|| "无法生成加班记录".to_string())?;
     // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
     upsert_manual(rec.clone());
@@ -384,6 +465,7 @@ pub fn get_month(year: i32, month: u32) -> MonthlyOvertime {
 mod tests {
     use super::*;
     use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
+    use std::collections::HashMap;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
@@ -442,8 +524,14 @@ mod tests {
     fn compute_record_weekday_valid() {
         let cfg = Config::default();
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(); // 周三
-        let r = compute_record(date, lock_dt(2026, 8, 19, 20, 30), "18:00", &cfg)
-            .expect("应生成记录");
+        let r = compute_record(
+            date,
+            lock_dt(2026, 8, 19, 20, 30),
+            Some("18:00"),
+            &cfg,
+            DayKind::Workday,
+        )
+        .expect("应生成记录");
         assert_eq!(r.date, "2026-08-19");
         assert_eq!(r.lock_time, "20:30");
         assert_eq!(r.ot_start, "18:00");
@@ -459,14 +547,20 @@ mod tests {
         let cfg = Config::default();
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         // 18:30 离开，加班 0.5h < 1h → 无有效记录
-        assert!(compute_record(date, lock_dt(2026, 8, 19, 18, 30), "18:00", &cfg).is_none());
+        assert!(
+            compute_record(date, lock_dt(2026, 8, 19, 18, 30), Some("18:00"), &cfg, DayKind::Workday)
+                .is_none()
+        );
     }
 
     #[test]
     fn compute_record_weekend_disabled_none() {
         let cfg = Config::default(); // weekend_overtime=false
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
-        assert!(compute_record(date, lock_dt(2026, 8, 22, 22, 0), "18:00", &cfg).is_none());
+        assert!(
+            compute_record(date, lock_dt(2026, 8, 22, 22, 0), Some("18:00"), &cfg, DayKind::Weekend)
+                .is_none()
+        );
     }
 
     #[test]
@@ -474,8 +568,14 @@ mod tests {
         let mut cfg = Config::default();
         cfg.weekend_overtime = true;
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
-        let r = compute_record(date, lock_dt(2026, 8, 22, 22, 0), "18:00", &cfg)
-            .expect("周末开启应生成");
+        let r = compute_record(
+            date,
+            lock_dt(2026, 8, 22, 22, 0),
+            Some("18:00"),
+            &cfg,
+            DayKind::Weekend,
+        )
+        .expect("周末开启应生成");
         assert!(approx(r.valid_hours, 4.0));
         assert!(approx(r.fee, 80.0));
         assert!(approx(r.total, 100.0));
@@ -486,7 +586,14 @@ mod tests {
         let cfg = Config::default();
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         // 自定义起算 19:00，20:30 离开 → 1.5h
-        let r = compute_record(date, lock_dt(2026, 8, 19, 20, 30), "19:00", &cfg).expect("应生成");
+        let r = compute_record(
+            date,
+            lock_dt(2026, 8, 19, 20, 30),
+            Some("19:00"),
+            &cfg,
+            DayKind::Workday,
+        )
+        .expect("应生成");
         assert_eq!(r.ot_start, "19:00");
         assert!(approx(r.raw_hours, 1.5));
         assert!(approx(r.valid_hours, 1.5));
@@ -498,9 +605,125 @@ mod tests {
     fn calc_record_defaults_to_pm_end() {
         let cfg = Config::default(); // overtime_start=None → 用 pm_end 18:00
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
-        let r = calc_record(date, lock_dt(2026, 8, 19, 20, 0), &cfg).expect("应生成");
+        let r = calc_record(date, lock_dt(2026, 8, 19, 20, 0), &cfg, None).expect("应生成");
         assert_eq!(r.ot_start, "18:00");
         assert!(approx(r.valid_hours, 2.0));
+    }
+
+    // ---- 休息日 / 法定节假日：日期类型判定与费率 ----
+
+    /// 构造只有若干天类型标记的节假日缓存
+    fn holiday_with(entries: &[(i32, u32, u32, u8)]) -> HolidayCache {
+        let mut days = HashMap::new();
+        for (y, m, d, t) in entries {
+            days.insert(NaiveDate::from_ymd_opt(*y, *m, *d).unwrap(), *t);
+        }
+        HolidayCache {
+            year: 2026,
+            fetched_at: 1,
+            days,
+        }
+    }
+
+    #[test]
+    fn day_kind_reads_holiday_types() {
+        let c = holiday_with(&[
+            (2026, 9, 25, 0), // 周五 工作日
+            (2026, 9, 26, 1), // 周六 普通周末
+            (2026, 9, 27, 2), // 周日 调休补班 -> 按工作日算
+            (2026, 10, 1, 3), // 周四 国庆 -> 法定节假日
+        ]);
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        assert_eq!(day_kind(d(2026, 9, 25), Some(&c)), DayKind::Workday);
+        assert_eq!(day_kind(d(2026, 9, 26), Some(&c)), DayKind::Weekend);
+        assert_eq!(day_kind(d(2026, 9, 27), Some(&c)), DayKind::Workday);
+        assert_eq!(day_kind(d(2026, 10, 1), Some(&c)), DayKind::Holiday);
+    }
+
+    /// 节假日数据缺失（未联网且无内置表）时降级为按自然周几判断，不误伤
+    #[test]
+    fn day_kind_falls_back_without_holiday_data() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        assert_eq!(day_kind(d(2026, 8, 22), None), DayKind::Weekend); // 周六
+        assert_eq!(day_kind(d(2026, 8, 19), None), DayKind::Workday); // 周三
+    }
+
+    /// 修复前的核心 bug：休息日沿用工作日的 18:00 起算，上午来、下午走的人
+    /// 因为 `lock_min <= ot_start` 直接 return None，一分钱算不到且无任何提示。
+    #[test]
+    fn rest_day_starts_at_09_by_default() {
+        let mut cfg = Config::default();
+        cfg.weekend_overtime = true;
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
+        let r = calc_record(date, lock_dt(2026, 8, 22, 14, 0), &cfg, None).expect("休息日应生成");
+        assert_eq!(r.ot_start, "09:00");
+        assert!(approx(r.valid_hours, 5.0));
+        assert!(approx(r.fee, 100.0)); // 5h * 20
+        assert!(approx(r.total, 120.0)); // + 20 饭补
+    }
+
+    /// 开关关闭时休息日不算加班
+    #[test]
+    fn rest_day_switch_off_means_none() {
+        let cfg = Config::default(); // weekend_overtime = false
+        let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
+        assert!(calc_record(date, lock_dt(2026, 8, 22, 22, 0), &cfg, None).is_none());
+    }
+
+    /// 费率回退链：法定节假日 -> 休息日 -> 工作日。老配置没有新字段时不改变行为
+    #[test]
+    fn rate_falls_back_chain() {
+        let mut cfg = Config::default();
+        assert!(approx(rate_of(&cfg, DayKind::Workday), 20.0));
+        assert!(approx(rate_of(&cfg, DayKind::Weekend), 20.0));
+        assert!(approx(rate_of(&cfg, DayKind::Holiday), 20.0));
+
+        cfg.overtime_rate_weekend = Some(40.0);
+        assert!(approx(rate_of(&cfg, DayKind::Weekend), 40.0));
+        assert!(approx(rate_of(&cfg, DayKind::Holiday), 40.0)); // 节假日未配 -> 用休息日
+
+        cfg.overtime_rate_holiday = Some(60.0);
+        assert!(approx(rate_of(&cfg, DayKind::Holiday), 60.0));
+        assert!(approx(rate_of(&cfg, DayKind::Workday), 20.0)); // 工作日不受影响
+    }
+
+    /// 法定节假日：日期类型来自 holiday 数据（周三国庆），费率走节假日档
+    #[test]
+    fn holiday_uses_holiday_rate() {
+        let mut cfg = Config::default();
+        cfg.weekend_overtime = true;
+        cfg.overtime_rate_holiday = Some(60.0);
+        let c = holiday_with(&[(2026, 10, 1, 3)]);
+        let date = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let r = calc_record(date, lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");
+        assert_eq!(r.ot_start, "09:00");
+        assert!(approx(r.valid_hours, 8.0));
+        assert!(approx(r.fee, 480.0)); // 8h * 60
+    }
+
+    /// 调休补班日（周日但要上班）按工作日规则：不受 weekend_overtime 开关影响
+    #[test]
+    fn makeup_workday_ignores_rest_switch() {
+        let cfg = Config::default(); // weekend_overtime = false
+        let c = holiday_with(&[(2026, 9, 27, 2)]);
+        let date = NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(); // 周日补班
+        let r = calc_record(date, lock_dt(2026, 9, 27, 21, 0), &cfg, Some(&c))
+            .expect("补班日应按工作日算");
+        assert_eq!(r.ot_start, "18:00"); // 工作日起算，而非休息日的 09:00
+        assert!(approx(r.valid_hours, 3.0));
+    }
+
+    /// 手动录入休息日而开关未开时，给出指向开关的明确报错（而不是静默失败）
+    #[test]
+    fn save_manual_rest_day_requires_switch() {
+        let cfg = Config::default(); // weekend_overtime = false
+        let input = ManualOvertimeInput {
+            date: "2026-08-22".into(), // 周六
+            lock_time: "20:00".into(),
+            ot_start: None,
+        };
+        let err = save_manual(input, &cfg, None).unwrap_err();
+        assert!(err.contains("休息日"), "报错应说明是休息日，实际: {err}");
     }
 
     // ---- 覆盖语义：手动记录必须保住，不能被自动锁屏记录顶掉 ----

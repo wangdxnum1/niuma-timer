@@ -177,7 +177,7 @@ GitHub Release and upload the artifacts.
 
 ## Known limitations
 
-- **Weekend overtime** is reserved in config (`weekend_overtime`) but not yet implemented.
+- **Rest-day / public-holiday overtime** is off by default; enable it in settings to have those days counted. Rest days start counting from 09:00 by default (a rest day has no "clock-off time"), and the rate can be configured separately, falling back by level when unset (public holiday -> rest day -> workday). Recognising public holidays and makeup workdays depends on holiday data; without data for that year it falls back to the day of week.
 - Monitor threads consume a small amount of CPU while running; disable unused ones in settings (already-counted data is kept).
 - Tooltip (native mode) is plain text rendered by the OS (no colors/icons); alignment relies on full-width-space (U+3000) column math.
 - Cross-platform (macOS/Linux) is not supported.

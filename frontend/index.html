@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=21" />
+    <link rel="stylesheet" href="styles.css?v=22" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -227,9 +227,24 @@
           <input id="overtime_meal" type="number" min="0" step="5" value="20" />
         </label>
         <label class="switch-row">
-          <span>周末加班</span>
+          <span>休息日 / 节假日加班</span>
           <input id="weekend_overtime" type="checkbox" class="switch" />
         </label>
+        <div id="restOtFields">
+          <label>
+            <span>休息日加班起算时间</span>
+            <input id="weekend_ot_start" type="time" placeholder="09:00" />
+          </label>
+          <label>
+            <span>休息日费率（元/小时）</span>
+            <input id="overtime_rate_weekend" type="number" min="0" step="1" placeholder="同工作日" />
+          </label>
+          <label>
+            <span>法定节假日费率（元/小时）</span>
+            <input id="overtime_rate_holiday" type="number" min="0" step="1" placeholder="同休息日" />
+          </label>
+          <p class="hint">休息日没有「下班时间」概念，起算时间默认 09:00——沿用工作日的 18:00 会让上午来、下午走的人一分钱算不到。费率留空表示沿用上一级（法定节假日 → 休息日 → 工作日）。调休补班日按工作日规则计算，不受本开关影响</p>
+        </div>
       </section>
 
       <section class="card">
@@ -387,6 +402,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=21"></script>
+    <script src="app.js?v=22"></script>
   </body>
 </html>

@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "2026-09-10.v21";
+const FE_VER = "2026-09-10.v22";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -70,6 +70,10 @@ async function load() {
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
     $("overtime_meal").value = cfg.overtime_meal ?? 20;
     $("weekend_overtime").checked = !!cfg.weekend_overtime;
+    $("weekend_ot_start").value = cfg.weekend_ot_start || "";
+    $("overtime_rate_weekend").value = cfg.overtime_rate_weekend ?? "";
+    $("overtime_rate_holiday").value = cfg.overtime_rate_holiday ?? "";
+    applyRestOvertimeVisibility(cfg.weekend_overtime);
     $("app_whitelist_enabled").checked = !!cfg.app_whitelist_enabled;
     renderWhitelist(cfg.app_whitelist || []);
     $("monitor_activity").checked = cfg.monitor_activity !== false;
@@ -198,9 +202,20 @@ function readCfg() {
     monitor_app_usage: $("monitor_app_usage").checked,
     monitor_audio: $("monitor_audio").checked,
     weekend_overtime: $("weekend_overtime").checked,
+    weekend_ot_start: $("weekend_ot_start").value || null,
+    overtime_rate_weekend: numOrNull($("overtime_rate_weekend").value),
+    overtime_rate_holiday: numOrNull($("overtime_rate_holiday").value),
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
     app_whitelist: readWhitelist(),
   };
+}
+
+// 数字输入：留空返回 null（表示沿用上一级费率），有值才解析
+function numOrNull(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (s === "") return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
 }
 
 // 控件失焦时调用：配置无变化则不写盘（去重）
@@ -364,6 +379,12 @@ function applyTaglineCustomVisibility(v) {
 function applyOvertimeVisibility(enabled) {
   const card = $("otCard");
   if (card) card.style.display = enabled ? "" : "none";
+}
+
+// 休息日/节假日加班关闭时隐藏其三项子配置，避免看到一堆不生效的输入框
+function applyRestOvertimeVisibility(enabled) {
+  const box = $("restOtFields");
+  if (box) box.style.display = enabled ? "" : "none";
 }
 
 // 加班明细当前查看的年月；null = 跟随当月
@@ -1012,6 +1033,9 @@ function paintAudioUsage() {
   "pm_end",
   "payday",
   "workdays_override",
+  "weekend_ot_start",
+  "overtime_rate_weekend",
+  "overtime_rate_holiday",
 ].forEach((id) => $(id).addEventListener("blur", saveIfChanged));
 // 下拉框：选择即保存
 $("duration_format").addEventListener("change", saveIfChanged);
@@ -1040,7 +1064,10 @@ $("overtime_enabled").addEventListener("change", () => {
   if (on) loadOvertime();
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
-$("weekend_overtime").addEventListener("change", saveNow);
+$("weekend_overtime").addEventListener("change", () => {
+  applyRestOvertimeVisibility($("weekend_overtime").checked);
+  saveNow();
+});
 // 应用使用白名单：开关立即保存；添加按钮/回车新增 chip 并保存
 $("app_whitelist_enabled").addEventListener("change", saveNow);
 $("appWhitelistAdd").addEventListener("click", addWhitelistItem);
