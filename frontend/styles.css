@@ -13,81 +13,72 @@ body {
   /* 窗口固定高度，禁用页面级滚动，滚动交给 .app 容器内部 */
   height: 100vh;
   overflow: hidden;
-  /* 工具栏 + 分段条 + 当前视图纵向排列；弹窗/toast/启动页均为 fixed 定位，不入弹性流 */
+  /* 侧边栏在左 + 内容列在右；弹窗/toast/启动页均为 fixed 定位，不入弹性流 */
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
-/* ====== 分段工具栏（macOS 风）：主页|明细 两段居中 + ⚙ 设置齿轮靠右 ====== */
-.toolbar {
+/* ====== 侧边导航栏（Windows 11 设置同款形态）======
+   64px 图标 + 双字标签纵排，当前项金色药丸高亮；图标用系统自带
+   Segoe Fluent / MDL2 字体，与原生应用同一套字形 */
+.rail {
+  width: 64px;
   flex-shrink: 0;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  padding: 10px 14px 8px;
+  height: 100vh;
   background: #202023;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 4px 12px;
+  gap: 4px;
   user-select: none;
 }
-.tb-side.right {
-  justify-self: end;
-}
-.seg {
-  display: flex;
-  gap: 1px;
-  padding: 2px;
-  background: rgba(255, 255, 255, 0.07);
+.rail-item {
+  width: 56px;
+  padding: 9px 0 7px;
+  border: none;
+  background: transparent;
   border-radius: 8px;
-}
-.seg-nav {
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  color: #b8b8be;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 6px 18px;
-  transition: background 0.12s, color 0.12s;
-}
-.seg-nav:hover {
-  color: #e8e8ec;
-}
-/* mac 分段控件精髓：选中块是「凸起」的浅灰键帽，而非染色药丸 */
-.seg-nav.active {
-  background: #5b5b60;
-  color: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45), inset 0 0.5px 0 rgba(255, 255, 255, 0.18);
-}
-.seg-nav:active {
-  background: #6a6a70;
-}
-/* ⚙ 设置齿轮：纯图标按钮（Segoe 系统字形），设置视图内点亮金色 */
-.gear {
-  width: 32px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
   color: #b8b8be;
   cursor: pointer;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 4px;
+  font-family: inherit;
   transition: background 0.12s, color 0.12s;
 }
-.gear:hover {
-  background: rgba(255, 255, 255, 0.08);
+.rail-item:hover {
+  background: rgba(255, 255, 255, 0.07);
   color: #e8e8ec;
 }
-.gear.active {
-  background: rgba(255, 214, 80, 0.16);
+.rail-item.active {
+  background: rgba(255, 214, 80, 0.14);
   color: #ffd650;
 }
-.ico-glyph {
+.rail-item:active {
+  background: rgba(255, 214, 80, 0.2);
+}
+.rail-ico {
   font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
-  font-size: 14px;
+  font-size: 19px;
   line-height: 1;
+}
+.rail-txt {
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.rail-gap {
+  flex: 1;
+}
+
+/* 右侧内容列：翻页器 + 当前视图的纵向栈 */
+.page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ====== 明细翻页器：‹ 页名 › + 圆点直达 + 滚轮翻页（取代二级 tab 行）====== */

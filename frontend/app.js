@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "ve84a035d";
+const FE_VER = "ve9b83e1a";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -1407,15 +1407,14 @@ function showView(id) {
   target.classList.remove("hidden");
   curView = id;
   // 导航同步（契约见 scripts 目录的导航回归测试）：
-  // 工具栏分段高亮——4 个明细视图都映射到「明细」聚合段；
-  // 翻页器——仅在明细视图显示，页名与圆点跟随当前页；齿轮在设置视图点亮
+  // 侧栏高亮——4 个明细视图都映射到「明细」聚合项，设置项在设置视图点亮；
+  // 翻页器——仅在明细视图显示，页名与圆点跟随当前页
   const isDetail = DETAIL_VIEWS.includes(id);
   if (isDetail) lastDetailView = id;
   const navKey = isDetail ? "detail" : id;
-  document.querySelectorAll(".seg-nav").forEach((b) => {
+  document.querySelectorAll(".rail-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.nav === navKey);
   });
-  $("gearBtn").classList.toggle("active", id === "viewSettings");
   $("detailPager").classList.toggle("hidden", !isDetail);
   if (isDetail) {
     const names = {
@@ -1473,14 +1472,13 @@ $("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsa
 $("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
 $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
 
-// 分段工具栏 + ⚙ 设置 + 明细翻页器：任意视图直达（取代原「‹ 返回」的网页式导航）。
+// 侧边导航栏 + 明细翻页器：任意视图直达（取代原「‹ 返回」的网页式导航）。
 // 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
-document.querySelectorAll(".seg-nav").forEach((btn) => {
+document.querySelectorAll(".rail-item").forEach((btn) => {
   btn.addEventListener("click", () =>
     showView(btn.dataset.nav === "detail" ? lastDetailView : btn.dataset.nav)
   );
 });
-$("gearBtn").addEventListener("click", () => showView("viewSettings"));
 
 // 明细翻页器：‹ › 循环切页（加班→键鼠→应用→媒体→加班），圆点直达任意页
 function pgStep(delta) {
@@ -1557,7 +1555,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=e84a035d = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=e9b83e1a = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=e84a035d" />
+    <link rel="stylesheet" href="styles.css?v=e9b83e1a" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -41,20 +41,25 @@
       setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
     </script>
 
-    <!-- 分段工具栏（macOS 风）：主页|明细 两段居中 + ⚙ 设置齿轮靠右。
-         「明细」是聚合段，对应 4 个二级页，由下方分段条二次切换；
-         点击明细进入上次浏览的子页（lastDetailView 记忆）。图标用系统自带
-         Segoe Fluent / MDL2 字体，与原生应用同源 -->
-    <nav class="toolbar" aria-label="主导航">
-      <div class="tb-side"></div>
-      <div class="seg" role="tablist">
-        <button class="seg-nav active" data-nav="viewMain">主页</button>
-        <button class="seg-nav" data-nav="detail">明细</button>
-      </div>
-      <div class="tb-side right">
-        <button class="gear" id="gearBtn" data-nav="viewSettings" aria-label="设置" title="设置"><span class="ico-glyph" aria-hidden="true">&#xE713;</span></button>
-      </div>
+    <!-- 侧边导航栏（Windows 11 设置同款形态）：主页/明细/设置 三项纵排，
+         图标 + 双字标签，当前项金色高亮。「明细」是聚合项，对应 4 个二级页，
+         由翻页器二次切换；点击明细进入上次浏览的子页（lastDetailView 记忆）。
+         图标用系统自带 Segoe Fluent / MDL2 字体，与原生应用同源 -->
+    <nav class="rail" aria-label="主导航">
+      <button class="rail-item active" data-nav="viewMain" title="主页">
+        <span class="rail-ico" aria-hidden="true">&#xE80F;</span><span class="rail-txt">主页</span>
+      </button>
+      <button class="rail-item" data-nav="detail" title="明细">
+        <span class="rail-ico" aria-hidden="true">&#xE823;</span><span class="rail-txt">明细</span>
+      </button>
+      <div class="rail-gap"></div>
+      <button class="rail-item" data-nav="viewSettings" title="设置">
+        <span class="rail-ico" aria-hidden="true">&#xE713;</span><span class="rail-txt">设置</span>
+      </button>
     </nav>
+
+    <!-- 右侧内容列：翻页器 + 六个视图（侧栏之外的纵向栈） -->
+    <div class="page">
 
     <!-- 明细翻页器：‹ 页名 › 循环切页 + 圆点直达 + 滚轮翻页（内容滚到头再滚即翻），
          仅在明细视图可见时显示（同一套 DOM 服务四个视图，curView 语义不变） -->
@@ -459,6 +464,8 @@
         <div id="audioList" class="act-topkeys"></div>
       </section>
     </div>
+    </div>
+    <!-- /右侧内容列 -->
 
     <!-- 加班添加/编辑弹窗（居中 modal，日期与下班时间自动预填） -->
     <div id="otForm" class="modal hidden">
@@ -492,6 +499,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=e84a035d"></script>
+    <script src="app.js?v=e9b83e1a"></script>
   </body>
 </html>
