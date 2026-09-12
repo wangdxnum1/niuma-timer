@@ -22,9 +22,9 @@ use tauri::{App, AppHandle, PhysicalPosition, WebviewUrl, WebviewWindow, Webview
 use crate::calc::DayStatus;
 use crate::icon_render::static_icon;
 
-/// 彩色悬停卡片尺寸（逻辑像素）
+/// 彩色悬停卡片尺寸（逻辑像素）。高度 280 = 卡片 264（含时间轴与月度战果行）+ 边距
 const HOVER_CARD_W: f64 = 320.0;
-const HOVER_CARD_H: f64 = 240.0;
+const HOVER_CARD_H: f64 = 280.0;
 
 /// 延迟显示时长（毫秒）：进入托盘后等待该时长，若仍停留才显示，
 /// 模仿系统原生 tooltip 的延迟出现，避免划过托盘就弹窗。
@@ -679,7 +679,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html".into()),
+        WebviewUrl::App("hover_card.html?v=h2".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)

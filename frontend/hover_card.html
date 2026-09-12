@@ -18,7 +18,7 @@
           "Microsoft YaHei", system-ui, sans-serif;
         color: #f2f2f4;
         width: 320px;
-        height: 240px;
+        height: 280px;
         padding: 8px;
         -webkit-font-smoothing: antialiased;
         user-select: none;
@@ -33,7 +33,7 @@
         box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
         /* 初始隐藏，收到 hover_show 后平滑淡入（缩放 + 上浮） */
         opacity: 0;
         transform: translateY(6px) scale(0.97);
@@ -121,6 +121,85 @@
         color: #d9d9de;
         font-weight: 600;
       }
+      /* 今日时间轴：上班/午休/下班分段 + 白色「现在」指针（休息日隐藏） */
+      .tl.hidden {
+        display: none;
+      }
+      .taxis {
+        position: relative;
+        height: 8px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: visible;
+        margin: -2px 2px 0;
+      }
+      .tseg {
+        height: 100%;
+        min-width: 0;
+      }
+      .tseg:first-child {
+        border-radius: 4px 0 0 4px;
+      }
+      .tseg.done {
+        background: linear-gradient(90deg, #ff9f0a, #ffd650);
+      }
+      .tseg.todo {
+        background: transparent;
+      }
+      .tseg.rest {
+        background: repeating-linear-gradient(
+          45deg,
+          rgba(255, 255, 255, 0.12) 0 3px,
+          transparent 3px 7px
+        );
+      }
+      .tnow {
+        position: absolute;
+        top: -2px;
+        width: 2px;
+        height: 12px;
+        background: #fff;
+        border-radius: 1px;
+        box-shadow: 0 0 6px rgba(255, 255, 255, 0.9);
+      }
+      .tlabels {
+        position: relative;
+        height: 12px;
+        margin: 3px 2px 0;
+        font-size: 9px;
+        color: #85858b;
+        font-variant-numeric: tabular-nums;
+      }
+      .tlabels span {
+        position: absolute;
+        transform: translateX(-50%);
+      }
+      .tlabels span:first-child {
+        transform: none;
+      }
+      .tlabels span:last-child {
+        transform: translateX(-100%);
+      }
+      /* 本月加班战果行：汗水换来的钱，一行带过 */
+      .otrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        background: rgba(255, 214, 80, 0.07);
+        border: 1px solid rgba(255, 214, 80, 0.2);
+        border-radius: 8px;
+        font-size: 11px;
+      }
+      .otrow .k {
+        color: rgba(255, 214, 80, 0.8);
+      }
+      .otrow .v {
+        margin-left: auto;
+        color: #ffd650;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
       .grid {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
@@ -195,12 +274,29 @@
         <div class="lp-track"><div class="lp-fill" id="lpFill"></div></div>
         <div class="lp-cap"><span id="lpCapL">今日已赚</span><b id="lpPct">—</b></div>
       </div>
+      <div class="tl hidden" id="tl">
+        <div class="taxis">
+          <div class="tseg done" id="tlAmDone"></div>
+          <div class="tseg todo" id="tlAmTodo"></div>
+          <div class="tseg rest" id="tlRest"></div>
+          <div class="tseg done" id="tlPmDone"></div>
+          <div class="tseg todo" id="tlPmTodo"></div>
+          <div class="tnow" id="tlNow"></div>
+        </div>
+        <div class="tlabels">
+          <span id="tlAmStart" style="left:0">09:00</span>
+          <span id="tlAmEnd" style="left:33.3%">12:00</span>
+          <span id="tlPmStart" style="left:50%">13:30</span>
+          <span id="tlPmEnd" style="left:100%">18:00</span>
+        </div>
+      </div>
       <div class="grid">
         <div><span>已工作</span><b id="worked">—</b></div>
         <div><span>距下班</span><b id="toff">—</b></div>
         <div><span>赚钱速率</span><b id="rate">—</b></div>
         <div><span>距发薪</span><b id="pay">—</b></div>
       </div>
+      <div class="otrow"><span class="k">本月加班战果</span><span class="v" id="otTotal">¥0 · 0 天</span></div>
       <div class="foot" id="foot"><i class="dot"></i><span id="footText">—</span></div>
     </div>
     <script>
@@ -232,6 +328,91 @@
         var mm = Math.floor((total % 3600) / 60);
         var ss = total % 60;
         return hh + "时" + mm + "分" + ss + "秒";
+      }
+
+      // ===== 配置与月度加班：卡片创建时拉一次，每次悬停进入时刷新 =====
+      // 时间轴需要上下班配置（am/pm），加班行需要当月合计——两条都是低频
+      // 一次性拉取（悬停进入是人为动作，每条目 1~2 次 IPC 可忽略），
+      // 不占用每秒的 hover_data 推送通道
+      var cfg = null;
+      var otFetchedAt = 0;
+
+      function toMin(hhmm) {
+        var p = String(hhmm || "").split(":");
+        if (p.length !== 2) return null;
+        var h = parseInt(p[0], 10);
+        var m = parseInt(p[1], 10);
+        if (isNaN(h) || isNaN(m)) return null;
+        return h * 60 + m;
+      }
+
+      function loadCfg() {
+        window.__TAURI_INTERNALS__.invoke("load_config")
+          .then(function (c) {
+            cfg = c;
+          })
+          .catch(function (err) {
+            reportErr("load_config: " + err);
+          });
+      }
+
+      // 当月加班合计：60s 节流（卡片可见期最长 20s，同一轮悬停不会重复查）
+      function refreshOt() {
+        if (Date.now() - otFetchedAt < 60000) return;
+        otFetchedAt = Date.now();
+        window.__TAURI_INTERNALS__.invoke("get_overtime_records")
+          .then(function (ot) {
+            document.getElementById("otTotal").textContent =
+              "¥" + ot.total_all.toFixed(0) + " · " + ot.days + " 天";
+          })
+          .catch(function (err) {
+            reportErr("get_overtime_records: " + err);
+          });
+      }
+
+      // 今日时间轴：上班/午休/下班按配置分段，白色「现在」指针标出当前位置。
+      // 每秒随 hover_data 刷新；休息日或配置异常时整块隐藏
+      function renderTimeline(s) {
+        var wrap = document.getElementById("tl");
+        var amS = cfg ? toMin(cfg.am_start) : null;
+        var amE = cfg ? toMin(cfg.am_end) : null;
+        var pmS = cfg ? toMin(cfg.pm_start) : null;
+        var pmE = cfg ? toMin(cfg.pm_end) : null;
+        if (
+          !s.is_workday ||
+          amS === null ||
+          amE === null ||
+          pmS === null ||
+          pmE === null ||
+          pmE <= amS
+        ) {
+          wrap.classList.add("hidden");
+          return;
+        }
+        wrap.classList.remove("hidden");
+        var span = pmE - amS;
+        var now = new Date();
+        var nowMin = now.getHours() * 60 + now.getMinutes();
+        function ov(t, a, b) {
+          return t <= a ? 0 : t >= b ? b - a : t - a;
+        }
+        function pc(v) {
+          return (Math.min(Math.max(v, 0), span) / span) * 100 + "%";
+        }
+        var amW = ov(nowMin, amS, amE);
+        var pmW = ov(nowMin, pmS, pmE);
+        document.getElementById("tlAmDone").style.width = pc(amW);
+        document.getElementById("tlAmTodo").style.width = pc(amE - amS - amW);
+        document.getElementById("tlRest").style.width = pc(pmS - amE);
+        document.getElementById("tlPmDone").style.width = pc(pmW);
+        document.getElementById("tlPmTodo").style.width = pc(pmE - pmS - pmW);
+        document.getElementById("tlNow").style.left = pc(
+          Math.min(Math.max(nowMin, amS), pmE)
+        );
+        document.getElementById("tlAmStart").textContent = cfg.am_start;
+        document.getElementById("tlAmEnd").textContent = cfg.am_end;
+        document.getElementById("tlPmStart").textContent = cfg.pm_start;
+        document.getElementById("tlPmEnd").textContent = cfg.pm_end;
       }
 
       // 数据由 Rust 端每秒 emit "hover_data" 推送。
@@ -286,6 +467,8 @@
           foot.className = "foot work";
           document.getElementById("footText").textContent = "搬砖中，冲鸭 🐂";
         }
+
+        renderTimeline(s);
       }
 
       // 淡入（幂等，防重复触发闪烁）
@@ -334,8 +517,13 @@
           reportErr("listen(" + name + ") failed: " + err);
         });
       }
-      // 鼠标悬停托盘 → 淡入（Rust 端重试发送，页面未就绪时由 hover_ready 握手兜底）
-      listen("hover_show", showCard);
+      // 鼠标悬停托盘 → 淡入（Rust 端重试发送，页面未就绪时由 hover_ready 握手兜底）；
+      // 每次进入顺带刷新配置与月度加班（低频，见上方说明）
+      listen("hover_show", function () {
+        showCard();
+        loadCfg();
+        refreshOt();
+      });
       // 鼠标离开托盘 → 淡出
       listen("hover_hide", hideCard);
       // 实时数据推送
@@ -345,6 +533,8 @@
 
       // 页面加载完成 → 通知 Rust：若鼠标仍悬停在托盘上，补一次定位 + 淡入。
       // 这是"首次悬停事件丢失"的最终兜底，不依赖任何窗口可见性猜测。
+      loadCfg();
+      refreshOt();
       window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
         event: "hover_ready",
         payload: null,
