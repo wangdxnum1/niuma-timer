@@ -1,7 +1,7 @@
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 应用配置（持久化到 AppData/niuma-timer/config.json）
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -172,30 +172,71 @@ fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+/// 配置装载的四分类。read_config_file 只读+分类、**零写副作用**，
+/// 因此能离线单测（见 tests）。
+#[derive(Debug)]
+enum LoadResult {
+    /// 读到有效配置
+    Loaded(Config),
+    /// 文件在但内容不是合法配置（损坏 / 写到一半）
+    Corrupt,
+    /// 文件在但读不了（被杀毒/备份软件短暂占用、权限抖动）
+    Unreadable(std::io::Error),
+    /// 文件不存在（首跑）
+    Missing,
+}
+
+/// load 的可测内核：读文件 + 解析 + 分类。区分「不存在 / 读不了 / 读到但坏」
+/// 三种文件态是本函数存在的全部意义——三者在上层的处置完全不同，混在一个
+/// `if let Ok` 里就会把「读不了」错当成「没配置」而覆盖用户数据。
+fn read_config_file(path: &Path) -> LoadResult {
+    match fs::read_to_string(path) {
+        Ok(s) => match serde_json::from_str::<Config>(&s) {
+            Ok(cfg) => LoadResult::Loaded(cfg),
+            Err(_) => LoadResult::Corrupt,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LoadResult::Missing,
+        Err(e) => LoadResult::Unreadable(e),
+    }
+}
+
 /// 读取配置；不存在则用默认值并写盘。
-/// 文件存在但解析失败（损坏 / 写到一半）→ 先备份为 config.json.corrupt-时间戳.bak，
-/// 再回退默认配置，**绝不用默认值直接覆盖**，避免静默丢失用户配置。
+/// - 文件解析失败（损坏 / 写到一半）→ 先备份为 config.json.corrupt-时间戳.bak，
+///   再回退默认配置，**绝不用默认值直接覆盖**，避免静默丢失用户配置；
+/// - 文件读不了（被占用 / 权限）→ 内存用默认值撑着，**磁盘原样保留**，
+///   绝不落盘默认值覆盖真配置——下次启动大概率就能读到了。
 pub fn load() -> Config {
     let path = config_path();
-    if let Ok(s) = fs::read_to_string(&path) {
-        if let Ok(mut cfg) = serde_json::from_str::<Config>(&s) {
+    match read_config_file(&path) {
+        LoadResult::Loaded(mut cfg) => {
             if stamp_override_month(&mut cfg) {
                 save(&cfg);
             }
-            return cfg;
+            cfg
         }
-        // 解析失败：原文件损坏，先备份再回退默认
-        let ts = Local::now().format("%Y%m%d-%H%M%S");
-        let bak = path.with_file_name(format!("config.json.corrupt-{ts}.bak"));
-        let _ = fs::rename(&path, &bak);
-        eprintln!(
-            "[config] config.json 解析失败，已备份为 {}（回退默认配置）",
-            bak.display()
-        );
+        LoadResult::Corrupt => {
+            let ts = Local::now().format("%Y%m%d-%H%M%S");
+            let bak = path.with_file_name(format!("config.json.corrupt-{ts}.bak"));
+            let _ = fs::rename(&path, &bak);
+            eprintln!(
+                "[config] config.json 解析失败，已备份为 {}（回退默认配置）",
+                bak.display()
+            );
+            let cfg = Config::default();
+            save(&cfg);
+            cfg
+        }
+        LoadResult::Unreadable(e) => {
+            eprintln!("[config] config.json 读取失败（{e}），本次先用默认配置运行，不覆盖磁盘原文件");
+            crate::db::debug_log(&format!("[config] config.json 读取失败: {e}"));
+            Config::default()
+        }
+        LoadResult::Missing => {
+            let cfg = Config::default();
+            save(&cfg);
+            cfg
+        }
     }
-    let cfg = Config::default();
-    save(&cfg);
-    cfg
 }
 
 /// 写入配置（原子写：先写临时文件再 rename 覆盖）。
@@ -298,5 +339,72 @@ mod tests {
         assert!(stamped.is_some());
         assert!(!stamp_override_month(&mut cfg), "已有所属月不应再改");
         assert_eq!(cfg.workdays_override_for, stamped);
+    }
+
+    // ---- read_config_file：load() 的可测内核，四分类各有归属 ----
+    // 用临时目录构造文件，绝不碰真实的 %APPDATA%/niuma-timer/config.json。
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("niuma-cfg-test-{tag}-{}", std::process::id()));
+        let _ = fs::create_dir_all(&d);
+        d
+    }
+
+    fn cleanup(p: &PathBuf, dir: &PathBuf) {
+        let _ = fs::remove_file(p);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// 文件不存在 = Missing（首跑初始化，上层落盘默认值）
+    #[test]
+    fn read_config_file_missing_is_missing() {
+        let p = std::env::temp_dir().join(format!("niuma-cfg-nope-{}.json", std::process::id()));
+        assert!(matches!(read_config_file(&p), LoadResult::Missing));
+    }
+
+    /// 合法 JSON = Loaded，且缺省字段走 serde default 而非误判损坏。
+    /// 注意 6 个无 #[serde(default)] 的核心字段必须齐全（salary/payday/四个时间），
+    /// 缺任何一个按 Corrupt 处理——与旧 load() 的 from_str 行为一致。
+    #[test]
+    fn read_config_file_valid_json_is_loaded() {
+        let dir = tmp_dir("valid");
+        let p = dir.join("config.json");
+        fs::write(
+            &p,
+            r#"{"monthly_salary": 15000, "payday": 15, "am_start": "09:00", "am_end": "12:00", "pm_start": "13:00", "pm_end": "18:00"}"#,
+        )
+        .unwrap();
+        match read_config_file(&p) {
+            LoadResult::Loaded(cfg) => {
+                assert_eq!(cfg.monthly_salary, 15000.0);
+                assert_eq!(cfg.payday, 15);
+                assert_eq!(cfg.duration_format, "hms");
+            }
+            other => panic!("应 Loaded，实际 {other:?}"),
+        }
+        cleanup(&p, &dir);
+    }
+
+    /// 内容不是合法配置 = Corrupt（上层备份后落盘默认值）
+    #[test]
+    fn read_config_file_garbage_is_corrupt() {
+        let dir = tmp_dir("corrupt");
+        let p = dir.join("config.json");
+        fs::write(&p, "{ not json !!!").unwrap();
+        assert!(matches!(read_config_file(&p), LoadResult::Corrupt));
+        cleanup(&p, &dir);
+    }
+
+    /// 读失败 = Unreadable（本修复的核心分支）。用「路径指向目录」模拟
+    /// 「文件存在但读不了」（Windows 下 read_to_string 对目录报 PermissionDenied，
+    /// 区别于 NotFound）——此前 load() 把这种情况当成没配置，直接 save() 默认值
+    /// 覆盖磁盘上的真配置，正是要堵的洞。
+    #[test]
+    fn read_config_file_unreadable_is_unreadable() {
+        let dir = tmp_dir("unreadable");
+        let p = dir.join("config.json");
+        fs::create_dir_all(&p).unwrap();
+        assert!(matches!(read_config_file(&p), LoadResult::Unreadable(_)));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

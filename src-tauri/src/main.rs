@@ -387,7 +387,8 @@ fn delete_overtime_record(
 }
 
 /// 获取今日鼠标/键盘活动统计（逐小时 + 汇总 + 高频按键）
-#[tauri::command]
+/// `(async)`：前端每 2 秒轮询的三个 summary 都不该占主线程，理由同 get_storage_info
+#[tauri::command(async)]
 fn get_activity_summary(date: Option<String>) -> activity::ActivitySummary {
     activity::summary_for(date.as_deref())
 }
@@ -396,7 +397,7 @@ fn get_activity_summary(date: Option<String>) -> activity::ActivitySummary {
 ///
 /// `known_icons`：前端已缓存图标的应用名，命中者不再回传 base64（图标是几 KB~几十 KB
 /// 的 data URL，每 2 秒轮询整批搬运纯属浪费，只有新应用才需要传一次）。
-#[tauri::command]
+#[tauri::command(async)]
 fn get_app_usage_summary(
     known_icons: Vec<String>,
     date: Option<String>,
@@ -405,7 +406,7 @@ fn get_app_usage_summary(
 }
 
 /// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）
-#[tauri::command]
+#[tauri::command(async)]
 fn get_audio_usage_summary(
     known_icons: Vec<String>,
     date: Option<String>,
@@ -445,7 +446,12 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<String, String>
 }
 
 /// 存储占用快照：设置页「数据存储」卡片展示用
-#[tauri::command]
+///
+/// `(async)`：同步 command 默认在**主线程**执行，而本命令要做 dbstat 全库扫描、
+/// 7 张表 COUNT 与目录遍历；下面的 run_maintenance 更是持全局 DB 锁做 WAL
+/// TRUNCATE + 数据清理，最坏秒级——期间托盘 1s 刷新与窗口/托盘事件全部冻结。
+/// 标 async 后函数体改在异步运行时线程执行，主线程只管立即响应。
+#[tauri::command(async)]
 fn get_storage_info(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
     let cfg = sync::lock(&state.config, "state.config").clone();
     Ok(maintain::storage_info(&cfg))
@@ -453,7 +459,8 @@ fn get_storage_info(state: State<'_, AppState>) -> Result<maintain::StorageInfo,
 
 /// 立即执行一次维护（WAL 收缩 + 过期图标 + 过期数据），返回执行后的占用快照。
 /// 与调度器每日自动跑的是同一套逻辑，用户点按钮只是提前触发。
-#[tauri::command]
+/// `(async)` 理由同 get_storage_info：持 DB 锁的重活不能占主线程。
+#[tauri::command(async)]
 fn run_maintenance(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
     let cfg = sync::lock(&state.config, "state.config").clone();
     maintain::run_daily(&cfg);

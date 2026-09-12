@@ -74,9 +74,15 @@ if not "%VER%"=="%CURVER%" (
 )
 
 rem ---------------- 2. environment ----------------
+rem Cargo fallback: rustup only updates the registry user PATH at install time;
+rem terminals opened BEFORE the install never see it (their env is a snapshot).
+rem Probe the default location ourselves, same as build.bat.
+where cargo >nul 2>&1
+if errorlevel 1 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 where cargo >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] cargo not found. Install Rust first.
+  echo         If Rust was just installed, reopen the terminal window and retry.
   exit /b 1
 )
 "%GIT%" --version >nul 2>&1

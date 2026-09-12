@@ -45,3 +45,11 @@ windows = { version = "0.61", features = [
 
 [features]
 # Tauri 2 默认 feature 已包含所需能力；此处留空。
+
+# Release 产物裁剪：thin LTO + 单 codegen unit 缩体积并略提运行速度，strip 去符号。
+# 注意：刻意**不加** panic = "abort"——scheduler 的 catch_unwind 自愈设计
+#（单任务 panic 只丢一拍、不扩散拖垮整个托盘）依赖 unwind 语义，abort 会让它失效。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
