@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v8b7c5f49";
+const FE_VER = "ve7e6f171";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -308,6 +308,19 @@ async function tick() {
     $("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
     $("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
     $("pay").textContent = s.days_to_pay + " 天";
+    // 赚钱进度条：已赚 / 全天应赚（时薪 × 当日总工时，DayStatus 现成字段）。
+    // 休息日或时薪为 0 时整块隐藏；已下班封顶 100%（加班费不进此条）
+    const liveProgress = $("liveProgress");
+    if (s.is_workday && s.hourly_rate > 0 && s.daily_hours > 0) {
+      const target = s.hourly_rate * s.daily_hours;
+      const pct = Math.min(100, (s.earned / target) * 100);
+      liveProgress.classList.remove("hidden");
+      $("lpFill").style.width = pct.toFixed(1) + "%";
+      $("lpTarget").textContent = "¥" + target.toFixed(2);
+      $("lpPct").textContent = Math.round(pct) + "%";
+    } else {
+      liveProgress.classList.add("hidden");
+    }
     renderTagline(s);
   } catch (e) {
     /* 忽略瞬时错误 */
@@ -1253,7 +1266,12 @@ $("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
 $("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
 $("otfSave").addEventListener("click", submitOtForm);
 $("otfCancel").addEventListener("click", hideOtForm);
-// 主界面 ↔ 加班明细二级页面切换
+// 顶部导航：主页 / 明细 / 设置 三个 tab。「明细」是聚合 tab，对应 4 个二级页，
+// 具体显示哪个由 lastDetailView 记忆（默认加班——最常用的明细），由分段条二次切换
+const DETAIL_VIEWS = ["viewOt", "viewAct", "viewApp", "viewAudio"];
+let lastDetailView = "viewOt";
+
+// 视图切换统一入口：主界面 / 设置 / 4 个明细分段互斥（只留一个 .app 可见）
 function showView(id) {
   const target = $(id);
   if (!target) return; // 目标视图不存在则不操作，避免误隐藏所有视图
@@ -1263,6 +1281,19 @@ function showView(id) {
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
   target.classList.remove("hidden");
   curView = id;
+  // 导航同步（契约见 scripts/test_topnav.js）：
+  // 顶导高亮——4 个明细视图都映射到「明细」聚合 tab；
+  // 分段条——仅在明细视图可见时显示，并高亮当前分段
+  const isDetail = DETAIL_VIEWS.includes(id);
+  if (isDetail) lastDetailView = id;
+  const navKey = isDetail ? "detail" : id;
+  document.querySelectorAll(".topnav-item").forEach((b) => {
+    b.classList.toggle("active", b.dataset.nav === navKey);
+  });
+  $("segbar").classList.toggle("hidden", !isDetail);
+  document.querySelectorAll(".seg-item").forEach((b) => {
+    b.classList.toggle("active", b.dataset.seg === id);
+  });
   if (id === "viewMain") resetHistDates();
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
@@ -1281,26 +1312,42 @@ function repaintCurrentView() {
   if (curView === "viewOt") loadOvertime();
 }
 $("otDetailBtn").addEventListener("click", () => showView("viewOt"));
-$("otBackBtn").addEventListener("click", () => showView("viewMain"));
-// 主界面 ↔ 活动明细二级页面切换
-$("actDetailBtn").addEventListener("click", () => showView("viewAct"));
-$("actBackBtn").addEventListener("click", () => showView("viewMain"));
-// 主界面 ↔ 应用使用明细二级页面切换
-$("appuDetailBtn").addEventListener("click", () => showView("viewApp"));
-$("appuBackBtn").addEventListener("click", () => showView("viewMain"));
-// 主界面 ↔ 媒体播放明细二级页面切换
-// 三个二级页的日期导航：翻天后立即按新日期重新拉取
+// 加班总览卡 → 加班明细（自动归入顶导「明细」tab）
+// 今日监控卡（活动/应用/媒体三合一）：内联小分段切换预览面板，
+// 「查看明细」跟随当前分段跳对应明细页。预览面板内的统计 id 由现有 paint 函数维护
+let curMon = "act"; // 当前监控预览分段（act/app/audio）
+const MON_PANES = { act: "monAct", app: "monApp", audio: "monAudio" };
+const MON_VIEWS = { act: "viewAct", app: "viewApp", audio: "viewAudio" };
+document.querySelectorAll(".mon-seg-item").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    curMon = btn.dataset.mon;
+    document.querySelectorAll(".mon-seg-item").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    Object.entries(MON_PANES).forEach(([key, id]) =>
+      $(id).classList.toggle("hidden", key !== curMon)
+    );
+  });
+});
+$("monDetailBtn").addEventListener("click", () => showView(MON_VIEWS[curMon]));
+// 明细页的日期导航：翻天后立即按新日期重新拉取
 $("actPrevDay").addEventListener("click", () => shiftHist("act", -1, loadActivity));
 $("actNextDay").addEventListener("click", () => shiftHist("act", 1, loadActivity));
 $("appuPrevDay").addEventListener("click", () => shiftHist("appu", -1, loadAppUsage));
 $("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsage));
 $("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
 $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
-$("audioDetailBtn").addEventListener("click", () => showView("viewAudio"));
-$("audioBackBtn").addEventListener("click", () => showView("viewMain"));
-// 主界面 ↔ 设置二级页面切换
-$("settingsBtn").addEventListener("click", () => showView("viewSettings"));
-$("settingsBackBtn").addEventListener("click", () => showView("viewMain"));
+
+// 顶部导航条 + 明细分段条：任意视图直达（取代原「‹ 返回」的网页式导航）。
+// 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
+document.querySelectorAll(".topnav-item").forEach((btn) => {
+  btn.addEventListener("click", () =>
+    showView(btn.dataset.nav === "detail" ? lastDetailView : btn.dataset.nav)
+  );
+});
+document.querySelectorAll(".seg-item").forEach((btn) => {
+  btn.addEventListener("click", () => showView(btn.dataset.seg));
+});
 
 // 启动即把三页导航条初始化为「今天」，并禁用「后一天」
 for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
@@ -1339,7 +1386,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=8b7c5f49 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=e7e6f171 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

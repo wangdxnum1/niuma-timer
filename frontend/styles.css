@@ -12,18 +12,118 @@ body {
   /* 窗口固定高度，禁用页面级滚动，滚动交给 .app 容器内部 */
   height: 100vh;
   overflow: hidden;
+  /* 顶导 + 分段条 + 当前视图纵向排列；弹窗/toast/启动页均为 fixed 定位，不入弹性流 */
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部导航条（Windows 11 应用顶栏形态）：3 个文字 tab，「明细」是聚合 tab，
+   对应 4 个二级页（由分段条二次切换）。当前项品牌金色药丸高亮，悬停浅白 */
+.topnav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px 8px;
+  background: #191c24;
+  border-bottom: 1px solid #262a35;
+  user-select: none;
+}
+.topnav-item {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: #a8aebb;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 16px;
+  transition: background 0.12s, color 0.12s;
+}
+.topnav-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dfe3ec;
+}
+.topnav-item.active {
+  background: rgba(255, 214, 80, 0.13);
+  color: #ffd650;
+}
+.topnav-item:active {
+  background: rgba(255, 214, 80, 0.2);
+}
+.topnav-gap {
+  flex: 1;
+}
+
+/* 明细分段条：加班/活动/应用/媒体四个二级页共享的二次切换控件，
+   顶导「明细」tab 选中时出现。Win11 分段控件形态（灰槽 + 金色药丸），
+   左右边距与 .app 内容区对齐 */
+.segbar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  margin: 10px 20px 0;
+  padding: 3px;
+  background: #191c24;
+  border: 1px solid #262a35;
+  border-radius: 10px;
+  user-select: none;
+}
+.seg-item {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: #a8aebb;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 0;
+  transition: background 0.12s, color 0.12s;
+}
+.seg-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dfe3ec;
+}
+.seg-item.active {
+  background: rgba(255, 214, 80, 0.13);
+  color: #ffd650;
+}
+.seg-item:active {
+  background: rgba(255, 214, 80, 0.2);
+}
+.segbar.hidden {
+  display: none;
 }
 
 .app {
-  width: 100%;
-  max-width: 440px;
-  height: 100vh;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   padding: 22px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   box-sizing: border-box;
   overflow-y: auto;
+  /* Fluent 式切换淡入：display none → 可见时自动重放，无需 JS */
+  animation: viewIn 0.15s ease-out;
+}
+@keyframes viewIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* 尊重系统「减弱动态效果」设置（原生应用基本素养） */
+@media (prefers-reduced-motion: reduce) {
+  .app {
+    animation: none;
+  }
 }
 /* 视图切换：二级页面默认隐藏 */
 .app.hidden {
@@ -50,17 +150,12 @@ h1 {
   font-weight: 700;
 }
 
-/* 首页标题行：标题 + 设置入口按钮 */
+/* 首页标题行 */
 .home-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-}
-.settings-btn {
-  padding: 5px 12px;
-  font-size: 13px;
-  flex-shrink: 0;
 }
 
 .sub {
@@ -200,12 +295,59 @@ button:hover {
   color: #cfd4e2;
 }
 
+/* hero 卡：软件灵魂「今日实时」，比普通卡更大更亮，确立主页信息层级 */
+.live {
+  padding: 20px 18px 16px;
+  gap: 12px;
+  background: #1e222d;
+  border-color: #333845;
+}
+.live h2 {
+  text-align: center;
+}
 .live .big {
-  font-size: 38px;
+  font-size: 46px;
   font-weight: 800;
   color: #ffd650;
   text-align: center;
-  margin: 4px 0 10px;
+  margin: 2px 0 0;
+}
+.live .grid b {
+  font-size: 16px;
+}
+
+/* 今日赚钱进度条：hero 卡的核心元素——「今天的钱赚了几成」一眼可见。
+   金色渐变填充（Fluent ProgressBar 形态），width 过渡让金额每秒爬升时平滑滑动 */
+.live-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-progress.hidden {
+  display: none;
+}
+.lp-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #14161c;
+  overflow: hidden;
+}
+.lp-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ffd650, #ffb84d);
+  transition: width 0.6s ease;
+}
+.lp-cap {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #8a90a2;
+}
+.lp-cap b {
+  color: #cfd4e2;
+  font-weight: 600;
 }
 
 .grid {
@@ -227,6 +369,58 @@ button:hover {
 .grid b {
   font-size: 15px;
   color: #e6e8ef;
+}
+
+/* 今日监控三合一卡：头部 = 标题 + 内联小分段（Win11 分段控件形态）+ 查看明细；
+   主体三个预览面板共用 min-height，切分段时卡片高度不跳 */
+.mon-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mon-head h2 {
+  flex-shrink: 0;
+}
+.mon-seg {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  background: #14161c;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  padding: 2px;
+}
+.mon-seg-item {
+  border: none;
+  background: transparent;
+  color: #8a90a2;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+.mon-seg-item:hover {
+  color: #dfe3ec;
+}
+.mon-seg-item.active {
+  background: rgba(255, 214, 80, 0.13);
+  color: #ffd650;
+}
+.mon-gap {
+  flex: 1;
+}
+.mon-detail {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.mon-body {
+  min-height: 118px;
+}
+.mon-pane.hidden {
+  display: none;
 }
 
 .hint {
@@ -352,7 +546,7 @@ button:hover {
   color: #5a6070;
   padding: 16px 0 !important;
 }
-/* 二级页面：加班明细顶部返回栏 */
+/* 二级页面顶部标题栏（返回按钮已由左侧导航栏取代） */
 .page-head {
   display: flex;
   align-items: center;
@@ -363,20 +557,6 @@ button:hover {
   margin: 0;
   font-size: 17px;
   font-weight: 700;
-}
-.back-btn {
-  background: #2a3446;
-  border: 1px solid #3b4558;
-  color: #cfe0ff;
-  font-size: 13px;
-  cursor: pointer;
-  padding: 5px 12px;
-  border-radius: 8px;
-  transition: background 0.15s, border-color 0.15s;
-}
-.back-btn:hover {
-  background: #34425a;
-  border-color: #5b9dff;
 }
 /* 加班明细月份切换：历史回看 */
 .month-nav {

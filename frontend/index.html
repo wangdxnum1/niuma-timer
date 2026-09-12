@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=8b7c5f49" />
+    <link rel="stylesheet" href="styles.css?v=e7e6f171" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -41,16 +41,43 @@
       setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
     </script>
 
+    <!-- 顶部导航条：3 个文字 tab（主页/明细/设置），当前项金色高亮。
+         「明细」是聚合 tab，对应 4 个二级页，由下方分段条二次切换；
+         点击进入上次浏览的明细视图。主页首位、设置右置（原生惯例） -->
+    <nav class="topnav" aria-label="主导航">
+      <button class="topnav-item active" data-nav="viewMain">主页</button>
+      <button class="topnav-item" data-nav="detail">明细</button>
+      <div class="topnav-gap"></div>
+      <button class="topnav-item" data-nav="viewSettings">设置</button>
+    </nav>
+
+    <!-- 明细分段条：加班/活动/应用/媒体四个二级页共享的二次切换控件，
+         仅在明细视图可见时显示（同一套 DOM 服务四个视图，curView 语义不变） -->
+    <div class="segbar hidden" id="segbar" role="tablist" aria-label="明细分段">
+      <button class="seg-item" data-seg="viewOt">加班</button>
+      <button class="seg-item" data-seg="viewAct">活动</button>
+      <button class="seg-item" data-seg="viewApp">应用</button>
+      <button class="seg-item" data-seg="viewAudio">媒体</button>
+    </div>
+
     <div class="app" id="viewMain">
       <div class="home-head">
         <h1>🐎 牛马计时器</h1>
-        <button id="settingsBtn" class="ghost settings-btn">⚙ 设置</button>
       </div>
       <p class="sub" id="tagline">实时计算你今天赚了多少钱</p>
 
+      <!-- 今日实时：主页 hero 卡。大字金额 + 赚钱进度条（已赚/全天应赚）+
+           四格指标。进度条数据全部来自 get_status_cmd 现成字段，见 app.js tick() -->
       <section class="card live">
         <h2>今日实时</h2>
         <div class="big" id="earned">¥0.00</div>
+        <div class="live-progress hidden" id="liveProgress">
+          <div class="lp-track"><div class="lp-fill" id="lpFill"></div></div>
+          <div class="lp-cap">
+            <span>全天应赚 <b id="lpTarget">¥0.00</b></span>
+            <b id="lpPct">0%</b>
+          </div>
+        </div>
         <div class="grid">
           <div><span>已工作</span><b id="worked">0.0h</b></div>
           <div><span>距下班</span><b id="toff">—</b></div>
@@ -74,36 +101,39 @@
         </div>
       </section>
 
-      <section class="card">
-        <h2>今日活动</h2>
-        <div class="grid">
-          <div><span>左键次数</span><b id="act_left">0</b></div>
-          <div><span>右键次数</span><b id="act_right">0</b></div>
-          <div><span>按键次数</span><b id="act_keys">0</b></div>
-          <div><span>活跃时段</span><b id="act_hours">0h</b></div>
+      <!-- 今日监控：活动/应用/媒体三合一预览卡。头部内联小分段切换预览面板，
+           「查看明细」跟随当前分段跳对应明细页（与顶导「明细」分段呼应）；
+           预览面板内的统计 id 由现有 paint 函数维护，合并只动了外壳 -->
+      <section class="card" id="monitorCard">
+        <div class="mon-head">
+          <h2>今日监控</h2>
+          <div class="mon-seg" role="tablist" aria-label="监控预览切换">
+            <button class="mon-seg-item active" data-mon="act">活动</button>
+            <button class="mon-seg-item" data-mon="app">应用</button>
+            <button class="mon-seg-item" data-mon="audio">媒体</button>
+          </div>
+          <div class="mon-gap"></div>
+          <button class="ghost mon-detail" id="monDetailBtn">查看明细 ›</button>
         </div>
-        <div class="ot-actions">
-          <button id="actDetailBtn" class="ghost">查看活动明细 ›</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>应用使用</h2>
-        <div class="appu-home" id="appuHomeList">
-          <p class="hint">今日暂无应用使用记录</p>
-        </div>
-        <div class="ot-actions">
-          <button id="appuDetailBtn" class="ghost">查看使用明细 ›</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>媒体播放</h2>
-        <div class="appu-home" id="audioHomeList">
-          <p class="hint">今日暂无播放记录</p>
-        </div>
-        <div class="ot-actions">
-          <button id="audioDetailBtn" class="ghost">查看播放明细 ›</button>
+        <div class="mon-body">
+          <div class="mon-pane" id="monAct">
+            <div class="grid">
+              <div><span>左键次数</span><b id="act_left">0</b></div>
+              <div><span>右键次数</span><b id="act_right">0</b></div>
+              <div><span>按键次数</span><b id="act_keys">0</b></div>
+              <div><span>活跃时段</span><b id="act_hours">0h</b></div>
+            </div>
+          </div>
+          <div class="mon-pane hidden" id="monApp">
+            <div class="appu-home" id="appuHomeList">
+              <p class="hint">今日暂无应用使用记录</p>
+            </div>
+          </div>
+          <div class="mon-pane hidden" id="monAudio">
+            <div class="appu-home" id="audioHomeList">
+              <p class="hint">今日暂无播放记录</p>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -111,7 +141,6 @@
     <!-- 二级页面：设置 -->
     <div class="app hidden" id="viewSettings">
       <div class="page-head">
-        <button id="settingsBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2>设置</h2>
       </div>
 
@@ -283,7 +312,6 @@
     <!-- 二级页面：加班每日明细 -->
     <div class="app hidden" id="viewOt">
       <div class="page-head">
-        <button id="otBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2>加班明细</h2>
       </div>
       <div class="month-nav">
@@ -308,7 +336,6 @@
     <!-- 二级页面：活动统计明细 -->
     <div class="app hidden" id="viewAct">
       <div class="page-head">
-        <button id="actBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2 id="actTitle">今日活动明细</h2>
       </div>
       <div class="month-nav">
@@ -344,7 +371,6 @@
     <!-- 二级页面：应用使用明细 -->
     <div class="app hidden" id="viewApp">
       <div class="page-head">
-        <button id="appuBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2 id="appuTitle">今日应用使用</h2>
       </div>
       <div class="month-nav">
@@ -367,7 +393,6 @@
     <!-- 二级页面：媒体播放明细 -->
     <div class="app hidden" id="viewAudio">
       <div class="page-head">
-        <button id="audioBackBtn" class="back-btn" title="返回主界面">‹ 返回</button>
         <h2 id="audioTitle">今日媒体播放</h2>
       </div>
       <div class="month-nav">
@@ -419,6 +444,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=8b7c5f49"></script>
+    <script src="app.js?v=e7e6f171"></script>
   </body>
 </html>
