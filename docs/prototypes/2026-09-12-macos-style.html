@@ -213,6 +213,26 @@
   .tlabels span:first-child { transform: none; }
   .tlabels span:last-child { transform: translateX(-100%); }
 
+  /* 本月加班战果：金色卡（全页唯一的第二强调位） */
+  .grp.otc {
+    background: rgba(255, 214, 80, 0.07);
+    border-color: rgba(255, 214, 80, 0.22);
+    gap: 8px;
+  }
+  .otc-head { display: flex; align-items: center; }
+  .otc-title { font-size: 12px; color: rgba(255, 214, 80, 0.8); font-weight: 600; letter-spacing: 1px; }
+  .otc-head .macbtn { margin-left: auto; font-size: 12px; padding: 4px 10px; }
+  .otc-body { display: flex; align-items: center; gap: 16px; }
+  .otc-amount {
+    font-size: 30px; font-weight: 700; color: #ffd60a;
+    letter-spacing: -0.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .otc-meta { flex: 1; display: flex; }
+  .otc-meta .cell { flex: 1; text-align: center; }
+  .otc-meta .cell + .cell { border-left: 0.5px solid rgba(255, 214, 80, 0.18); }
+  .otc-meta .k { font-size: 11px; color: #a8925c; }
+  .otc-meta .v { font-size: 14px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
   /* mac 开关：绿色系统色 */
   .sw { width: 38px; height: 22px; border-radius: 11px; background: rgba(255,255,255,.16); position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; }
   .sw.on { background: #32d74b; }
@@ -295,19 +315,28 @@
         </div>
       </div>
 
+      <!-- 本月加班战果：金色卡（与真实 app 同构），放在辛苦数据之上 -->
+      <div class="grp otc">
+        <div class="otc-head">
+          <span class="otc-title">本月加班战果 · 熬的夜都算数</span>
+          <button class="macbtn">明细 ›</button>
+        </div>
+        <div class="otc-body">
+          <div class="otc-amount">¥560</div>
+          <div class="otc-meta">
+            <div class="cell"><div class="k">有效时长</div><div class="v">22.0h</div></div>
+            <div class="cell"><div class="k">加班天数</div><div class="v">6 天</div></div>
+            <div class="cell"><div class="k">日均进账</div><div class="v">¥93</div></div>
+          </div>
+        </div>
+      </div>
+
       <!-- 辛苦数据：Weather 式一行四格，纯文字，安静 -->
       <div class="strip">
         <div class="cell" title="约等于绕操场 6 圈"><div class="k">鼠标移动</div><div class="v">2.4 km</div></div>
         <div class="cell"><div class="k">鼠标点击</div><div class="v">1,407</div></div>
         <div class="cell"><div class="k">键盘敲击</div><div class="v">11,393</div></div>
         <div class="cell"><div class="k">活跃时段</div><div class="v">8h</div></div>
-      </div>
-
-      <!-- 本月战果：单行汇总 -->
-      <div class="monthrow">
-        <span>本月战果</span>
-        <b>加班 ¥1,240 · 14 天 · 日均 ¥102</b>
-        <button class="macbtn">明细 ›</button>
       </div>
 
       <!-- 监控入口：页尾唯一卡片 -->
@@ -324,7 +353,7 @@
     <!-- 加班明细 -->
     <div class="view" id="v-ot">
       <div class="mnav"><button class="macbtn">‹</button><span class="lbl">2026 年 9 月</span><button class="macbtn">›</button></div>
-      <div style="text-align:center;font-size:12px;color:#98989e;margin-bottom:10px">合计 ¥1,268 · 13.0 小时 · 6 天</div>
+      <div style="text-align:center;font-size:12px;color:#98989e;margin-bottom:10px">合计 ¥560 · 22.0 小时 · 6 天</div>
       <div class="grp">
         <table>
           <tr><th>日期</th><th>下班</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th><th>来源</th><th>操作</th></tr>

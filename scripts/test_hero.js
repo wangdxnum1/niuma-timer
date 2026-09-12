@@ -114,10 +114,13 @@ has("paintActivity 驱动数据条", appSrc, '$("stLeft").textContent');
 // 监控格「单击次数」= 左键按下总数 − 双击两连按（标签语义与数值必须一致）
 has("单击次数扣除双击两连按", appSrc, "2 * dbl");
 // 本月战果单行（otCard id 保留：applyOvertimeVisibility 靠它开关显隐）
-for (const id of ["otCard", "otMonthTotal", "otMonthDays", "otMonthAvg", "otDetailBtn"]) {
+for (const id of ["otCard", "otMonthTotal", "otMonthHours", "otMonthDays", "otMonthAvg", "otDetailBtn"]) {
   eq("html 有战果行元素 " + id, html.includes('id="' + id + '"'), true);
 }
 has("renderOtHome 写入战果行", appSrc, '$("otMonthTotal").textContent');
+has("renderOtHome 写入有效时长", appSrc, '$("otMonthHours").textContent');
+has("加班战果卡金色样式", css, ".card.otc");
+has("战果卡大金额样式", css, ".otc-amount");
 // 旧的四格/大数字卡元素双侧移除（被 v5 单行战果与 hero 取代）
 for (const id of ["ot_total", "ot_hours", "ot_days", "ot_meal_total", "ot_avg", "rate", "pay"]) {
   eq("html 无残留 " + id, html.includes('id="' + id + '"'), false);

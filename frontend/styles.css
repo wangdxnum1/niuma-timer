@@ -529,35 +529,63 @@ button:active {
   font-variant-numeric: tabular-nums;
 }
 
-/* ====== 本月战果：单行汇总 ====== */
-.monthrow {
+/* ====== 本月加班战果卡：汗水换来的钱，给一张金色卡（全页唯一的第二强调位）====== */
+.card.otc {
+  background: rgba(255, 214, 80, 0.07);
+  border-color: rgba(255, 214, 80, 0.22);
+  gap: 8px;
+}
+.otc-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 2px 4px;
-  font-size: 12.5px;
-  color: #98989e;
 }
-.monthrow.hidden {
-  display: none;
+.otc-head h2 {
+  color: rgba(255, 214, 80, 0.8);
 }
-.monthrow .mr-lbl {
-  flex-shrink: 0;
-}
-.monthrow b {
-  color: #e8e8ec;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.monthrow i,
-.mr-num {
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-}
-.monthrow .macbtn {
+.otc-head .macbtn {
   margin-left: auto;
   font-size: 12px;
   padding: 4px 10px;
+}
+.otc-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.otc-amount {
+  font-size: 30px;
+  font-weight: 700;
+  color: #ffd650;
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.otc-amount i {
+  font-style: normal;
+}
+.otc-meta {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+.otc-meta .cell {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.otc-meta .cell + .cell {
+  border-left: 0.5px solid rgba(255, 214, 80, 0.18);
+}
+.otc-meta .k {
+  font-size: 11px;
+  color: #a8925c;
+}
+.otc-meta .v {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ====== 四格指标（监控预览与明细页共用）：内嵌浅格 ====== */

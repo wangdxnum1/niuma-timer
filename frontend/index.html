@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=9b826d29" />
+    <link rel="stylesheet" href="styles.css?v=a4197cb2" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -116,21 +116,28 @@
         </div>
       </div>
 
+      <!-- 本月加班战果：熬的夜都算数——金色卡放在辛苦数据条之上（otCard id 保留——加班开关关闭时整卡隐藏） -->
+      <section class="card otc" id="otCard">
+        <div class="otc-head">
+          <h2>本月加班战果 · 熬的夜都算数</h2>
+          <button id="otDetailBtn" class="macbtn">明细 ›</button>
+        </div>
+        <div class="otc-body">
+          <div class="otc-amount">¥<i id="otMonthTotal">0</i></div>
+          <div class="otc-meta">
+            <div class="cell"><div class="k">有效时长</div><div class="v" id="otMonthHours">0h</div></div>
+            <div class="cell"><div class="k">加班天数</div><div class="v" id="otMonthDays">0 天</div></div>
+            <div class="cell"><div class="k">日均进账</div><div class="v" id="otMonthAvg">¥0</div></div>
+          </div>
+        </div>
+      </section>
+
       <!-- 辛苦数据条：键鼠活动就是身体的账单。一行四格纯文字（Weather 式），安静 -->
       <div class="strip">
-        <div class="cell"><div class="k">左键次数</div><div class="v" id="stLeft">0</div></div>
-        <div class="cell"><div class="k">右键次数</div><div class="v" id="stRight">0</div></div>
+        <div class="cell"><div class="k">左击</div><div class="v" id="stLeft">0</div></div>
+        <div class="cell"><div class="k">右击</div><div class="v" id="stRight">0</div></div>
         <div class="cell"><div class="k">键盘敲击</div><div class="v" id="stKeys">0</div></div>
         <div class="cell"><div class="k">活跃时段</div><div class="v" id="stHours">0h</div></div>
-      </div>
-
-      <!-- 本月战果：单行汇总（otCard id 保留——加班追踪开关关闭时整行隐藏） -->
-      <div class="monthrow" id="otCard">
-        <span class="mr-lbl">本月战果</span>
-        <b>加班 <i class="mr-num" id="otMonthTotal">¥0</i></b>
-        <b><i class="mr-num" id="otMonthDays">0 天</i></b>
-        <b><i class="mr-num" id="otMonthAvg">日均 ¥0</i></b>
-        <button id="otDetailBtn" class="macbtn">明细 ›</button>
       </div>
 
       <!-- 今日监控：活动/应用/媒体三合一预览卡。头部内联小分段切换预览面板，
@@ -150,9 +157,9 @@
         <div class="mon-body">
           <div class="mon-pane" id="monAct">
             <div class="grid">
-              <div><span>单击次数</span><b id="act_left">0</b></div>
+              <div><span>单击</span><b id="act_left">0</b></div>
               <div><span>双击</span><b id="monDbl">0</b></div>
-              <div><span>右键次数</span><b id="act_right">0</b></div>
+              <div><span>右击</span><b id="act_right">0</b></div>
               <div><span>滚轮</span><b id="monWheel">0 次</b></div>
               <div><span>按键次数</span><b id="act_keys">0</b></div>
               <div><span>移动次数</span><b id="monMoves">0</b></div>
@@ -480,6 +487,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=9b826d29"></script>
+    <script src="app.js?v=a4197cb2"></script>
   </body>
 </html>
