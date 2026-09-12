@@ -22,9 +22,9 @@ use tauri::{App, AppHandle, PhysicalPosition, WebviewUrl, WebviewWindow, Webview
 use crate::calc::DayStatus;
 use crate::icon_render::static_icon;
 
-/// 彩色悬停卡片尺寸（逻辑像素）。高度 280 = 卡片 264（含时间轴与月度战果行）+ 边距
+/// 彩色悬停卡片尺寸（逻辑像素）。高度 316 = 卡片 300（时间轴/战果行/补账与预告行）+ 边距
 const HOVER_CARD_W: f64 = 320.0;
-const HOVER_CARD_H: f64 = 280.0;
+const HOVER_CARD_H: f64 = 316.0;
 
 /// 延迟显示时长（毫秒）：进入托盘后等待该时长，若仍停留才显示，
 /// 模仿系统原生 tooltip 的延迟出现，避免划过托盘就弹窗。

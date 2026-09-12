@@ -18,12 +18,13 @@
           "Microsoft YaHei", system-ui, sans-serif;
         color: #f2f2f4;
         width: 320px;
-        height: 280px;
+        height: 316px;
         padding: 8px;
         -webkit-font-smoothing: antialiased;
         user-select: none;
       }
       .card {
+        position: relative;
         width: 100%;
         height: 100%;
         border-radius: 12px;
@@ -34,6 +35,7 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
+        overflow: hidden;
         /* 初始隐藏，收到 hover_show 后平滑淡入（缩放 + 上浮） */
         opacity: 0;
         transform: translateY(6px) scale(0.97);
@@ -44,6 +46,13 @@
         transform: translateY(0) scale(1);
       }
       /* 尊重系统「减弱动态效果」 */
+      .card.pulse .pulse-layer {
+        animation: breathe 4s ease-in-out infinite;
+      }
+      @keyframes breathe {
+        0%, 100% { opacity: 0.15; }
+        50% { opacity: 1; }
+      }
       @media (prefers-reduced-motion: reduce) {
         .card {
           transition: opacity 0.15s ease-out;
@@ -51,6 +60,13 @@
         }
         .lp-fill {
           transition: none;
+        }
+        .card.pulse .pulse-layer {
+          animation: none;
+          opacity: 0.4;
+        }
+        .sheen {
+          display: none;
         }
       }
       /* 休息日：金额置灰（不装作在赚钱） */
@@ -116,6 +132,78 @@
         color: #85858b;
         margin-top: 4px;
         font-variant-numeric: tabular-nums;
+      }
+      /* 搬砖中脉动：卡片顶部极淡金色呼吸（休息日/已下班静止） */
+      .pulse-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(
+          120% 90% at 50% 0%,
+          rgba(255, 214, 80, 0.1),
+          transparent 70%
+        );
+        opacity: 0;
+      }
+      .card.pulse .pulse-layer {
+        animation: breathe 4s ease-in-out infinite;
+      }
+      @keyframes breathe {
+        0%, 100% { opacity: 0.15; }
+        50% { opacity: 1; }
+      }
+      /* 回归补账 / 牛马语录：金额下方的动态一行 */
+      .quips {
+        text-align: center;
+        font-size: 10.5px;
+        min-height: 13px;
+        margin: -4px 2px 0;
+        color: #ffd650;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        font-variant-numeric: tabular-nums;
+      }
+      .quips.show {
+        opacity: 1;
+      }
+      .quips.dim {
+        color: #85858b;
+      }
+      /* 下班预告价值：剩余时间换算成钱 */
+      .c1 {
+        text-align: center;
+        font-size: 10.5px;
+        color: #a8925c;
+        margin: -4px 2px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      /* 光泽扫过：每天第一次展示时来一道 */
+      .hero {
+        position: relative;
+        overflow: hidden;
+      }
+      .sheen {
+        position: absolute;
+        top: -20%;
+        left: -60%;
+        width: 40%;
+        height: 140%;
+        background: linear-gradient(
+          105deg,
+          transparent,
+          rgba(255, 235, 160, 0.35),
+          transparent
+        );
+        transform: skewX(-18deg);
+        pointer-events: none;
+      }
+      .sheen.run {
+        animation: sheenmove 0.7s ease-out;
+      }
+      @keyframes sheenmove {
+        to {
+          left: 120%;
+        }
       }
       .lp-cap b {
         color: #d9d9de;
@@ -263,17 +351,21 @@
   </head>
   <body>
     <div class="card" id="card">
+      <div class="pulse-layer"></div>
       <div class="head">
         <span class="title">🐎 牛马计时器</span>
         <span class="date" id="date">—</span>
       </div>
       <div class="hero">
+        <div class="sheen" id="sheen"></div>
         <div class="amount" id="earned">¥0.00</div>
       </div>
+      <div class="quips" id="quips"></div>
       <div class="lp hidden" id="lp">
         <div class="lp-track"><div class="lp-fill" id="lpFill"></div></div>
         <div class="lp-cap"><span id="lpCapL">今日已赚</span><b id="lpPct">—</b></div>
       </div>
+      <div class="c1" id="c1"></div>
       <div class="tl hidden" id="tl">
         <div class="taxis">
           <div class="tseg done" id="tlAmDone"></div>
@@ -319,6 +411,40 @@
 
       var card = document.getElementById("card");
       var shown = false; // 卡片是否已淡入
+
+      // ===== 效果系统状态 =====
+      var curEarned = null; // 最近一次 render 的今日已赚（退出时存档，回归时补账）
+      var animating = false; // 补账滚动动画进行中（期间 render 不写金额，防跳变）
+      var quipTimer = null;
+      var catchupHoldUntil = 0; // 补账文案优先展示的截止时刻
+      var quipIdx = 0;
+      var QUOTES = [
+        "看什么看，快去搬砖",
+        "钱在涨，别哭",
+        "再熬一会儿，工资在路上",
+        "每一秒都是自己的",
+        "牛马也有春天",
+      ];
+
+      function lsGet(k) {
+        try {
+          return localStorage.getItem(k);
+        } catch (_) {
+          return null;
+        }
+      }
+      function lsSet(k, v) {
+        try {
+          localStorage.setItem(k, v);
+        } catch (_) {}
+      }
+      function reducedMotion() {
+        try {
+          return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        } catch (_) {
+          return false;
+        }
+      }
 
       // 时长：小数小时 → "5时10分30秒"，带秒、单行显示不换行
       function fmtDur(h) {
@@ -421,7 +547,13 @@
       function render(s) {
         var rest = !s.is_workday;
         card.classList.toggle("rest", rest);
-        document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
+        // 搬砖中才脉动（休息日/已下班静止）
+        card.classList.toggle("pulse", s.is_workday && !s.off_work);
+        curEarned = s.earned;
+        // 补账滚动动画进行中时跳过金额写入（动画结束写入精确终值）
+        if (!animating) {
+          document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
+        }
 
         // 全天进度条：已赚 / 全天应赚（时薪 × 日工时，DayStatus 现成字段）。
         // 休息日或时薪为 0 时整块隐藏，改显状态文案
@@ -452,8 +584,43 @@
 
         var now = new Date();
         var wd = ["日", "一", "二", "三", "四", "五", "六"][now.getDay()];
+        // 第 N 个搬砖日：从首次使用日起累计（localStorage 缺失则以今天为第 1 天）
+        var firstDay = lsGet("nc_firstDay");
+        if (!firstDay) {
+          firstDay = now.toDateString();
+          lsSet("nc_firstDay", firstDay);
+        }
+        var dayN =
+          Math.floor((new Date(now.toDateString()) - new Date(firstDay)) / 86400000) + 1;
         document.getElementById("date").textContent =
-          now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd;
+          now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd + " · 第" + dayN + "天";
+
+        // 下班预告价值（C1）：剩余工时 × 时薪——「还要熬多久」直接换算成钱的期待
+        var c1 = document.getElementById("c1");
+        if (s.is_workday && !s.off_work && cfg && s.hourly_rate > 0) {
+          var amS = toMin(cfg.am_start);
+          var amE = toMin(cfg.am_end);
+          var pmS = toMin(cfg.pm_start);
+          var pmE = toMin(cfg.pm_end);
+          if (amS !== null && amE !== null && pmS !== null && pmE !== null) {
+            var nMin = now.getHours() * 60 + now.getMinutes();
+            function ov2(t, a, b) {
+              return t <= a ? 0 : t >= b ? b - a : t - a;
+            }
+            var remainMin = ov2(nMin, amS, amE) + ov2(nMin, pmS, pmE);
+            if (remainMin > 0) {
+              c1.textContent =
+                "熬到 " + cfg.pm_end + "，还能再赚 ¥" + Math.round((remainMin / 60) * s.hourly_rate);
+              c1.style.visibility = "visible";
+            } else {
+              c1.style.visibility = "hidden";
+            }
+          } else {
+            c1.style.visibility = "hidden";
+          }
+        } else {
+          c1.style.visibility = "hidden";
+        }
 
         // 状态徽章：绿点搬砖中 / 金点已下班 / 灰点休息
         var foot = document.getElementById("foot");
@@ -471,17 +638,104 @@
         renderTimeline(s);
       }
 
-      // 淡入（幂等，防重复触发闪烁）
+      // 淡入（幂等，防重复触发闪烁）+ 回归补账 + 光泽 + 彩蛋计时
       function showCard() {
         if (shown) return;
         shown = true;
         card.classList.add("visible");
+        runCatchup();
+        sheenOnce();
+        startQuips();
       }
 
-      // 淡出：动画结束后由 transitionend 隐藏窗口
+      // ===== E1 回归补账：金额从上次隐藏值滚动到当前值 + 小字说明 =====
+      function runCatchup() {
+        var last = Number(lsGet("nc_lastEarned"));
+        var lastT = Number(lsGet("nc_lastHide") || 0);
+        var q = document.getElementById("quips");
+        if (
+          curEarned != null &&
+          !isNaN(last) &&
+          last > 0 &&
+          curEarned > last + 0.004 &&
+          Date.now() - lastT > 30000
+        ) {
+          var gain = curEarned - last;
+          var mins = Math.max(1, Math.round((Date.now() - lastT) / 60000));
+          showQuip("离开 " + mins + " 分钟 · 又赚 ¥" + gain.toFixed(2), false);
+          catchupHoldUntil = Date.now() + 4000;
+          if (!reducedMotion()) {
+            animating = true;
+            var from = last;
+            var t0 = performance.now();
+            var DUR = 800;
+            function step(t) {
+              var k = Math.min(1, (t - t0) / DUR);
+              var eased = 1 - Math.pow(1 - k, 3); // ease-out cubic
+              document.getElementById("earned").textContent =
+                "¥" + (from + gain * eased).toFixed(2);
+              if (k < 1) {
+                requestAnimationFrame(step);
+              } else {
+                animating = false;
+                document.getElementById("earned").textContent = "¥" + curEarned.toFixed(2);
+              }
+            }
+            requestAnimationFrame(step);
+          }
+        }
+      }
+
+      // ===== E4 长悬停彩蛋：停留 3 秒后轮换牛马语录 =====
+      function showQuip(text, gold) {
+        var q = document.getElementById("quips");
+        q.textContent = text;
+        q.classList.toggle("dim", !gold);
+        q.classList.add("show");
+      }
+      function startQuips() {
+        if (quipTimer) clearInterval(quipTimer);
+        quipTimer = setInterval(function () {
+          if (!shown || Date.now() < catchupHoldUntil) return;
+          showQuip(QUOTES[quipIdx % QUOTES.length], true);
+          quipIdx++;
+        }, 4000);
+        // 3 秒无补账文案时开始轮换（有补账则由 holdUntil 自然延后）
+        setTimeout(function () {
+          if (shown && !document.getElementById("quips").classList.contains("show")) {
+            showQuip(QUOTES[quipIdx++ % QUOTES.length], true);
+          }
+        }, 3000);
+      }
+      function stopQuips() {
+        if (quipTimer) clearInterval(quipTimer);
+        quipTimer = null;
+        var q = document.getElementById("quips");
+        q.classList.remove("show");
+      }
+
+      // ===== E2 金色光泽：每天第一次展示时来一道 =====
+      function sheenOnce() {
+        var today = new Date().toDateString();
+        if (lsGet("nc_sheenDay") === today) return;
+        lsSet("nc_sheenDay", today);
+        var sh = document.getElementById("sheen");
+        sh.classList.remove("run");
+        // 强制重排后再挂动画，保证连续两次展示都能触发
+        void sh.offsetWidth;
+        sh.classList.add("run");
+      }
+
+      // 淡出：动画结束后由 transitionend 隐藏窗口；
+      // 同时把当前已赚存档——下次悬停时做「回归补账」动画
       function hideCard() {
         if (!shown) return;
         shown = false;
+        if (curEarned != null) {
+          lsSet("nc_lastEarned", String(curEarned));
+          lsSet("nc_lastHide", String(Date.now()));
+        }
+        stopQuips();
         card.classList.remove("visible");
       }
 
