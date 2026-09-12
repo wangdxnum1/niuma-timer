@@ -14,8 +14,9 @@
         overflow: hidden;
       }
       body {
-        font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-        color: #e6e8ef;
+        font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", system-ui, sans-serif;
+        color: #f2f2f4;
         width: 320px;
         height: 240px;
         padding: 8px;
@@ -25,22 +26,37 @@
       .card {
         width: 100%;
         height: 100%;
-        border-radius: 16px;
-        padding: 12px 16px 10px;
-        background: linear-gradient(160deg, rgba(29, 32, 41, 0.96) 0%, rgba(16, 18, 24, 0.96) 100%);
-        border: 1px solid rgba(255, 214, 80, 0.3);
-        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+        border-radius: 12px;
+        padding: 12px 15px 10px;
+        background: linear-gradient(165deg, #232328 0%, #1b1b1f 100%);
+        border: 1px solid rgba(255, 214, 80, 0.28);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        /* 初始隐藏，收到 hover_show 后平滑淡入 */
+        gap: 8px;
+        /* 初始隐藏，收到 hover_show 后平滑淡入（缩放 + 上浮） */
         opacity: 0;
-        transform: translateY(6px);
-        transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+        transform: translateY(6px) scale(0.97);
+        transition: opacity 0.22s ease-out, transform 0.22s ease-out;
       }
       .card.visible {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
+      }
+      /* 尊重系统「减弱动态效果」 */
+      @media (prefers-reduced-motion: reduce) {
+        .card {
+          transition: opacity 0.15s ease-out;
+          transform: none;
+        }
+        .lp-fill {
+          transition: none;
+        }
+      }
+      /* 休息日：金额置灰（不装作在赚钱） */
+      .card.rest .amount {
+        background: none;
+        -webkit-text-fill-color: #6a6a70;
       }
       .head {
         display: flex;
@@ -48,33 +64,62 @@
         align-items: baseline;
       }
       .title {
-        font-size: 13px;
+        font-size: 12.5px;
         font-weight: 700;
         color: #ffd650;
         letter-spacing: 0.5px;
       }
       .date {
-        font-size: 11px;
-        color: #8a90a2;
+        font-size: 10.5px;
+        color: #85858b;
+        font-variant-numeric: tabular-nums;
       }
-      .earned {
+      .hero {
         text-align: center;
-        line-height: 1;
-        margin: 2px 0 4px;
+        margin: 0 0 2px;
       }
       .amount {
-        font-size: 32px;
-        font-weight: 800;
+        font-size: 34px;
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: -0.5px;
         font-variant-numeric: tabular-nums;
         background: linear-gradient(180deg, #ffe9a8 0%, #ffd650 55%, #e0a93a 100%);
         -webkit-background-clip: text;
         background-clip: text;
         -webkit-text-fill-color: transparent;
       }
-      .elabel {
-        font-size: 11px;
-        color: #8a90a2;
-        margin-top: 3px;
+      /* 全天赚钱进度条：已赚 / 全天应赚（时薪 × 日工时），每秒平滑生长 */
+      .lp.hidden {
+        display: none;
+      }
+      .lp {
+        margin: -2px 2px 0;
+      }
+      .lp-track {
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: hidden;
+      }
+      .lp-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, #ffd650, #ff9f0a);
+        transition: width 0.5s ease;
+      }
+      .lp-cap {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: #85858b;
+        margin-top: 4px;
+        font-variant-numeric: tabular-nums;
+      }
+      .lp-cap b {
+        color: #d9d9de;
+        font-weight: 600;
       }
       .grid {
         display: grid;
@@ -83,28 +128,57 @@
       }
       .grid div {
         background: rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-        padding: 6px 2px 6px;
+        border-radius: 8px;
+        padding: 6px 4px;
         text-align: center;
       }
       .grid span {
         display: block;
         font-size: 10px;
-        color: #8a90a2;
-        margin-bottom: 3px;
+        color: #85858b;
+        margin-bottom: 2px;
       }
       .grid b {
         display: block;
-        font-size: 14px;
-        color: #e6e8ef;
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #f2f2f4;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
+      /* 状态徽章行：呼吸灯圆点 + 文案（搬砖中=绿 / 已下班=金 / 休息=灰） */
       .foot {
-        text-align: center;
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
         font-size: 11px;
-        color: #7fd99a;
-        margin-top: 2px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .foot.work {
+        color: #32d74b;
+      }
+      .foot.work .dot {
+        background: #32d74b;
+        box-shadow: 0 0 6px rgba(50, 215, 75, 0.6);
+      }
+      .foot.off {
+        color: #ffd650;
+      }
+      .foot.off .dot {
+        background: #ffd650;
+      }
+      .foot.rest {
+        color: #85858b;
+      }
+      .foot.rest .dot {
+        background: #6a6a70;
       }
     </style>
   </head>
@@ -114,9 +188,12 @@
         <span class="title">🐎 牛马计时器</span>
         <span class="date" id="date">—</span>
       </div>
-      <div class="earned">
+      <div class="hero">
         <div class="amount" id="earned">¥0.00</div>
-        <div class="elabel">今日已赚</div>
+      </div>
+      <div class="lp hidden" id="lp">
+        <div class="lp-track"><div class="lp-fill" id="lpFill"></div></div>
+        <div class="lp-cap"><span id="lpCapL">今日已赚</span><b id="lpPct">—</b></div>
       </div>
       <div class="grid">
         <div><span>已工作</span><b id="worked">—</b></div>
@@ -124,7 +201,7 @@
         <div><span>赚钱速率</span><b id="rate">—</b></div>
         <div><span>距发薪</span><b id="pay">—</b></div>
       </div>
-      <div class="foot" id="foot">—</div>
+      <div class="foot" id="foot"><i class="dot"></i><span id="footText">—</span></div>
     </div>
     <script>
       // ===== 前端错误上报（emit 到 Rust 端 eprintln 打印，便于排查"不显示"类问题）=====
@@ -157,10 +234,32 @@
         return hh + "时" + mm + "分" + ss + "秒";
       }
 
-      // 数据由 Rust 端每秒 emit "hover_data" 推送
+      // 数据由 Rust 端每秒 emit "hover_data" 推送。
+      // 三态渲染：搬砖中（进度条实时生长 + 绿色徽章）/ 已下班（满额 + 金色徽章）/
+      // 今天休息（金额置灰 + 灰色徽章），与主界面口径一致
       function render(s) {
+        var rest = !s.is_workday;
+        card.classList.toggle("rest", rest);
         document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
-        // 休息日与主界面保持一致：不展示「已工作 0秒」（后端 worked_str 同为占位符）
+
+        // 全天进度条：已赚 / 全天应赚（时薪 × 日工时，DayStatus 现成字段）。
+        // 休息日或时薪为 0 时整块隐藏，改显状态文案
+        var lp = document.getElementById("lp");
+        var lpCapL = document.getElementById("lpCapL");
+        var target = s.hourly_rate * s.daily_hours;
+        if (s.is_workday && s.hourly_rate > 0 && target > 0) {
+          lp.classList.remove("hidden");
+          var pct = Math.min(100, (s.earned / target) * 100);
+          document.getElementById("lpFill").style.width = pct.toFixed(1) + "%";
+          lpCapL.textContent = "今日已赚 · 全天 ¥" + target.toFixed(0);
+          document.getElementById("lpPct").textContent = Math.round(pct) + "%";
+        } else {
+          lp.classList.add("hidden");
+          lpCapL.textContent = rest ? "今天休息，钱也休息" : "今日已赚";
+          document.getElementById("lpPct").textContent = "—";
+        }
+
+        // 四格：休息日不展示「已工作 0秒」（与主界面同为占位符）
         document.getElementById("worked").textContent = s.is_workday
           ? fmtDur(s.worked_h)
           : "—";
@@ -169,13 +268,24 @@
           : "休息中";
         document.getElementById("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
         document.getElementById("pay").textContent = s.days_to_pay + " 天";
+
         var now = new Date();
         var wd = ["日", "一", "二", "三", "四", "五", "六"][now.getDay()];
         document.getElementById("date").textContent =
           now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd;
-        document.getElementById("foot").textContent = s.is_workday
-          ? "搬砖中，冲鸭 🐂"
-          : "今天休息 🛌";
+
+        // 状态徽章：绿点搬砖中 / 金点已下班 / 灰点休息
+        var foot = document.getElementById("foot");
+        if (rest) {
+          foot.className = "foot rest";
+          document.getElementById("footText").textContent = "今天休息 🛌";
+        } else if (s.off_work) {
+          foot.className = "foot off";
+          document.getElementById("footText").textContent = "已下班 · 辛苦了";
+        } else {
+          foot.className = "foot work";
+          document.getElementById("footText").textContent = "搬砖中，冲鸭 🐂";
+        }
       }
 
       // 淡入（幂等，防重复触发闪烁）

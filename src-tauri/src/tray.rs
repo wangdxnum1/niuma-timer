@@ -318,16 +318,46 @@ impl HoverController {
     fn handle(&mut self, msg: HoverMsg, app: &AppHandle) {
         match msg {
             HoverMsg::Enter(pos) => {
-                if self.in_click_cooldown() {
-                    self.phase = Phase::Hidden;
-                    self.pending_pos = None;
-                    return;
-                }
+                // 锚点每次都刷新（图标可能在任务栏中移动）；阶段按现状收敛：
+                //  - Pending：只刷新锚点，保持原到期时刻——Windows 下 tao 在图标内
+                //    移动会偶发重复上报 Enter，若重置计时会让 400ms 延迟永远到不了点
+                //  - Shown：只刷新锚点与数据，保持展示——重复 Enter 不得打断看门狗
+                //    节拍，更不得把状态降级回 Pending 造成 400ms 盲区
+                //  - Hidden：正常进入延迟显示；若处于点击冷却期，则安排在冷却
+                //    结束时刻显示——右键菜单/点击后鼠标保持悬停时，冷却一过卡片
+                //    立刻回来，无需「移出再移入」；中途移走由 Leave 取消
                 let anchor = self.tray_anchor(app, pos);
-                self.pending_pos = Some(anchor);
-                self.phase = Phase::Pending {
-                    show_at: Instant::now() + Duration::from_millis(HOVER_SHOW_DELAY_MS),
-                };
+                match self.phase {
+                    Phase::Pending { show_at } => {
+                        self.pending_pos = Some(anchor);
+                        self.phase = Phase::Pending { show_at };
+                    }
+                    Phase::Shown { .. } => {
+                        self.pending_pos = Some(anchor);
+                        if let Some(w) = app.get_webview_window("hover_card") {
+                            if w.is_visible().unwrap_or(false) {
+                                let st =
+                                    crate::get_status(app.state::<crate::AppState>().inner());
+                                let _ = w.emit("hover_data", st);
+                            }
+                        }
+                    }
+                    Phase::Hidden => {
+                        self.pending_pos = Some(anchor);
+                        if self.in_click_cooldown() {
+                            let remain = CLICK_COOLDOWN_MS
+                                .saturating_sub(now_ms().saturating_sub(self.last_click_ms));
+                            self.phase = Phase::Pending {
+                                show_at: Instant::now() + Duration::from_millis(remain),
+                            };
+                        } else {
+                            self.phase = Phase::Pending {
+                                show_at: Instant::now()
+                                    + Duration::from_millis(HOVER_SHOW_DELAY_MS),
+                            };
+                        }
+                    }
+                }
             }
             HoverMsg::Move(pos) => {
                 if matches!(self.phase, Phase::Pending { .. }) {
@@ -345,11 +375,21 @@ impl HoverController {
                 }
             }
             HoverMsg::Leave => {
-                // 取消待显示；不立即隐藏（Windows 托盘边缘偶发抖动，
-                // 交由看门狗带去抖裁决，避免 Enter/Leave 高频抖动导致闪烁）
+                // 待显示直接取消（用户还没等到卡片，无需任何过渡）
                 if matches!(self.phase, Phase::Pending { .. }) {
                     self.phase = Phase::Hidden;
                     self.pending_pos = None;
+                    return;
+                }
+                // 已显示：Leave 是确定性的离开事件，立即淡出——不再等看门狗
+                // 两拍（最多 ~300ms+）。「Windows 托盘边缘偶发抖动的假 Leave」
+                // 用光标真实位置当场复核：确实已离开才隐藏，仍在区域内则交回
+                // 看门狗继续值守；光标位置拿不到时维持原状兜底
+                if matches!(self.phase, Phase::Shown { fading: false, .. }) {
+                    match app.cursor_position() {
+                        Ok(pos) if !self.mouse_in_active_region(app, pos) => self.do_hide(app),
+                        _ => { /* 假 Leave 或光标不可知：看门狗兜底 */ }
+                    }
                 }
             }
             HoverMsg::Click => {

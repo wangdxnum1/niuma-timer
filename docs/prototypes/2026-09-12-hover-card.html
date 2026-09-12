@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>原型 · 托盘悬停卡片改版（评审用，非最终代码）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background:
+      radial-gradient(500px 360px at 20% 30%, rgba(94,92,230,.18), transparent 70%),
+      radial-gradient(520px 380px at 80% 75%, rgba(255,159,67,.14), transparent 70%),
+      #101014;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 26px; padding: 30px;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #f2f2f4;
+  }
+  .note { font-size: 12px; color: rgba(255,255,255,.4); letter-spacing: 1px; }
+  .row { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+  .demo { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .demo .tag { font-size: 12px; color: rgba(255,255,255,.45); }
+
+  /* ===== 悬停卡片本体（304×224，与真实窗口内容区一致）===== */
+  .card {
+    width: 304px; height: 224px;
+    border-radius: 12px;
+    padding: 12px 15px 10px;
+    background: linear-gradient(165deg, #232328 0%, #1b1b1f 100%);
+    border: 1px solid rgba(255, 214, 80, 0.28);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    display: flex; flex-direction: column; gap: 8px;
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .title { font-size: 12.5px; font-weight: 700; color: #ffd650; letter-spacing: 0.5px; }
+  .date { font-size: 10.5px; color: #85858b; font-variant-numeric: tabular-nums; }
+
+  .hero { text-align: center; margin: 0 0 2px; }
+  .amount {
+    font-size: 34px; font-weight: 700; line-height: 1;
+    letter-spacing: -0.5px; font-variant-numeric: tabular-nums;
+    background: linear-gradient(180deg, #ffe9a8 0%, #ffd650 55%, #e0a93a 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .rest .amount {
+    background: none; -webkit-text-fill-color: #6a6a70;
+  }
+
+  .lp { margin: -2px 2px 2px; }
+  .lp-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,.10); overflow: hidden; }
+  .lp-fill { height: 100%; width: 41%; border-radius: 2px;
+    background: linear-gradient(90deg, #ffd650, #ff9f0a);
+    transition: width 0.5s ease; }
+  .lp-cap { display: flex; justify-content: space-between; font-size: 10px; color: #85858b; margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .grid div {
+    background: rgba(255,255,255,.05); border-radius: 8px;
+    padding: 6px 4px; text-align: center;
+  }
+  .grid span { display: block; font-size: 10px; color: #85858b; margin-bottom: 2px; }
+  .grid b { display: block; font-size: 13.5px; font-weight: 600; color: #f2f2f4;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .foot { margin-top: auto; text-align: center; font-size: 11px; display: flex;
+    align-items: center; justify-content: center; gap: 6px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .foot.work { color: #32d74b; }
+  .foot.work .dot { background: #32d74b; box-shadow: 0 0 6px rgba(50,215,75,.6); }
+  .foot.off { color: #ffd650; }
+  .foot.off .dot { background: #ffd650; }
+  .foot.rest { color: #85858b; }
+  .foot.rest .dot { background: #6a6a70; }
+</style>
+</head>
+<body>
+<div class="note">设 计 原 型 · 托 盘 悬 停 卡 片 · 三 种 状 态</div>
+<div class="row">
+
+  <!-- 状态一：搬砖中 -->
+  <div class="demo">
+    <div class="card">
+      <div class="head"><span class="title">🐎 牛马计时器</span><span class="date">9月12日 周五</span></div>
+      <div class="hero">
+        <div class="amount">¥328.50</div>
+      </div>
+      <div class="lp">
+        <div class="lp-track"><div class="lp-fill" style="width:41%"></div></div>
+        <div class="lp-cap"><span>今日已赚 · 全天 ¥800</span><b>41%</b></div>
+      </div>
+      <div class="grid">
+        <div><span>已工作</span><b>6时30分</b></div>
+        <div><span>距下班</span><b>1时30分</b></div>
+        <div><span>赚钱速率</span><b>¥0.85/分</b></div>
+        <div><span>距发薪</span><b>28 天</b></div>
+      </div>
+      <div class="foot work"><i class="dot"></i>搬砖中，冲鸭 🐂</div>
+    </div>
+    <div class="tag">搬砖中（工作日实时）</div>
+  </div>
+
+  <!-- 状态二：已下班 -->
+  <div class="demo">
+    <div class="card">
+      <div class="head"><span class="title">🐎 牛马计时器</span><span class="date">9月12日 周五</span></div>
+      <div class="hero">
+        <div class="amount">¥800.00</div>
+      </div>
+      <div class="lp">
+        <div class="lp-track"><div class="lp-fill" style="width:100%"></div></div>
+        <div class="lp-cap"><span>今日已赚 · 全天 ¥800</span><b>100%</b></div>
+      </div>
+      <div class="grid">
+        <div><span>已工作</span><b>8时0分</b></div>
+        <div><span>距下班</span><b>已下班</b></div>
+        <div><span>赚钱速率</span><b>¥1.67/分</b></div>
+        <div><span>距发薪</span><b>28 天</b></div>
+      </div>
+      <div class="foot off"><i class="dot"></i>已下班 · 辛苦了</div>
+    </div>
+    <div class="tag">已下班（满额封顶）</div>
+  </div>
+
+  <!-- 状态三：今天休息 -->
+  <div class="demo">
+    <div class="card rest">
+      <div class="head"><span class="title">🐎 牛马计时器</span><span class="date">9月12日 周六</span></div>
+      <div class="hero">
+        <div class="amount">¥0.00</div>
+      </div>
+      <div class="lp">
+        <div class="lp-track"><div class="lp-fill" style="width:0%"></div></div>
+        <div class="lp-cap"><span>今天休息，钱也休息</span><b>—</b></div>
+      </div>
+      <div class="grid">
+        <div><span>已工作</span><b>—</b></div>
+        <div><span>距下班</span><b>休息中</b></div>
+        <div><span>赚钱速率</span><b>¥0.85/分</b></div>
+        <div><span>距发薪</span><b>28 天</b></div>
+      </div>
+      <div class="foot rest"><i class="dot"></i>今天休息 🛌</div>
+    </div>
+    <div class="tag">今天休息（金额置灰）</div>
+  </div>
+
+</div>
+</body>
+</html>
