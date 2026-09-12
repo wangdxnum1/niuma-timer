@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=e7e6f171" />
+    <link rel="stylesheet" href="styles.css?v=9b826d29" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -41,68 +41,100 @@
       setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
     </script>
 
-    <!-- 顶部导航条：3 个文字 tab（主页/明细/设置），当前项金色高亮。
-         「明细」是聚合 tab，对应 4 个二级页，由下方分段条二次切换；
-         点击进入上次浏览的明细视图。主页首位、设置右置（原生惯例） -->
-    <nav class="topnav" aria-label="主导航">
-      <button class="topnav-item active" data-nav="viewMain">主页</button>
-      <button class="topnav-item" data-nav="detail">明细</button>
-      <div class="topnav-gap"></div>
-      <button class="topnav-item" data-nav="viewSettings">设置</button>
+    <!-- 分段工具栏（macOS 风）：主页|明细 两段居中 + ⚙ 设置齿轮靠右。
+         「明细」是聚合段，对应 4 个二级页，由下方分段条二次切换；
+         点击明细进入上次浏览的子页（lastDetailView 记忆）。图标用系统自带
+         Segoe Fluent / MDL2 字体，与原生应用同源 -->
+    <nav class="toolbar" aria-label="主导航">
+      <div class="tb-side"></div>
+      <div class="seg" role="tablist">
+        <button class="seg-nav active" data-nav="viewMain">主页</button>
+        <button class="seg-nav" data-nav="detail">明细</button>
+      </div>
+      <div class="tb-side right">
+        <button class="gear" id="gearBtn" data-nav="viewSettings" aria-label="设置" title="设置"><span class="ico-glyph" aria-hidden="true">&#xE713;</span></button>
+      </div>
     </nav>
 
-    <!-- 明细分段条：加班/活动/应用/媒体四个二级页共享的二次切换控件，
+    <!-- 明细二级分段条：加班/键鼠/应用/媒体四个二级页共享的二次切换控件，
          仅在明细视图可见时显示（同一套 DOM 服务四个视图，curView 语义不变） -->
-    <div class="segbar hidden" id="segbar" role="tablist" aria-label="明细分段">
-      <button class="seg-item" data-seg="viewOt">加班</button>
-      <button class="seg-item" data-seg="viewAct">活动</button>
-      <button class="seg-item" data-seg="viewApp">应用</button>
-      <button class="seg-item" data-seg="viewAudio">媒体</button>
+    <div class="subbar hidden" id="segbar" role="tablist" aria-label="明细分段">
+      <div class="seg seg-sub">
+        <button class="seg-nav" data-nav="viewOt">加班</button>
+        <button class="seg-nav" data-nav="viewAct">键鼠</button>
+        <button class="seg-nav" data-nav="viewApp">应用</button>
+        <button class="seg-nav" data-nav="viewAudio">媒体</button>
+      </div>
     </div>
 
     <div class="app" id="viewMain">
-      <div class="home-head">
-        <h1>🐎 牛马计时器</h1>
+      <!-- 品牌行：身份 + 品牌副语（副标题配置的落点）+ 动态状态徽章 -->
+      <div class="brandrow">
+        <div class="brand">🐎 <b>牛马计时器</b><span class="sub" id="tagline">实时计算你今天赚了多少钱</span></div>
+        <span class="badge off" id="statusBadge">启动中</span>
       </div>
-      <p class="sub" id="tagline">实时计算你今天赚了多少钱</p>
 
-      <!-- 今日实时：主页 hero 卡。大字金额 + 赚钱进度条（已赚/全天应赚）+
-           四格指标。进度条数据全部来自 get_status_cmd 现成字段，见 app.js tick() -->
+      <!-- 全页唯一视觉焦点：今日已赚大数字 + 全天进度 + 赚钱走势曲线。
+           进度与走势全部来自 get_status_cmd 现成字段与配置时段推算，见 app.js tick() -->
       <section class="card live">
-        <h2>今日实时</h2>
         <div class="big" id="earned">¥0.00</div>
         <div class="live-progress hidden" id="liveProgress">
           <div class="lp-track"><div class="lp-fill" id="lpFill"></div></div>
           <div class="lp-cap">
-            <span>全天应赚 <b id="lpTarget">¥0.00</b></span>
-            <b id="lpPct">0%</b>
+            <span>全天应赚 <b id="lpTarget">¥0.00</b> · <b id="lpPct">0%</b></span>
+            <span id="lpMeta"></span>
           </div>
         </div>
-        <div class="grid">
-          <div><span>已工作</span><b id="worked">0.0h</b></div>
-          <div><span>距下班</span><b id="toff">—</b></div>
-          <div><span>速率</span><b id="rate">¥0.00/分</b></div>
-          <div><span>距发薪</span><b id="pay">—</b></div>
+        <div class="spark hidden" id="earnedSpark">
+          <svg viewBox="0 0 440 40" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#ffd650" stop-opacity=".32"/>
+                <stop offset="1" stop-color="#ffd650" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path id="sparkFill" d="" fill="url(#sparkGrad)"/>
+            <path id="sparkLine" d="" fill="none" stroke="#ffd650" stroke-width="1.5"/>
+          </svg>
         </div>
+        <div class="lp-cap spark-axis hidden" id="sparkAxis"><span>0 时</span><span>6 时</span><span>12 时</span><span>18 时</span><span>24 时</span></div>
       </section>
 
-      <section class="card" id="otCard">
-        <h2>加班总览</h2>
-        <div class="big" id="ot_total">¥0.00</div>
-        <p class="sub">本月加班合计</p>
-        <div class="grid">
-          <div><span>有效时长</span><b id="ot_hours">0.0h</b></div>
-          <div><span>加班天数</span><b id="ot_days">0</b></div>
-          <div><span>饭补合计</span><b id="ot_meal_total">¥0.00</b></div>
-          <div><span>日均</span><b id="ot_avg">¥0.00</b></div>
+      <!-- 今日时间轴：上班/午休/下班按配置分段 + 白色「现在」指针（裸条不装盒，轻） -->
+      <div class="bare-taxis hidden" id="dayTimeline">
+        <div class="taxis">
+          <div class="tseg done" id="tlAmDone"></div>
+          <div class="tseg todo" id="tlAmTodo"></div>
+          <div class="tseg rest" id="tlRest"></div>
+          <div class="tseg done" id="tlPmDone"></div>
+          <div class="tseg todo" id="tlPmTodo"></div>
+          <div class="tnow" id="tlNow"></div>
         </div>
-        <div class="ot-actions">
-          <button id="otDetailBtn" class="ghost">查看每日明细 ›</button>
+        <div class="tlabels">
+          <span id="tlAmStart" style="left:0">09:00</span><span id="tlAmEnd" style="left:33.3%">12:00</span>
+          <span id="tlPmStart" style="left:50%">13:30</span><span id="tlPmEnd" style="left:100%">18:00</span>
         </div>
-      </section>
+      </div>
+
+      <!-- 辛苦数据条：键鼠活动就是身体的账单。一行四格纯文字（Weather 式），安静 -->
+      <div class="strip">
+        <div class="cell"><div class="k">左键次数</div><div class="v" id="stLeft">0</div></div>
+        <div class="cell"><div class="k">右键次数</div><div class="v" id="stRight">0</div></div>
+        <div class="cell"><div class="k">键盘敲击</div><div class="v" id="stKeys">0</div></div>
+        <div class="cell"><div class="k">活跃时段</div><div class="v" id="stHours">0h</div></div>
+      </div>
+
+      <!-- 本月战果：单行汇总（otCard id 保留——加班追踪开关关闭时整行隐藏） -->
+      <div class="monthrow" id="otCard">
+        <span class="mr-lbl">本月战果</span>
+        <b>加班 <i class="mr-num" id="otMonthTotal">¥0</i></b>
+        <b><i class="mr-num" id="otMonthDays">0 天</i></b>
+        <b><i class="mr-num" id="otMonthAvg">日均 ¥0</i></b>
+        <button id="otDetailBtn" class="macbtn">明细 ›</button>
+      </div>
 
       <!-- 今日监控：活动/应用/媒体三合一预览卡。头部内联小分段切换预览面板，
-           「查看明细」跟随当前分段跳对应明细页（与顶导「明细」分段呼应）；
+           「查看明细」跟随当前分段跳对应明细页（与工具栏「明细」段呼应）；
            预览面板内的统计 id 由现有 paint 函数维护，合并只动了外壳 -->
       <section class="card" id="monitorCard">
         <div class="mon-head">
@@ -118,9 +150,13 @@
         <div class="mon-body">
           <div class="mon-pane" id="monAct">
             <div class="grid">
-              <div><span>左键次数</span><b id="act_left">0</b></div>
+              <div><span>单击次数</span><b id="act_left">0</b></div>
+              <div><span>双击</span><b id="monDbl">0</b></div>
               <div><span>右键次数</span><b id="act_right">0</b></div>
+              <div><span>滚轮</span><b id="monWheel">0 次</b></div>
               <div><span>按键次数</span><b id="act_keys">0</b></div>
+              <div><span>移动次数</span><b id="monMoves">0</b></div>
+              <div><span>移动距离</span><b id="monDist">0px</b></div>
               <div><span>活跃时段</span><b id="act_hours">0h</b></div>
             </div>
           </div>
@@ -444,6 +480,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=e7e6f171"></script>
+    <script src="app.js?v=9b826d29"></script>
   </body>
 </html>

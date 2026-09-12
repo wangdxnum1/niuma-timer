@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "ve7e6f171";
+const FE_VER = "v9b826d29";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -304,10 +304,9 @@ async function tick() {
     const s = await invoke("get_status_cmd");
     lastStatus = s;
     $("earned").textContent = "¥" + s.earned.toFixed(2);
-    $("worked").textContent = s.worked_str || s.worked_h.toFixed(1) + "h";
-    $("toff").textContent = s.to_off_str || (s.off_work ? "已下班" : "—");
-    $("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
-    $("pay").textContent = s.days_to_pay + " 天";
+    renderBadge(s);
+    renderSparkline(s);
+    renderTimeline(s);
     // 赚钱进度条：已赚 / 全天应赚（时薪 × 当日总工时，DayStatus 现成字段）。
     // 休息日或时薪为 0 时整块隐藏；已下班封顶 100%（加班费不进此条）
     const liveProgress = $("liveProgress");
@@ -318,6 +317,8 @@ async function tick() {
       $("lpFill").style.width = pct.toFixed(1) + "%";
       $("lpTarget").textContent = "¥" + target.toFixed(2);
       $("lpPct").textContent = Math.round(pct) + "%";
+      $("lpMeta").textContent =
+        "速率 ¥" + s.rate_per_min.toFixed(2) + "/分 · 距发薪 " + s.days_to_pay + " 天";
     } else {
       liveProgress.classList.add("hidden");
     }
@@ -325,6 +326,118 @@ async function tick() {
   } catch (e) {
     /* 忽略瞬时错误 */
   }
+}
+
+// ---- 状态徽章 / 赚钱走势 / 今日时间轴 ----
+
+// 距下班的小时数 → 紧凑文案（徽章空间有限，不用 hms 全格式）
+function fmtShortH(h) {
+  return h < 1 ? Math.max(1, Math.round(h * 60)) + " 分钟" : h.toFixed(1) + "h";
+}
+
+// 状态徽章：主页品牌行右侧的动态状态（搬砖中 / 已下班 / 今天休息）
+function renderBadge(s) {
+  const badge = $("statusBadge");
+  if (!s.is_workday) {
+    badge.textContent = "今天休息";
+    badge.className = "badge off";
+  } else if (s.off_work) {
+    badge.textContent = "已下班 · 辛苦了";
+    badge.className = "badge off";
+  } else {
+    badge.textContent = "● 搬砖中 · 距下班 " + fmtShortH(s.to_off_h);
+    badge.className = "badge";
+  }
+}
+
+// 落在 [s,e] 时段内的分钟数（与后端 calc::overlap 同口径，只服务本文件可视化）
+function overlapMin(t, s, e) {
+  return t <= s ? 0 : t >= e ? e - s : t - s;
+}
+
+// 赚钱走势：以配置时段 + 当前时薪重建「今日已赚」曲线（0 时 → 现在，15 分钟步长）。
+// 已赚随时段的函数是确定的（分段线性），因此无需新命令、无需存储——
+// 曲线画的是事实而非预测，未到的时刻不画
+function renderSparkline(s) {
+  const box = $("earnedSpark");
+  const axis = $("sparkAxis");
+  const amS = minutesOf($("am_start").value);
+  const amE = minutesOf($("am_end").value);
+  const pmS = minutesOf($("pm_start").value);
+  const pmE = minutesOf($("pm_end").value);
+  if (
+    !s.is_workday ||
+    s.hourly_rate <= 0 ||
+    amS === null ||
+    amE === null ||
+    pmS === null ||
+    pmE === null
+  ) {
+    box.classList.add("hidden");
+    axis.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  axis.classList.remove("hidden");
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const perMin = s.hourly_rate / 60;
+  const H = 40; // 与 svg viewBox 高度一致
+  const max = s.hourly_rate * s.daily_hours; // 满幅 = 全天应赚
+  const ts = [];
+  for (let t = 0; t < nowMin; t += 15) ts.push(t);
+  ts.push(nowMin);
+  const path = ts
+    .map((t, i) => {
+      const v = (overlapMin(t, amS, amE) + overlapMin(t, pmS, pmE)) * perMin;
+      const x = (t / 1440) * 440;
+      const y = H - 1 - (max > 0 ? (v / max) * (H - 3) : 0);
+      return (i ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1);
+    })
+    .join(" ");
+  $("sparkLine").setAttribute("d", path);
+  $("sparkFill").setAttribute(
+    "d",
+    path + " L" + ((nowMin / 1440) * 440).toFixed(1) + "," + H + " L0," + H + " Z"
+  );
+}
+
+// 今日时间轴：上班/午休/下班按配置时间分段，白色「现在」指针标出当前位置。
+// 宽度全部按配置时段比例计算，改配置立即生效；休息日整块隐藏
+function renderTimeline(s) {
+  const box = $("dayTimeline");
+  const amS = minutesOf($("am_start").value);
+  const amE = minutesOf($("am_end").value);
+  const pmS = minutesOf($("pm_start").value);
+  const pmE = minutesOf($("pm_end").value);
+  if (
+    !s.is_workday ||
+    amS === null ||
+    amE === null ||
+    pmS === null ||
+    pmE === null ||
+    pmE <= amS
+  ) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const span = pmE - amS;
+  const pct = (v) => (Math.min(Math.max(v, 0), span) / span) * 100 + "%";
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const amWorked = overlapMin(nowMin, amS, amE);
+  const pmWorked = overlapMin(nowMin, pmS, pmE);
+  $("tlAmDone").style.width = pct(amWorked);
+  $("tlAmTodo").style.width = pct(amE - amS - amWorked);
+  $("tlRest").style.width = pct(pmS - amE);
+  $("tlPmDone").style.width = pct(pmWorked);
+  $("tlPmTodo").style.width = pct(pmE - pmS - pmWorked);
+  $("tlNow").style.left = pct(Math.min(Math.max(nowMin, amS), pmE));
+  $("tlAmStart").textContent = $("am_start").value;
+  $("tlAmEnd").textContent = $("am_end").value;
+  $("tlPmStart").textContent = $("pm_start").value;
+  $("tlPmEnd").textContent = $("pm_end").value;
 }
 
 // ---- 首页副标题 ----
@@ -459,14 +572,12 @@ function shiftOtMonth(delta) {
   loadOvertime();
 }
 
-// 主界面「加班总览」卡片：只吃当月数据
+// 主界面「本月战果」单行：只吃当月数据
 function renderOtHome(ot) {
-  $("ot_total").textContent = "¥" + ot.total_all.toFixed(0);
-  $("ot_hours").textContent = ot.total_hours.toFixed(1) + "h";
-  $("ot_days").textContent = ot.days;
-  $("ot_meal_total").textContent = "¥" + ot.total_meal.toFixed(0);
-  $("ot_avg").textContent =
-    ot.days > 0 ? "¥" + (ot.total_all / ot.days).toFixed(0) : "¥0";
+  $("otMonthTotal").textContent = "¥" + ot.total_all.toFixed(0);
+  $("otMonthDays").textContent = ot.days + " 天";
+  $("otMonthAvg").textContent =
+    "日均 ¥" + (ot.days > 0 ? (ot.total_all / ot.days).toFixed(0) : "0");
 }
 
 // 加班明细页：表格 + 所选月份小计，跟随 otView
@@ -802,10 +913,23 @@ function paintActivity() {
   if (curView === "viewMain") {
     // 主界面卡片固定反映今天：翻到历史日期后缓存里是历史数据，不能拿去覆盖「今日」
     if (!isToday(a.date)) return;
-    $("act_left").textContent = (t.left || 0).toLocaleString();
+    // 单击次数 = 左键按下总数 − 双击的两连按（双击一次含 2 次按下，activity 后端如此计数）
+    const dbl = t.dbl || 0;
+    $("act_left").textContent = Math.max(0, (t.left || 0) - 2 * dbl).toLocaleString();
     $("act_right").textContent = (t.right || 0).toLocaleString();
     $("act_keys").textContent = (t.keys || 0).toLocaleString();
     $("act_hours").textContent = (a.active_hours || 0) + "h";
+    // 辛苦数据条（Weather 式一行四格）：左键 / 右键 / 敲击 / 活跃时段
+    $("stLeft").textContent = (t.left || 0).toLocaleString();
+    $("stRight").textContent = (t.right || 0).toLocaleString();
+    $("stKeys").textContent = (t.keys || 0).toLocaleString();
+    $("stHours").textContent = (a.active_hours || 0) + "h";
+    // 监控卡活动面板（8 格）：双击 / 滚轮 / 移动次数 / 移动距离为新增项
+    $("monDbl").textContent = (t.dbl || 0).toLocaleString();
+    $("monWheel").textContent =
+      (t.wheel || 0).toLocaleString() + " 次 · " + (t.wheel_ticks || 0).toLocaleString() + " 格";
+    $("monMoves").textContent = (t.moves || 0).toLocaleString();
+    $("monDist").textContent = fmtDist(t.pixels);
     return;
   }
   if (curView !== "viewAct") return;
@@ -1281,19 +1405,18 @@ function showView(id) {
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
   target.classList.remove("hidden");
   curView = id;
-  // 导航同步（契约见 scripts/test_topnav.js）：
-  // 顶导高亮——4 个明细视图都映射到「明细」聚合 tab；
-  // 分段条——仅在明细视图可见时显示，并高亮当前分段
+  // 导航同步（契约见 scripts 目录的导航回归测试）：
+  // 工具栏分段高亮——4 个明细视图都映射到「明细」聚合段；
+  // 二级分段条——仅在明细视图显示，并高亮当前分段；齿轮在设置视图点亮
   const isDetail = DETAIL_VIEWS.includes(id);
   if (isDetail) lastDetailView = id;
   const navKey = isDetail ? "detail" : id;
-  document.querySelectorAll(".topnav-item").forEach((b) => {
-    b.classList.toggle("active", b.dataset.nav === navKey);
+  document.querySelectorAll(".seg-nav").forEach((b) => {
+    if (b.closest("#segbar")) b.classList.toggle("active", b.dataset.nav === id);
+    else b.classList.toggle("active", b.dataset.nav === navKey);
   });
+  $("gearBtn").classList.toggle("active", id === "viewSettings");
   $("segbar").classList.toggle("hidden", !isDetail);
-  document.querySelectorAll(".seg-item").forEach((b) => {
-    b.classList.toggle("active", b.dataset.seg === id);
-  });
   if (id === "viewMain") resetHistDates();
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
@@ -1312,7 +1435,7 @@ function repaintCurrentView() {
   if (curView === "viewOt") loadOvertime();
 }
 $("otDetailBtn").addEventListener("click", () => showView("viewOt"));
-// 加班总览卡 → 加班明细（自动归入顶导「明细」tab）
+// 加班战果行 → 加班明细（自动归入工具栏「明细」段）
 // 今日监控卡（活动/应用/媒体三合一）：内联小分段切换预览面板，
 // 「查看明细」跟随当前分段跳对应明细页。预览面板内的统计 id 由现有 paint 函数维护
 let curMon = "act"; // 当前监控预览分段（act/app/audio）
@@ -1338,16 +1461,14 @@ $("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsa
 $("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
 $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
 
-// 顶部导航条 + 明细分段条：任意视图直达（取代原「‹ 返回」的网页式导航）。
+// 分段工具栏 + ⚙ 设置 + 明细二级分段条：任意视图直达（取代原「‹ 返回」的网页式导航）。
 // 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
-document.querySelectorAll(".topnav-item").forEach((btn) => {
+document.querySelectorAll(".seg-nav").forEach((btn) => {
   btn.addEventListener("click", () =>
     showView(btn.dataset.nav === "detail" ? lastDetailView : btn.dataset.nav)
   );
 });
-document.querySelectorAll(".seg-item").forEach((btn) => {
-  btn.addEventListener("click", () => showView(btn.dataset.seg));
-});
+$("gearBtn").addEventListener("click", () => showView("viewSettings"));
 
 // 启动即把三页导航条初始化为「今天」，并禁用「后一天」
 for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
@@ -1386,7 +1507,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=e7e6f171 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=9b826d29 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

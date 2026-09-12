@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>原型 · macOS 风格（评审用，非最终代码）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    /* 页面背景放彩色光斑，用于演示 mac 毛玻璃材质的「透」 */
+    background:
+      radial-gradient(420px 300px at 18% 22%, rgba(94,92,230,.35), transparent 70%),
+      radial-gradient(460px 320px at 84% 18%, rgba(255,159,67,.28), transparent 70%),
+      radial-gradient(500px 380px at 75% 85%, rgba(90,200,250,.22), transparent 70%),
+      #0b0b0d;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: #f2f2f4;
+    padding: 24px;
+  }
+  .note {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: rgba(255,255,255,.45); letter-spacing: 1px;
+  }
+  .win {
+    width: 520px; height: 660px;
+    background: rgba(26,26,28,.92);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 11px;
+    box-shadow: 0 30px 90px rgba(0,0,0,.65), 0 2px 10px rgba(0,0,0,.4);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ====== 工具栏（mac 风格，无假红绿灯；真实程序保留 Windows 原生标题栏）====== */
+  .toolbar {
+    flex-shrink: 0;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    height: 46px; padding: 0 14px;
+    background: rgba(44,44,46,.55);
+    backdrop-filter: blur(24px) saturate(1.4);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+
+  /* macOS 分段控件：轨道半透明，选中块是「凸起」的浅灰键帽 */
+  .seg {
+    display: flex;
+    background: rgba(255,255,255,.07);
+    border-radius: 8px; padding: 2px; gap: 1px;
+  }
+  .seg button {
+    border: none; background: transparent;
+    color: #b8b8be; font-size: 12.5px; font-family: inherit;
+    padding: 5px 16px; border-radius: 6px;
+    cursor: pointer; letter-spacing: .3px;
+    transition: background .12s, color .12s;
+  }
+  .seg button:hover { color: #e8e8ec; }
+  .seg button.active {
+    background: #5b5b60;
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.45), inset 0 .5px 0 rgba(255,255,255,.18);
+  }
+  .gear {
+    justify-self: end;
+    width: 30px; height: 26px;
+    border: none; border-radius: 6px;
+    background: transparent; color: #b8b8be;
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 14px;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .gear:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .gear.active { background: rgba(255,214,10,.18); color: #ffd60a; }
+
+  /* 明细二级分段条（仅明细视图出现，同样 mac 凸起式） */
+  .subbar {
+    flex-shrink: 0;
+    display: flex; justify-content: center;
+    padding: 10px 16px 2px;
+    background: rgba(26,26,28,.92);
+  }
+  .subbar.hidden { display: none; }
+  .subbar .seg button { font-size: 12px; padding: 4px 14px; }
+
+  /* ====== 内容区：macOS 内嵌分组列表风格 ====== */
+  .stage { flex: 1; min-height: 0; position: relative; }
+  .view {
+    position: absolute; inset: 0;
+    overflow-y: auto;
+    padding: 12px 16px 18px;
+    display: none;
+    animation: fadein .18s ease;
+  }
+  .view.on { display: block; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .view::-webkit-scrollbar { width: 8px; }
+  .view::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+
+  /* mac 分组：圆角容器 + 组外小灰标题 + 行内发丝分隔线 */
+  .grp { background: rgba(255,255,255,.055); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .grp-h { font-size: 12px; color: #98989e; margin: 2px 4px 6px; }
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    min-height: 40px; padding: 0 13px;
+  }
+  .row + .row { border-top: .5px solid rgba(255,255,255,.09); }
+  .row .lbl { font-size: 13px; }
+  .row .val { margin-left: auto; font-size: 13px; color: #98989e; }
+  .row .num { font-variant-numeric: tabular-nums; }
+
+  /* 大数字 hero：mac 偏好大号 tabular 数字 + 下方进度条 */
+  .big {
+    font-size: 40px; font-weight: 700; text-align: center;
+    color: #ffd60a; letter-spacing: -.5px;
+    font-variant-numeric: tabular-nums;
+    padding: 10px 0 2px;
+  }
+  .lp-track { height: 5px; background: rgba(255,255,255,.10); border-radius: 3px; overflow: hidden; }
+  .lp-fill { height: 100%; width: 41%; background: linear-gradient(90deg, #ffd60a, #ff9f0a); border-radius: 3px; }
+  .lp-cap { display: flex; justify-content: space-between; font-size: 11px; color: #98989e; padding-top: 5px; }
+
+  /* 四格指标：mac 风格用分组行而非网格小卡 */
+  .stat-row { display: flex; }
+  .stat-row .row { flex: 1; }
+  .stat-row .row + .row { border-top: none; border-left: .5px solid rgba(255,255,255,.09); }
+  .stat-row .k { font-size: 11px; color: #98989e; }
+  .stat-row .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* 监控三合一头部 */
+  .mon-head { display: flex; align-items: center; gap: 8px; padding: 8px 13px; }
+  .mon-head .grp-h { margin: 0; }
+  .mon-seg { display: flex; background: rgba(255,255,255,.07); border-radius: 6px; padding: 2px; gap: 1px; }
+  .mon-seg button { border: none; background: transparent; color: #b8b8be; font-size: 11px; padding: 3px 10px; border-radius: 5px; cursor: pointer; font-family: inherit; }
+  .mon-seg button.active { background: #5b5b60; color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .mon-head .macbtn { margin-left: auto; }
+
+  /* mac 按钮系统 */
+  .macbtn {
+    border: 1px solid rgba(255,255,255,.12);
+    background: linear-gradient(180deg, #3d3d40, #323234);
+    color: #f2f2f4; font-size: 12px; font-family: inherit;
+    padding: 4px 11px; border-radius: 6px; cursor: pointer;
+    box-shadow: 0 1px 1px rgba(0,0,0,.3);
+  }
+  .macbtn:hover { background: linear-gradient(180deg, #464649, #3a3a3d); }
+  .macbtn.primary { background: #ffd60a; border-color: transparent; color: #1a1a1c; font-weight: 600; }
+  .macbtn.primary:hover { background: #ffdf3d; }
+
+  /* 月/日导航 */
+  .mnav { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 2px 0 12px; }
+  .mnav .lbl { font-size: 13px; font-weight: 600; }
+
+  /* 表格：发丝线 + tabular 数字 */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { color: #98989e; font-weight: 500; text-align: left; padding: 7px 13px; font-size: 11px; }
+  td { padding: 8px 13px; font-variant-numeric: tabular-nums; }
+  tr + tr td { border-top: .5px solid rgba(255,255,255,.09); }
+
+  /* 柱状图 */
+  .chart { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding: 6px 4px 0; }
+  .chart i { flex: 1; background: rgba(255,255,255,.22); border-radius: 2px 2px 0 0; min-height: 2px; }
+  .chart i.hot { background: #ffd60a; }
+  .axis { display: flex; justify-content: space-between; font-size: 10px; color: #7c7c82; margin-top: 5px; padding: 0 4px; }
+
+  /* 应用列表行：圆形首字图标（mac 无圆角方图习惯用圆形/圆角方形） */
+  .ico { width: 26px; height: 26px; border-radius: 7px; background: rgba(255,255,255,.10); color: #cfcfd4; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+  .row .name { font-size: 13px; width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { flex: 1; height: 5px; background: rgba(255,255,255,.10); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: #0a84ff; border-radius: 3px; }
+  .row .dur { font-size: 12px; color: #98989e; width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* sparkline 走势区 */
+  .spark { margin-top: 10px; }
+  .spark svg { display: block; width: 100%; height: 40px; }
+
+  /* Weather 式横排小格：纯文字数字，发丝线分隔（安静的数据形态） */
+  .strip { display: flex; background: rgba(255,255,255,.05); border-radius: 10px; padding: 11px 0; margin-bottom: 14px; }
+  .strip .cell { flex: 1; text-align: center; }
+  .strip .cell + .cell { border-left: .5px solid rgba(255,255,255,.09); }
+  .strip .k { font-size: 11px; color: #98989e; }
+  .strip .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 3px; }
+
+  /* 单行汇总（本月战果）：裸行，不装盒子 */
+  .monthrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 2px 4px 14px; font-size: 12.5px; color: #98989e;
+  }
+  .monthrow b { color: #e8e8ec; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .monthrow .macbtn { margin-left: auto; }
+
+  /* 裸时间轴：不装盒子，极轻地存在 */
+  .bare-taxis { padding: 0 6px; margin-bottom: 16px; }
+
+  /* 品牌行：小而精，右侧动态状态徽章（牛马文学 tagline 的落点） */
+  .brandrow { display: flex; align-items: center; margin: 2px 2px 12px; }
+  .brand { font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+  .brand .sub { font-size: 11px; color: #98989e; font-weight: 400; margin-left: 8px; letter-spacing: 0; }
+  .badge {
+    margin-left: auto; font-size: 11px; padding: 3px 10px; border-radius: 20px;
+    background: rgba(50,205,75,.14); color: #32d74b;
+  }
+  .badge.off { background: rgba(255,255,255,.08); color: #98989e; }
+
+  /* 今日时间轴：上班/午休/下班分段 + 白色「现在」指针 */
+  .taxis { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,.08); position: relative; }
+  .tseg { height: 100%; }
+  .tseg.done { background: linear-gradient(90deg, #ff9f0a, #ffd60a); }
+  .tseg.rest { background: repeating-linear-gradient(45deg, rgba(255,255,255,.10) 0 4px, transparent 4px 9px); }
+  .tnow { position: absolute; top: -3px; width: 2px; height: 16px; background: #fff; border-radius: 1px; box-shadow: 0 0 8px rgba(255,255,255,.9); }
+  .tlabels { position: relative; height: 16px; margin-top: 5px; font-size: 10px; color: #7c7c82; }
+  .tlabels span { position: absolute; transform: translateX(-50%); }
+  .tlabels span:first-child { transform: none; }
+  .tlabels span:last-child { transform: translateX(-100%); }
+
+  /* mac 开关：绿色系统色 */
+  .sw { width: 38px; height: 22px; border-radius: 11px; background: rgba(255,255,255,.16); position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; }
+  .sw.on { background: #32d74b; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.35); transition: left .15s; }
+  .sw.on::after { left: 18px; }
+
+  /* 输入框：内嵌深色 + 金色聚焦环 */
+  .fld { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #98989e; }
+  .fld input, .fld select {
+    background: rgba(255,255,255,.06); border: .5px solid rgba(255,255,255,.12); color: #f2f2f4;
+    border-radius: 6px; padding: 6px 9px; font-size: 13px; font-family: inherit; outline: none;
+  }
+  .fld input:focus { box-shadow: 0 0 0 3px rgba(255,214,10,.28); border-color: rgba(255,214,10,.6); }
+  .fld-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 13px; }
+</style>
+</head>
+<body>
+<div class="note">设 计 原 型 · macOS 风 格 · 仅 评 审 用</div>
+
+<div class="win">
+  <!-- 工具栏：分段控件居中 + ⚙ 设置（无红绿灯，Windows 原生标题栏在真实程序中保留） -->
+  <div class="toolbar">
+    <div></div>
+    <div class="seg" id="seg">
+      <button data-v="main" class="active">主页</button>
+      <button data-v="detail">明细</button>
+    </div>
+    <button class="gear" id="gearBtn" title="设置">&#xE713;</button>
+  </div>
+  <div class="subbar hidden" id="subbar">
+    <div class="seg" id="subseg">
+      <button data-v="ot" class="active">加班</button>
+      <button data-v="act">键鼠</button>
+      <button data-v="app">应用</button>
+      <button data-v="audio">媒体</button>
+    </div>
+  </div>
+
+  <div class="stage">
+
+    <!-- 主页 v5：唯一焦点 hero + 裸时间轴 + 安静数据条 + 单行战果 + 监控入口 -->
+    <div class="view on" id="v-main">
+      <div class="brandrow">
+        <div class="brand">🐎 牛马计时器<span class="sub">给每一个认真搬砖的你</span></div>
+        <span class="badge">● 搬砖中 · 距下班 1.5h</span>
+      </div>
+
+      <!-- 全页唯一视觉焦点：大数字 + 细进度 + 走势 -->
+      <div class="grp" style="padding:6px 13px 12px">
+        <div class="big">¥328.50</div>
+        <div class="lp-track"><div class="lp-fill"></div></div>
+        <div class="lp-cap"><span>全天应赚 ¥800.00 · 41%</span><span>速率 ¥0.85/分 · 距发薪 28 天</span></div>
+        <div class="spark" aria-hidden="true">
+          <svg viewBox="0 0 440 44" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#ffd60a" stop-opacity=".35"/>
+                <stop offset="1" stop-color="#ffd60a" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,44 L0,42 L55,42 L110,38 L165,30 L220,26 L275,18 L330,14 L385,10 L440,6 L440,44 Z" fill="url(#sg)"/>
+            <path d="M0,42 L55,42 L110,38 L165,30 L220,26 L275,18 L330,14 L385,10 L440,6" fill="none" stroke="#ffd60a" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="lp-cap"><span>0 时</span><span>6 时</span><span>12 时</span><span>18 时</span><span>现在</span></div>
+      </div>
+
+      <!-- 时间轴：裸条不装盒，极轻地存在 -->
+      <div class="bare-taxis">
+        <div class="taxis">
+          <div class="tseg done" style="width:33.3%"></div>
+          <div class="tseg rest" style="width:16.7%"></div>
+          <div class="tseg done" style="width:44.4%"></div>
+          <div class="tseg" style="width:5.6%"></div>
+          <div class="tnow" style="left:94.4%"></div>
+        </div>
+        <div class="tlabels">
+          <span style="left:0">09:00</span><span style="left:33.3%">12:00</span>
+          <span style="left:50%">13:30</span><span style="left:100%">18:00</span>
+        </div>
+      </div>
+
+      <!-- 辛苦数据：Weather 式一行四格，纯文字，安静 -->
+      <div class="strip">
+        <div class="cell" title="约等于绕操场 6 圈"><div class="k">鼠标移动</div><div class="v">2.4 km</div></div>
+        <div class="cell"><div class="k">鼠标点击</div><div class="v">1,407</div></div>
+        <div class="cell"><div class="k">键盘敲击</div><div class="v">11,393</div></div>
+        <div class="cell"><div class="k">活跃时段</div><div class="v">8h</div></div>
+      </div>
+
+      <!-- 本月战果：单行汇总 -->
+      <div class="monthrow">
+        <span>本月战果</span>
+        <b>加班 ¥1,240 · 14 天 · 日均 ¥102</b>
+        <button class="macbtn">明细 ›</button>
+      </div>
+
+      <!-- 监控入口：页尾唯一卡片 -->
+      <div class="grp" style="padding:2px 13px 4px">
+        <div class="mon-head" style="padding:7px 0">
+          <div class="mon-seg"><button class="active">活动</button><button>应用</button><button>媒体</button></div>
+          <button class="macbtn mon-detail">查看明细 ›</button>
+        </div>
+        <div class="row" style="border-top:none;min-height:36px"><span class="lbl">应用使用</span><span class="val num">ZCode 3小时20分</span></div>
+        <div class="row" style="min-height:36px"><span class="lbl">媒体播放</span><span class="val num">网易云 2小时5分</span></div>
+      </div>
+    </div>
+
+    <!-- 加班明细 -->
+    <div class="view" id="v-ot">
+      <div class="mnav"><button class="macbtn">‹</button><span class="lbl">2026 年 9 月</span><button class="macbtn">›</button></div>
+      <div style="text-align:center;font-size:12px;color:#98989e;margin-bottom:10px">合计 ¥1,268 · 13.0 小时 · 6 天</div>
+      <div class="grp">
+        <table>
+          <tr><th>日期</th><th>下班</th><th>有效</th><th>加班费</th><th>饭补</th><th>合计</th><th>来源</th><th>操作</th></tr>
+          <tr><td>09-11</td><td>次日 01:30</td><td>7.5h</td><td>¥150</td><td>¥20</td><td>¥170</td><td style="color:#ffd60a;font-weight:600">手动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+          <tr><td>09-09</td><td>21:30</td><td>3.5h</td><td>¥70</td><td>¥20</td><td>¥90</td><td style="color:#ffd60a;font-weight:600">手动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+          <tr><td>09-08</td><td>22:10</td><td>4.0h</td><td>¥80</td><td>¥20</td><td>¥100</td><td style="color:#98989e">自动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+          <tr><td>09-05</td><td>20:45</td><td>2.5h</td><td>¥50</td><td>¥20</td><td>¥70</td><td style="color:#98989e">自动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+          <tr><td>09-02</td><td>21:15</td><td>3.0h</td><td>¥60</td><td>¥20</td><td>¥80</td><td style="color:#98989e">自动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+          <tr><td>09-01</td><td>19:30</td><td>1.5h</td><td>¥30</td><td>¥20</td><td>¥50</td><td style="color:#98989e">自动</td><td><button class="macbtn" style="padding:2px 8px;font-size:11px">编辑</button> <button class="macbtn" style="padding:2px 8px;font-size:11px;color:#ff8a8a">删除</button></td></tr>
+        </table>
+      </div>
+      <div style="text-align:right"><button class="macbtn primary">＋ 添加记录</button></div>
+    </div>
+
+    <!-- 键鼠 -->
+    <div class="view" id="v-act">
+      <div class="mnav"><button class="macbtn">‹ 前一天</button><span class="lbl">今天</span><button class="macbtn" style="opacity:.4">后一天 ›</button></div>
+      <div class="grp-h">逐小时活跃度</div>
+      <div class="grp" style="padding:8px 10px 10px">
+        <div class="chart">
+          <i style="height:6%"></i><i style="height:14%"></i><i style="height:30%"></i><i style="height:52%"></i>
+          <i style="height:44%"></i><i style="height:20%"></i><i style="height:66%"></i><i class="hot" style="height:92%"></i>
+          <i style="height:58%"></i><i style="height:70%"></i><i style="height:36%"></i><i style="height:12%"></i>
+          <i style="height:4%"></i><i style="height:2%"></i><i style="height:8%"></i><i style="height:24%"></i>
+        </div>
+        <div class="axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+      </div>
+      <div class="grp-h">鼠标 · 键盘统计</div>
+      <div class="grp" style="padding:0 13px">
+        <div class="row" style="border-top:none"><span class="lbl">鼠标点击 / 双击</span><span class="val num">1,407 / 132</span></div>
+        <div class="row"><span class="lbl">滚轮</span><span class="val num">2,855 次 · 9,120 格</span></div>
+        <div class="row"><span class="lbl">移动距离</span><span class="val num">124.6m</span></div>
+        <div class="row"><span class="lbl">按键次数 / 活跃时段</span><span class="val num">11,393 / 8h</span></div>
+      </div>
+      <div class="grp-h">高频按键 Top 榜</div>
+      <div class="grp" style="padding:2px 13px">
+        <div class="row" style="border-top:none"><span class="ico">E</span><div class="bar"><i style="width:100%;background:#ffd60a"></i></div><span class="dur">1,842</span></div>
+        <div class="row"><span class="ico">空格</span><div class="bar"><i style="width:76%;background:#ffd60a"></i></div><span class="dur">1,401</span></div>
+        <div class="row"><span class="ico">回车</span><div class="bar"><i style="width:41%;background:#ffd60a"></i></div><span class="dur">755</span></div>
+        <div class="row"><span class="ico">退格</span><div class="bar"><i style="width:23%;background:#ffd60a"></i></div><span class="dur">424</span></div>
+      </div>
+    </div>
+
+    <!-- 应用 -->
+    <div class="view" id="v-app">
+      <div class="mnav"><button class="macbtn">‹ 前一天</button><span class="lbl">今天</span><button class="macbtn" style="opacity:.4">后一天 ›</button></div>
+      <div class="grp-h">逐小时使用分布</div>
+      <div class="grp" style="padding:8px 10px 10px">
+        <div class="chart">
+          <i style="height:4%"></i><i style="height:10%"></i><i style="height:26%"></i><i style="height:48%"></i>
+          <i style="height:40%"></i><i style="height:16%"></i><i class="hot" style="height:88%"></i><i style="height:74%"></i>
+          <i style="height:52%"></i><i style="height:60%"></i><i style="height:30%"></i><i style="height:8%"></i>
+          <i style="height:2%"></i><i style="height:2%"></i><i style="height:6%"></i><i style="height:18%"></i>
+        </div>
+        <div class="axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+      </div>
+      <div class="grp-h">各应用今日时长</div>
+      <div class="grp" style="padding:2px 13px">
+        <div class="row" style="border-top:none"><span class="ico">Z</span><span class="name">ZCode</span><div class="bar"><i style="width:100%"></i></div><span class="dur">3小时20分</span></div>
+        <div class="row"><span class="ico">E</span><span class="name">Microsoft Edge</span><div class="bar"><i style="width:46%"></i></div><span class="dur">1小时32分</span></div>
+        <div class="row"><span class="ico">微</span><span class="name">微信</span><div class="bar"><i style="width:22%"></i></div><span class="dur">44分钟</span></div>
+        <div class="row"><span class="ico">V</span><span class="name">VS Code</span><div class="bar"><i style="width:18%"></i></div><span class="dur">36分钟</span></div>
+      </div>
+    </div>
+
+    <!-- 媒体 -->
+    <div class="view" id="v-audio">
+      <div class="mnav"><button class="macbtn">‹ 前一天</button><span class="lbl">今天</span><button class="macbtn" style="opacity:.4">后一天 ›</button></div>
+      <div class="grp-h">逐小时播放分布</div>
+      <div class="grp" style="padding:8px 10px 10px">
+        <div class="chart">
+          <i style="height:2%"></i><i style="height:6%"></i><i style="height:18%"></i><i style="height:34%"></i>
+          <i style="height:28%"></i><i style="height:12%"></i><i style="height:56%"></i><i class="hot" style="height:96%"></i>
+          <i style="height:70%"></i><i style="height:44%"></i><i style="height:20%"></i><i style="height:6%"></i>
+          <i style="height:2%"></i><i style="height:1%"></i><i style="height:4%"></i><i style="height:10%"></i>
+        </div>
+        <div class="axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
+      </div>
+      <div class="grp-h">各软件今日播放时长</div>
+      <div class="grp" style="padding:2px 13px">
+        <div class="row" style="border-top:none"><span class="ico">网</span><span class="name">网易云音乐</span><div class="bar"><i style="width:100%"></i></div><span class="dur">2小时5分</span></div>
+        <div class="row"><span class="ico">E</span><span class="name">Microsoft Edge</span><div class="bar"><i style="width:31%"></i></div><span class="dur">39分钟</span></div>
+      </div>
+    </div>
+
+    <!-- 设置 -->
+    <div class="view" id="v-set">
+      <div class="grp-h">功能监控</div>
+      <div class="grp">
+        <div class="row" style="border-top:none"><span class="lbl">鼠标键盘活动监控</span><div class="sw on" style="margin-left:auto"></div></div>
+        <div class="row"><span class="lbl">应用使用监控</span><div class="sw on" style="margin-left:auto"></div></div>
+        <div class="row"><span class="lbl">媒体播放监控</span><div class="sw on" style="margin-left:auto"></div></div>
+      </div>
+      <div class="grp-h">基础配置</div>
+      <div class="grp">
+        <div class="row" style="border-top:none"><span class="lbl">月薪</span><span class="val num">¥15,000</span></div>
+        <div class="row"><span class="lbl">上班时段</span><span class="val num">09:00–12:00 · 13:30–18:00</span></div>
+        <div class="row"><span class="lbl">开机自动启动</span><div class="sw" style="margin-left:auto"></div></div>
+      </div>
+      <div class="grp-h">加班配置</div>
+      <div class="grp">
+        <div class="row" style="border-top:none"><span class="lbl">启用加班追踪</span><div class="sw on" style="margin-left:auto"></div></div>
+        <div class="row"><span class="lbl">加班费</span><span class="val num">¥20 / 小时</span></div>
+        <div class="row"><span class="lbl">饭补</span><span class="val num">¥20 · 每日</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  var lastDetail = "ot";
+  function show(name) {
+    document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("on"); });
+    var t = document.getElementById("v-" + name);
+    if (t) t.classList.add("on");
+    var isDetail = ["ot", "act", "app", "audio"].indexOf(name) >= 0;
+    if (isDetail) lastDetail = name;
+    document.querySelectorAll("#seg button").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.v === name || (isDetail && b.dataset.v === "detail"));
+    });
+    document.getElementById("gearBtn").classList.toggle("active", name === "set");
+    document.getElementById("subbar").classList.toggle("hidden", !isDetail);
+    document.querySelectorAll("#subseg button").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.v === name);
+    });
+  }
+  document.querySelectorAll("#seg button").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.v === "detail" ? lastDetail : b.dataset.v); });
+  });
+  document.querySelectorAll("#subseg button").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.v); });
+  });
+  document.getElementById("gearBtn").addEventListener("click", function () { show("set"); });
+</script>
+</body>
+</html>
