@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "va4197cb2";
+const FE_VER = "ve84a035d";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -1408,16 +1408,27 @@ function showView(id) {
   curView = id;
   // 导航同步（契约见 scripts 目录的导航回归测试）：
   // 工具栏分段高亮——4 个明细视图都映射到「明细」聚合段；
-  // 二级分段条——仅在明细视图显示，并高亮当前分段；齿轮在设置视图点亮
+  // 翻页器——仅在明细视图显示，页名与圆点跟随当前页；齿轮在设置视图点亮
   const isDetail = DETAIL_VIEWS.includes(id);
   if (isDetail) lastDetailView = id;
   const navKey = isDetail ? "detail" : id;
   document.querySelectorAll(".seg-nav").forEach((b) => {
-    if (b.closest("#segbar")) b.classList.toggle("active", b.dataset.nav === id);
-    else b.classList.toggle("active", b.dataset.nav === navKey);
+    b.classList.toggle("active", b.dataset.nav === navKey);
   });
   $("gearBtn").classList.toggle("active", id === "viewSettings");
-  $("segbar").classList.toggle("hidden", !isDetail);
+  $("detailPager").classList.toggle("hidden", !isDetail);
+  if (isDetail) {
+    const names = {
+      viewOt: "加班明细",
+      viewAct: "键鼠明细",
+      viewApp: "应用明细",
+      viewAudio: "媒体明细",
+    };
+    $("pgName").textContent = names[id];
+  }
+  document.querySelectorAll(".pg-dot").forEach((b) => {
+    b.classList.toggle("active", b.dataset.nav === id);
+  });
   if (id === "viewMain") resetHistDates();
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
@@ -1462,7 +1473,7 @@ $("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsa
 $("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
 $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
 
-// 分段工具栏 + ⚙ 设置 + 明细二级分段条：任意视图直达（取代原「‹ 返回」的网页式导航）。
+// 分段工具栏 + ⚙ 设置 + 明细翻页器：任意视图直达（取代原「‹ 返回」的网页式导航）。
 // 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
 document.querySelectorAll(".seg-nav").forEach((btn) => {
   btn.addEventListener("click", () =>
@@ -1470,6 +1481,44 @@ document.querySelectorAll(".seg-nav").forEach((btn) => {
   );
 });
 $("gearBtn").addEventListener("click", () => showView("viewSettings"));
+
+// 明细翻页器：‹ › 循环切页（加班→键鼠→应用→媒体→加班），圆点直达任意页
+function pgStep(delta) {
+  const i = DETAIL_VIEWS.indexOf(curView);
+  if (i < 0) return;
+  showView(DETAIL_VIEWS[(i + delta + DETAIL_VIEWS.length) % DETAIL_VIEWS.length]);
+}
+$("pgPrev").addEventListener("click", () => pgStep(-1));
+$("pgNext").addEventListener("click", () => pgStep(1));
+document.querySelectorAll(".pg-dot").forEach((btn) => {
+  btn.addEventListener("click", () => showView(btn.dataset.nav));
+});
+
+// 滚轮翻页：明细内容滚到头（顶部/底部）再滚即翻页，500ms 冷却防触控板惯性
+// 一口气连翻。没到边界时滚轮照常滚动内容，长表格不受影响
+let wheelFlipUntil = 0;
+DETAIL_VIEWS.forEach((vid) => {
+  $(vid).addEventListener(
+    "wheel",
+    (e) => {
+      if (Date.now() < wheelFlipUntil) return;
+      const el = e.currentTarget;
+      const atTop = el.scrollTop <= 0;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      if (!atTop && !atBottom) return;
+      const i = DETAIL_VIEWS.indexOf(curView);
+      if (i < 0) return;
+      if (e.deltaY > 0 && atBottom) {
+        wheelFlipUntil = Date.now() + 500;
+        showView(DETAIL_VIEWS[(i + 1) % DETAIL_VIEWS.length]);
+      } else if (e.deltaY < 0 && atTop) {
+        wheelFlipUntil = Date.now() + 500;
+        showView(DETAIL_VIEWS[(i + DETAIL_VIEWS.length - 1) % DETAIL_VIEWS.length]);
+      }
+    },
+    { passive: true }
+  );
+});
 
 // 启动即把三页导航条初始化为「今天」，并禁用「后一天」
 for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
@@ -1508,7 +1557,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=a4197cb2 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=e84a035d = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

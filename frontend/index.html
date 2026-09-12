@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=a4197cb2" />
+    <link rel="stylesheet" href="styles.css?v=e84a035d" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -56,14 +56,19 @@
       </div>
     </nav>
 
-    <!-- 明细二级分段条：加班/键鼠/应用/媒体四个二级页共享的二次切换控件，
+    <!-- 明细翻页器：‹ 页名 › 循环切页 + 圆点直达 + 滚轮翻页（内容滚到头再滚即翻），
          仅在明细视图可见时显示（同一套 DOM 服务四个视图，curView 语义不变） -->
-    <div class="subbar hidden" id="segbar" role="tablist" aria-label="明细分段">
-      <div class="seg seg-sub">
-        <button class="seg-nav" data-nav="viewOt">加班</button>
-        <button class="seg-nav" data-nav="viewAct">键鼠</button>
-        <button class="seg-nav" data-nav="viewApp">应用</button>
-        <button class="seg-nav" data-nav="viewAudio">媒体</button>
+    <div class="subnav hidden" id="detailPager">
+      <div class="pg-row">
+        <button class="pg-btn" id="pgPrev" aria-label="上一页">‹</button>
+        <span class="pg-name" id="pgName">加班明细</span>
+        <button class="pg-btn" id="pgNext" aria-label="下一页">›</button>
+      </div>
+      <div class="pg-dots">
+        <button class="pg-dot" data-nav="viewOt" title="加班明细"></button>
+        <button class="pg-dot" data-nav="viewAct" title="键鼠明细"></button>
+        <button class="pg-dot" data-nav="viewApp" title="应用明细"></button>
+        <button class="pg-dot" data-nav="viewAudio" title="媒体明细"></button>
       </div>
     </div>
 
@@ -487,6 +492,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=a4197cb2"></script>
+    <script src="app.js?v=e84a035d"></script>
   </body>
 </html>

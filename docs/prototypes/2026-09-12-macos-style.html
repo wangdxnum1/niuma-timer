@@ -74,14 +74,33 @@
   .gear.active { background: rgba(255,214,10,.18); color: #ffd60a; }
 
   /* 明细二级分段条（仅明细视图出现，同样 mac 凸起式） */
-  .subbar {
+  /* 明细翻页器：‹ 页名 › + 圆点直达（取代二级 tab 行） */
+  .subnav {
     flex-shrink: 0;
-    display: flex; justify-content: center;
-    padding: 10px 16px 2px;
+    text-align: center;
+    padding: 8px 16px 0;
     background: rgba(26,26,28,.92);
   }
-  .subbar.hidden { display: none; }
-  .subbar .seg button { font-size: 12px; padding: 4px 14px; }
+  .subnav.hidden { display: none; }
+  .pg-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
+  .pg-btn {
+    width: 28px; height: 26px;
+    border: none; border-radius: 6px;
+    background: transparent; color: #b8b8be;
+    font-size: 15px; font-family: inherit; cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .pg-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .pg-name { font-size: 14px; font-weight: 700; min-width: 110px; }
+  .pg-dots { display: flex; justify-content: center; gap: 8px; margin: 7px 0 2px; }
+  .pg-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: none; padding: 0;
+    background: rgba(255,255,255,.22); cursor: pointer;
+    transition: background .12s, transform .12s;
+  }
+  .pg-dot:hover { background: rgba(255,255,255,.45); transform: scale(1.3); }
+  .pg-dot.active { background: #ffd60a; }
 
   /* ====== 内容区：macOS 内嵌分组列表风格 ====== */
   .stage { flex: 1; min-height: 0; position: relative; }
@@ -262,12 +281,17 @@
     </div>
     <button class="gear" id="gearBtn" title="设置">&#xE713;</button>
   </div>
-  <div class="subbar hidden" id="subbar">
-    <div class="seg" id="subseg">
-      <button data-v="ot" class="active">加班</button>
-      <button data-v="act">键鼠</button>
-      <button data-v="app">应用</button>
-      <button data-v="audio">媒体</button>
+  <div class="subnav hidden" id="subnav">
+    <div class="pg-row">
+      <button class="pg-btn" id="pgPrev">‹</button>
+      <span class="pg-name" id="pgName">加班明细</span>
+      <button class="pg-btn" id="pgNext">›</button>
+    </div>
+    <div class="pg-dots">
+      <button class="pg-dot" data-v="ot" title="加班明细"></button>
+      <button class="pg-dot" data-v="act" title="键鼠明细"></button>
+      <button class="pg-dot" data-v="app" title="应用明细"></button>
+      <button class="pg-dot" data-v="audio" title="媒体明细"></button>
     </div>
   </div>
 
@@ -476,15 +500,44 @@
       b.classList.toggle("active", b.dataset.v === name || (isDetail && b.dataset.v === "detail"));
     });
     document.getElementById("gearBtn").classList.toggle("active", name === "set");
-    document.getElementById("subbar").classList.toggle("hidden", !isDetail);
-    document.querySelectorAll("#subseg button").forEach(function (b) {
+    document.getElementById("subnav").classList.toggle("hidden", !isDetail);
+    var names = { ot: "加班明细", act: "键鼠明细", app: "应用明细", audio: "媒体明细" };
+    if (isDetail) document.getElementById("pgName").textContent = names[name];
+    document.querySelectorAll(".pg-dot").forEach(function (b) {
       b.classList.toggle("active", b.dataset.v === name);
     });
   }
   document.querySelectorAll("#seg button").forEach(function (b) {
     b.addEventListener("click", function () { show(b.dataset.v === "detail" ? lastDetail : b.dataset.v); });
   });
-  document.querySelectorAll("#subseg button").forEach(function (b) {
+  var DETAIL = ["ot", "act", "app", "audio"];
+  // 滚轮翻页：内容滚到头（顶/底）再滚即翻页，500ms 冷却防触控板惯性连翻
+  var flipUntil = 0;
+  ["v-ot", "v-act", "v-app", "v-audio"].forEach(function (id) {
+    document.getElementById(id).addEventListener("wheel", function (e) {
+      if (Date.now() < flipUntil) return;
+      var el = e.currentTarget;
+      var atTop = el.scrollTop <= 0;
+      var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      var i = DETAIL.indexOf(lastDetail);
+      if (e.deltaY > 0 && atBottom) {
+        flipUntil = Date.now() + 500;
+        show(DETAIL[(i + 1) % DETAIL.length]);
+      } else if (e.deltaY < 0 && atTop) {
+        flipUntil = Date.now() + 500;
+        show(DETAIL[(i + DETAIL.length - 1) % DETAIL.length]);
+      }
+    }, { passive: true });
+  });
+  document.getElementById("pgPrev").addEventListener("click", function () {
+    var i = DETAIL.indexOf(lastDetail);
+    show(DETAIL[(i + DETAIL.length - 1) % DETAIL.length]);
+  });
+  document.getElementById("pgNext").addEventListener("click", function () {
+    var i = DETAIL.indexOf(lastDetail);
+    show(DETAIL[(i + 1) % DETAIL.length]);
+  });
+  document.querySelectorAll(".pg-dot").forEach(function (b) {
     b.addEventListener("click", function () { show(b.dataset.v); });
   });
   document.getElementById("gearBtn").addEventListener("click", function () { show("set"); });

@@ -90,20 +90,65 @@ body {
   line-height: 1;
 }
 
-/* 明细二级分段条：仅在明细视图可见（同一套 DOM 服务四个视图，curView 语义不变） */
-.subbar {
+/* ====== 明细翻页器：‹ 页名 › + 圆点直达 + 滚轮翻页（取代二级 tab 行）====== */
+.subnav {
   flex-shrink: 0;
-  display: flex;
-  justify-content: center;
+  text-align: center;
   padding: 8px 16px 0;
   background: #1a1a1c;
 }
-.subbar .seg-nav {
-  font-size: 12px;
-  padding: 4px 14px;
-}
-.subbar.hidden {
+.subnav.hidden {
   display: none;
+}
+.pg-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.pg-btn {
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #b8b8be;
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.pg-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.pg-name {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 110px;
+}
+.pg-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin: 7px 0 2px;
+}
+.pg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  transition: background 0.12s, transform 0.12s;
+}
+.pg-dot:hover {
+  background: rgba(255, 255, 255, 0.45);
+  transform: scale(1.3);
+}
+.pg-dot.active {
+  background: #ffd650;
 }
 
 /* 键盘焦点可见性（原生应用基本素养） */
