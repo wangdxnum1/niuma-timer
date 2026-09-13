@@ -399,10 +399,13 @@ fn get_activity_summary(date: Option<String>) -> activity::ActivitySummary {
 /// 的 data URL，每 2 秒轮询整批搬运纯属浪费，只有新应用才需要传一次）。
 #[tauri::command(async)]
 fn get_app_usage_summary(
+    state: State<'_, AppState>,
     known_icons: Vec<String>,
     date: Option<String>,
 ) -> app_usage::AppUsageSummary {
-    app_usage::summary(&known_icons, date.as_deref())
+    // 摸鱼统计需要用户分类（config.app_categories）参与归类，取配置副本传入
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    app_usage::summary(&known_icons, date.as_deref(), &cfg)
 }
 
 /// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）

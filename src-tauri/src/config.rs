@@ -1,5 +1,6 @@
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,13 @@ pub struct Config {
     /// 应用名白名单（展示名，大小写不敏感）；仅当 app_whitelist_enabled=true 且非空时生效
     #[serde(default)]
     pub app_whitelist: Vec<String>,
+
+    // ---- 摸鱼统计：应用分类 ----
+    /// 展示名 → 分类（工作/摸鱼/沟通/其他）。用户在应用明细页点分类标签写入；
+    /// 未命中的应用走内置默认表（app_usage::DEFAULT_CATEGORIES），再未命中归「其他」。
+    /// 空串值视同未覆盖。查询时归类——改分类立即重新归类全部历史，零迁移
+    #[serde(default)]
+    pub app_categories: HashMap<String, String>,
 
     // ---- 功能监控开关（关闭后对应线程空转，几乎不占 CPU）----
     /// 鼠标键盘活动监控
@@ -152,6 +160,7 @@ impl Default for Config {
             overtime_rate_holiday: None,
             app_whitelist_enabled: false,
             app_whitelist: Vec::new(),
+            app_categories: HashMap::new(),
             monitor_activity: true,
             monitor_app_usage: true,
             monitor_audio: true,
@@ -243,19 +252,32 @@ pub fn load() -> Config {
 /// 避免写到一半崩溃 / 断电，残留半截文件导致下次启动解析失败、整份配置被默认值替换。
 /// Windows 下 rename 不能覆盖已存在目标，故先删旧文件再移动（极小时间窗，单机可接受）；
 /// 任一环节失败均退回直接覆盖写，至少保证内存态落盘。
+///
+/// 全部失败路径都会记入 debug.log——配置写不进去 = 用户改动静默丢失，
+/// 这类问题绝不允许无声无息（曾实测「标签保存成功但 config 没落盘」无从排查）。
 pub fn save(cfg: &Config) {
     let dir = config_dir();
     let _ = fs::create_dir_all(&dir);
     if let Ok(s) = serde_json::to_string_pretty(cfg) {
         let tmp = config_path().with_extension("json.tmp");
         if fs::write(&tmp, &s).is_ok() {
-            let _ = fs::remove_file(config_path());
+            let removed = fs::remove_file(config_path());
             if fs::rename(&tmp, config_path()).is_ok() {
                 return;
             }
             // rename 失败（如跨卷）：退回直接覆盖写
-            let _ = fs::write(config_path(), &s);
+            if fs::write(config_path(), &s).is_ok() {
+                return;
+            }
+            crate::db::debug_log(&format!(
+                "[config] 配置保存失败：rename 与直接写均失败（remove={:?}）",
+                removed.map(|_| "ok").map_err(|e| e.to_string())
+            ));
+            return;
         }
+        crate::db::debug_log("[config] 配置保存失败：临时文件写入失败");
+    } else {
+        crate::db::debug_log("[config] 配置保存失败：序列化失败");
     }
 }
 

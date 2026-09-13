@@ -1102,6 +1102,88 @@ button:active {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- 摸鱼统计：应用构成条、分类标签 ---- */
+.cat-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.cat-bar i {
+  height: 100%;
+  min-width: 2px;
+}
+.cat-list {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.cat-cell {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 8px 4px;
+  text-align: center;
+}
+.cat-cell .k {
+  display: block;
+  font-size: 11px;
+  color: #98989e;
+}
+.cat-cell .v {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+/* 分类配色（构成条分段 / 圆点共用）：工作绿 · 摸鱼红 · 沟通蓝 · 其他灰 */
+.cat-c-work {
+  background: #57c7a5;
+}
+.cat-c-slack {
+  background: #ff6b6b;
+}
+.cat-c-comm {
+  background: #5b9dff;
+}
+.cat-c-other {
+  background: #8a90a2;
+}
+/* 主页监控卡里的摸鱼速览行 */
+.mon-slack {
+  font-size: 11px;
+  color: #98989e;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.mon-slack .cat-dot {
+  margin: 0 4px 0 10px;
+}
+.mon-slack .cat-dot:first-child {
+  margin-left: 0;
+}
+/* 应用行的分类标签：点击循环改分类 */
+.cat-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 9px;
+  cursor: pointer;
+  color: #14161c;
+  font-weight: 600;
+}
+.cat-chip:hover {
+  filter: brightness(1.12);
+}
+.cat-chip.cat-c-slack,
+.cat-chip.cat-c-comm,
+.cat-chip.cat-c-other {
+  color: #fff;
+}
+
 /* ====== 应用使用白名单编辑器 ====== */
 .wl-editor {
   display: flex;

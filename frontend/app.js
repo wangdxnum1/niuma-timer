@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vb02e30f6";
+const FE_VER = "ve0807aca";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -1051,18 +1051,98 @@ function paintAppUsage() {
   if (curView === "viewMain") {
     if (!isToday(s.date)) return; // 同上：主界面只反映今天
     const home = $("appuHomeList");
-    if (home) renderAppRows(home, apps, 6);
+    if (home) {
+      renderAppRows(home, apps, 6);
+      // 摸鱼速览：主页监控卡里一行「工作 X · 摸鱼 Y」（应用构成切片）
+      const cats = s.categories || [];
+      const w = cats.find((c) => c.key === "work");
+      const sl = cats.find((c) => c.key === "slack");
+      if (apps.length && (w || sl)) {
+        home.insertAdjacentHTML(
+          "afterbegin",
+          '<div class="mon-slack"><span class="cat-dot cat-c-work"></span>工作 ' +
+            fmtDurCN(w ? w.seconds : 0) +
+            '<span class="cat-dot cat-c-slack"></span>摸鱼 ' +
+            fmtDurCN(sl ? sl.seconds : 0) +
+            "</div>"
+        );
+      }
+    }
     return;
   }
   if (curView !== "viewApp") return;
   updateDayNav("appu");
+  renderCategories(s);
   const list = $("appuList");
-  if (list) renderAppRows(list, apps, 0, dayEmpty(s.date, "应用使用记录"));
+  if (list) renderAppRows(list, apps, 0, dayEmpty(s.date, "应用使用记录"), { chips: true });
   renderHourChart($("appuChart"), s.hourly || [], isToday(s.date));
 }
 
-// 应用行：图标 + 软件名 + 进度条 + 时长（按时长降序）。emptyText 自定义空态文案
-function renderAppRows(container, apps, limit, emptyText) {
+// ---- 摸鱼统计：分类渲染与改分类 ----
+
+// 分类循环顺序（点标签按此序切换）；key 为前端配色锚点
+const CAT_CYCLE = ["工作", "摸鱼", "沟通", "其他"];
+function catKey(label) {
+  return { 工作: "work", 摸鱼: "slack", 沟通: "comm" }[label] || "other";
+}
+
+// 应用构成：堆叠条 + 四格时长（工作/摸鱼/沟通/其他）
+function renderCategories(s) {
+  const wrap = $("catSummary");
+  if (!wrap) return;
+  const cats = s.categories || [];
+  const total = cats.reduce((a, c) => a + c.seconds, 0);
+  const bar = cats
+    .map(
+      (c) =>
+        c.seconds > 0
+          ? '<i class="cat-c-' +
+            catKey(c.label) +
+            '" style="width:' +
+            (total > 0 ? (c.seconds / total) * 100 : 0) +
+            '%"></i>'
+          : ""
+    )
+    .join("");
+  const cells = cats
+    .map(
+      (c) =>
+        '<div class="cat-cell"><span class="k">' +
+        c.label +
+        '</span><span class="v">' +
+        fmtDurCN(c.seconds) +
+        "</span></div>"
+    )
+    .join("");
+  wrap.innerHTML =
+    '<div class="cat-bar">' + bar + '</div><div class="cat-list">' + cells + "</div>";
+}
+
+// 点分类标签循环改分类：覆盖写 config.app_categories（展示名 → 分类），
+// 后端查询时归类——改完历史数据即时重新归类，无需迁移。
+// 全链路 flog 打点：save 静默失败无从排查（曾实测「标签变了但 config 没落盘」）
+async function cycleAppCategory(app, current) {
+  flog("cat: click app=" + app + " cur=" + current);
+  try {
+    const cfg = await invoke("load_config");
+    const map = Object.assign({}, cfg.app_categories || {});
+    flog("cat: load_config ok, map=" + JSON.stringify(map));
+    const idx = CAT_CYCLE.indexOf(current);
+    map[app] = CAT_CYCLE[(idx + 1 + CAT_CYCLE.length) % CAT_CYCLE.length];
+    await invoke("save_config", { cfg: { app_categories: map } });
+    flog("cat: save_config ok, " + app + "=" + map[app]);
+    showToast("已归类为「" + map[app] + "」", "ok");
+    loadAppUsage();
+  } catch (e) {
+    flog("cat: FAILED " + e);
+    showToast("分类保存失败：" + e, "err");
+  }
+}
+
+// 应用行：图标 + 软件名 + 分类标签（明细页）+ 进度条 + 时长（按时长降序）。
+// emptyText 自定义空态文案；opts.chips 为 true 时行内带可点的分类标签
+function renderAppRows(container, apps, limit, emptyText, opts) {
+  const chips = !!(opts && opts.chips);
   container.innerHTML = "";
   if (!apps.length) {
     container.innerHTML =
@@ -1074,9 +1154,22 @@ function renderAppRows(container, apps, limit, emptyText) {
   for (const a of shown) {
     const row = document.createElement("div");
     row.className = "tk-row appu-row";
+    const chip =
+      chips && a.category
+        ? '<span class="cat-chip cat-c-' +
+          catKey(a.category) +
+          '" data-app="' +
+          escapeHtml(a.app) +
+          '" data-cat="' +
+          escapeHtml(a.category) +
+          '" title="点击切换分类">' +
+          escapeHtml(a.category) +
+          "</span>"
+        : "";
     row.innerHTML =
       appIconHTML(a) +
       '<span class="tk-key appu-name" title="' + escapeHtml(a.app) + '">' + escapeHtml(a.app) + "</span>" +
+      chip +
       '<div class="tk-bar"><div style="width:' + Math.round((a.seconds / max) * 100) + '%"></div></div>' +
       '<span class="tk-count appu-time">' + fmtDurCN(a.seconds) + "</span>";
     container.appendChild(row);
@@ -1464,6 +1557,11 @@ document.querySelectorAll(".mon-seg-item").forEach((btn) => {
   });
 });
 $("monDetailBtn").addEventListener("click", () => showView(MON_VIEWS[curMon]));
+// 摸鱼统计：点应用行的分类标签循环改分类（事件委托——列表每 2 秒重渲染不丢监听）
+$("appuList").addEventListener("click", (e) => {
+  const chip = e.target.closest(".cat-chip");
+  if (chip) cycleAppCategory(chip.dataset.app, chip.dataset.cat);
+});
 // 明细页的日期导航：翻天后立即按新日期重新拉取
 $("actPrevDay").addEventListener("click", () => shiftHist("act", -1, loadActivity));
 $("actNextDay").addEventListener("click", () => shiftHist("act", 1, loadActivity));
@@ -1555,7 +1653,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=b02e30f6 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=e0807aca = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

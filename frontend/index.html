@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=b02e30f6" />
+    <link rel="stylesheet" href="styles.css?v=e0807aca" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -432,6 +432,11 @@
         <button id="appuNextDay" class="mn-btn">后一天 ›</button>
       </div>
       <section class="card">
+        <h2>今日构成 · 工作 vs 摸鱼</h2>
+        <div id="catSummary"><span class="hint">读取中…</span></div>
+        <p class="hint">分类按应用名推断：点下方应用行的分类标签可改（如把浏览器标成摸鱼），历史数据即时重新归类</p>
+      </section>
+      <section class="card">
         <h2>逐小时使用分布</h2>
         <div id="appuChart" class="act-chart"></div>
         <div class="act-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
@@ -499,6 +504,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=b02e30f6"></script>
+    <script src="app.js?v=e0807aca"></script>
   </body>
 </html>

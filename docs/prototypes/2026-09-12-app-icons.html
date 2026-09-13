@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>原型 · 应用图标概念设计（评审用）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #101014;
+    min-height: 100vh;
+    padding: 30px 40px;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: #f2f2f4;
+  }
+  h1 { font-size: 18px; margin-bottom: 6px; }
+  .note { font-size: 12px; color: rgba(255,255,255,.4); margin-bottom: 24px; }
+  .concept {
+    display: flex; align-items: center; gap: 24px;
+    background: #1a1a1c; border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px; padding: 20px 24px; margin-bottom: 18px;
+  }
+  .meta { width: 300px; flex-shrink: 0; }
+  .meta .name { font-size: 15px; font-weight: 700; color: #ffd650; margin-bottom: 6px; }
+  .meta .desc { font-size: 12px; color: #98989e; line-height: 1.7; }
+  .sizes { display: flex; align-items: flex-end; gap: 18px; }
+  .sz { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .sz span { font-size: 10px; color: #6a6a70; }
+  .strip { display: flex; gap: 8px; align-items: center; background: #f2f2f4;
+    border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>应用图标概念设计 · 牛马计时器</h1>
+<div class="note">主旨：时间就是钱 · 牛马的辛苦 · 每一秒都在涨。每个概念展示 96 / 48 / 32 / 16 四档（任务栏 / 桌面 / 托盘尺寸），下排为浅色底对比。品牌金 #ffd650。</div>
+
+<!-- ============ 概念模板（SVG 由 JS 注入）============ -->
+<div id="list"></div>
+
+<script>
+// ---- 概念 SVG 定义（64 视窗，深色圆角方底 + 金色主形）----
+const CONCEPTS = [
+  {
+    name: "A · 金时（现行方向精修）",
+    desc: "金色表圈 + 白针 + 金心。表圈顶部一段亮金弧表示「今天的进度」。最稳妥：与启动页/托盘图标一脉相承，16px 下依然可辨。",
+    svg: `<rect width="64" height="64" rx="14" fill="#1a1a1c"/>
+      <circle cx="32" cy="32" r="20" fill="none" stroke="#e0a93a" stroke-width="4"/>
+      <path d="M32 12 A20 20 0 0 1 49.5 22" fill="none" stroke="#ffe9a8" stroke-width="4" stroke-linecap="round"/>
+      <line x1="32" y1="32" x2="32" y2="19" stroke="#f2f2f4" stroke-width="3.4" stroke-linecap="round"/>
+      <line x1="32" y1="32" x2="41.5" y2="38" stroke="#f2f2f4" stroke-width="3.4" stroke-linecap="round"/>
+      <circle cx="32" cy="32" r="3.2" fill="#ffd650"/>`
+  },
+  {
+    name: "B · ¥ 表盘（钱就是时间）",
+    desc: "把 ¥ 直接画成表盘主形：斜撑+双横+立柱全部用笔画表达，白针叠在中央，底部一段暗金弧补成圆。「时间=钱」最直白的一版。",
+    svg: `<rect width="64" height="64" rx="14" fill="#1a1a1c"/>
+      <circle cx="32" cy="32" r="21" fill="none" stroke="#3a3a40" stroke-width="4"/>
+      <g stroke="#ffd650" stroke-width="4" stroke-linecap="round" fill="none">
+        <path d="M24 15 L32 27 L40 15"/>
+        <line x1="32" y1="27" x2="32" y2="44"/>
+        <line x1="24" y1="32" x2="40" y2="32"/>
+        <line x1="24" y1="39" x2="40" y2="39"/>
+      </g>
+      <line x1="32" y1="30" x2="32" y2="22" stroke="#f2f2f4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="32" y1="30" x2="38" y2="34" stroke="#f2f2f4" stroke-width="2.6" stroke-linecap="round"/>`
+  },
+  {
+    name: "C · 牛角时钟（牛马的牛）",
+    desc: "两支金色牛角相向环抱成残缺表圈，中央白针——「牛」的性格最足，剪影独特不易撞图标。细看是角，粗看是表。",
+    svg: `<rect width="64" height="64" rx="14" fill="#1a1a1c"/>
+      <path d="M15 40 C13 24 23 15 32 13" fill="none" stroke="#ffd650" stroke-width="5" stroke-linecap="round"/>
+      <path d="M49 40 C51 24 41 15 32 13" fill="none" stroke="#e0a93a" stroke-width="5" stroke-linecap="round"/>
+      <line x1="32" y1="32" x2="32" y2="20" stroke="#f2f2f4" stroke-width="3.4" stroke-linecap="round"/>
+      <line x1="32" y1="32" x2="40.5" y2="37.5" stroke="#f2f2f4" stroke-width="3.4" stroke-linecap="round"/>
+      <circle cx="32" cy="32" r="3.2" fill="#ffd650"/>`
+  },
+  {
+    name: "D · 马蹄铁时钟（马的守护）",
+    desc: "金色马蹄铁（🐴 的马掌，缺口朝上）+ 中央表针，钉孔点缀。「马」与「守护 打工人」双重隐喻，造型圆润讨喜。",
+    svg: `<rect width="64" height="64" rx="14" fill="#1a1a1c"/>
+      <path d="M17 47 L17 31 A15 15 0 0 1 47 31 L47 47" fill="none" stroke="#ffd650" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="17" cy="40" r="1.8" fill="#1a1a1c"/>
+      <circle cx="47" cy="40" r="1.8" fill="#1a1a1c"/>
+      <circle cx="19" cy="24" r="1.8" fill="#1a1a1c"/>
+      <circle cx="45" cy="24" r="1.8" fill="#1a1a1c"/>
+      <circle cx="32" cy="18.5" r="1.8" fill="#1a1a1c"/>
+      <line x1="32" y1="34" x2="32" y2="25" stroke="#f2f2f4" stroke-width="3" stroke-linecap="round"/>
+      <line x1="32" y1="34" x2="38.5" y2="38" stroke="#f2f2f4" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="32" cy="34" r="2.8" fill="#ffd650"/>`
+  },
+  {
+    name: "E · 涨势（数据看板）",
+    desc: "三根金色柱步步高 + 顶端一枚 ¥ 硬币，右下留「今天还在涨」的暗示。突出「统计看板」属性，与主界面监控卡片呼应。",
+    svg: `<rect width="64" height="64" rx="14" fill="#1a1a1c"/>
+      <rect x="14" y="38" width="8" height="14" rx="2" fill="#e0a93a"/>
+      <rect x="28" y="28" width="8" height="24" rx="2" fill="#ffd650"/>
+      <circle cx="46" cy="16" r="9" fill="#ffd650"/>
+      <g stroke="#1a1a1c" stroke-width="2.2" stroke-linecap="round" fill="none">
+        <path d="M42.5 12 L46 16.5 L49.5 12"/>
+        <line x1="46" y1="16.5" x2="46" y2="21.5"/>
+      </g>
+      <rect x="42" y="24" width="8" height="28" rx="2" fill="#ffe9a8"/>`
+  },
+];
+
+const list = document.getElementById("list");
+CONCEPTS.forEach((c, i) => {
+  const wrap = document.createElement("div");
+  wrap.className = "concept";
+  const svg = `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">${c.svg}</svg>`;
+  wrap.innerHTML = `
+    <div class="meta">
+      <div class="name">${c.name}</div>
+      <div class="desc">${c.desc}</div>
+      <div class="strip"><span style="font-size:11px;color:#333">浅色底：</span>
+        <span class="lt">${svg}</span><span class="lt">${svg}</span>
+      </div>
+    </div>
+    <div class="sizes">
+      ${[96, 48, 32, 16].map((s) => `<div class="sz"><span style="width:${s}px;display:block">${svg.replace("<svg ", `<svg width="${s}" height="${s}" `)}</span><span>${s}px</span></div>`).join("")}
+    </div>`;
+  list.appendChild(wrap);
+  // 浅色底里的图标换浅色描边版本？直接原样展示（深底图标在浅底上的真实观感）
+  wrap.querySelectorAll(".lt svg").forEach((el) => { el.setAttribute("width", "28"); el.setAttribute("height", "28"); });
+});
+</script>
+</body>
+</html>

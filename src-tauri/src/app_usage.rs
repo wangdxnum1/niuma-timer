@@ -16,6 +16,7 @@
 //!
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计），跳过自身进程。
 
+use crate::config::Config;
 use crate::sync;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -90,6 +91,112 @@ const KNOWN_MAP: &[(&str, &str)] = &[
 
 /// 自身进程名：前台窗口是自己时不统计
 pub(crate) const SELF_EXE: &str = "niuma-timer.exe";
+
+// ---------------------------------------------------------------------------
+// 摸鱼统计：应用分类（工作 / 摸鱼 / 沟通 / 其他）
+// ---------------------------------------------------------------------------
+
+pub const CAT_WORK: &str = "工作";
+pub const CAT_SLACK: &str = "摸鱼";
+pub const CAT_COMM: &str = "沟通";
+pub const CAT_OTHER: &str = "其他";
+
+/// 内置默认分类表（按展示名精确匹配，只覆盖 KNOWN_MAP 里的常见应用）。
+/// 未命中归「其他」——如浏览器，工作摸鱼两开花，交由用户在应用明细页
+/// 点标签自行归类。用户覆盖存 config.app_categories（展示名 → 分类），
+/// 优先级高于本表；改分类立即重新归类历史数据（查询时归类，零迁移）。
+const DEFAULT_CATEGORIES: &[(&str, &str)] = &[
+    // 工作
+    ("VS Code", CAT_WORK),
+    ("Word", CAT_WORK),
+    ("Excel", CAT_WORK),
+    ("PowerPoint", CAT_WORK),
+    ("OneNote", CAT_WORK),
+    ("WPS Office", CAT_WORK),
+    ("Everything", CAT_WORK),
+    // 摸鱼（带薪听歌也算——默认表而已，用户可改）
+    ("网易云音乐", CAT_SLACK),
+    ("QQ音乐", CAT_SLACK),
+    ("酷狗音乐", CAT_SLACK),
+    ("bilibili", CAT_SLACK),
+    ("哔哩哔哩", CAT_SLACK),
+    ("爱奇艺", CAT_SLACK),
+    ("腾讯视频", CAT_SLACK),
+    ("优酷", CAT_SLACK),
+    ("抖音", CAT_SLACK),
+    ("快手", CAT_SLACK),
+    ("PotPlayer", CAT_SLACK),
+    ("VLC", CAT_SLACK),
+    ("Windows Media Player", CAT_SLACK),
+    ("Spotify", CAT_SLACK),
+    ("迅雷", CAT_SLACK),
+    ("Steam", CAT_SLACK),
+    ("英雄联盟", CAT_SLACK),
+    // 沟通
+    ("微信", CAT_COMM),
+    ("企业微信", CAT_COMM),
+    ("钉钉", CAT_COMM),
+    ("飞书", CAT_COMM),
+    ("腾讯会议", CAT_COMM),
+];
+
+/// 展示名 → 分类。优先级：用户覆盖（config.app_categories，空串视同未覆盖）
+/// > 内置默认表 > 「其他」
+pub(crate) fn category_of(display: &str, cfg: &Config) -> String {
+    if let Some(c) = cfg.app_categories.get(display) {
+        if !c.is_empty() {
+            return c.clone();
+        }
+    }
+    for (name, cat) in DEFAULT_CATEGORIES {
+        if *name == display {
+            return (*cat).to_string();
+        }
+    }
+    CAT_OTHER.to_string()
+}
+
+/// 分类 key（前端配色锚点）：工作=work 摸鱼=slack 沟通=comm 其他=other
+pub(crate) fn category_key(cat: &str) -> &'static str {
+    match cat {
+        CAT_WORK => "work",
+        CAT_SLACK => "slack",
+        CAT_COMM => "comm",
+        _ => "other",
+    }
+}
+
+/// 单类切片（应用构成条的一个分段）
+#[derive(Debug, Clone, Serialize)]
+pub struct CategorySlice {
+    /// 固定 key：work / slack / comm / other（前端配色与排序锚点）
+    pub key: String,
+    /// 中文标签（工作 / 摸鱼 / 沟通 / 其他）
+    pub label: String,
+    pub seconds: i64,
+}
+
+/// 把 (应用, 秒, 分类) 折叠成固定顺序的四类切片。
+/// 顺序是前端契约（堆叠条与列表的展示序），拆函数是为了能纯数据单测。
+fn fold_categories(apps: &[(&str, i64, &str)]) -> Vec<CategorySlice> {
+    const ORDER: [(&str, &str); 4] = [
+        ("work", CAT_WORK),
+        ("slack", CAT_SLACK),
+        ("comm", CAT_COMM),
+        ("other", CAT_OTHER),
+    ];
+    ORDER.iter()
+        .map(|(key, label)| CategorySlice {
+            key: (*key).to_string(),
+            label: (*label).to_string(),
+            seconds: apps
+                .iter()
+                .filter(|(_, _, c)| *c == *label)
+                .map(|(_, s, _)| s)
+                .sum(),
+        })
+        .collect()
+}
 
 /// 当前前台命中的应用
 #[derive(Clone)]
@@ -612,6 +719,8 @@ pub fn shutdown() {
 pub struct AppUsageItem {
     pub app: String,
     pub seconds: i64,
+    /// 摸鱼统计分类（工作/摸鱼/沟通/其他）
+    pub category: String,
     /// 应用图标（base64 PNG data URL），无图标为 None（前端显示首字占位）
     pub icon: Option<String>,
 }
@@ -622,6 +731,8 @@ pub struct AppUsageSummary {
     pub date: String,
     /// 今日各应用累计时长（按时长倒序）
     pub apps: Vec<AppUsageItem>,
+    /// 应用构成四类切片（工作/摸鱼/沟通/其他，固定顺序）
+    pub categories: Vec<CategorySlice>,
     /// 24 个小时桶：今日所有应用在该小时的合计秒数（未命中小时为 0）
     pub hourly: Vec<i64>,
     /// 前台监控是否生效
@@ -633,7 +744,7 @@ pub struct AppUsageSummary {
 /// `known_icons`：前端已缓存过图标的应用名。命中的条目 `icon` 返回 `None`，不再回传
 /// base64——前端每 2 秒轮询一次，而图标是几 KB~几十 KB 的 data URL，每次整批搬运
 /// 纯属浪费 IPC 带宽（只有新出现的应用才真正需要传一次）。
-pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
+pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = match date {
         Some(d) => d.to_string(),
@@ -675,23 +786,33 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
     })
     .unwrap_or_else(|_| (Vec::new(), vec![0i64; 24]));
 
-    let apps = rows
+    let apps: Vec<AppUsageItem> = rows
         .into_iter()
         .map(|(app, seconds)| {
             let exe = sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP")
                 .get(&app)
                 .cloned();
+            let category = category_of(&app, cfg);
             AppUsageItem {
                 icon: icon_for(&app, exe.as_deref(), known.contains(app.as_str())),
+                category,
                 app,
                 seconds,
             }
         })
         .collect();
 
+    // 摸鱼统计：按分类折叠成固定四类切片（工作/摸鱼/沟通/其他）
+    let cat_input: Vec<(&str, i64, &str)> = apps
+        .iter()
+        .map(|it| (it.app.as_str(), it.seconds, it.category.as_str()))
+        .collect();
+    let categories = fold_categories(&cat_input);
+
     AppUsageSummary {
         date,
         apps,
+        categories,
         hourly,
         watch_ok,
     }
@@ -700,6 +821,56 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AppUsageSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- 摸鱼统计：分类优先级（用户覆盖 > 内置默认 > 其他）----
+
+    #[test]
+    fn category_of_precedence() {
+        let mut cfg = Config::default();
+        // 内置默认表：网易云→摸鱼、VS Code→工作、微信→沟通
+        assert_eq!(category_of("网易云音乐", &cfg), CAT_SLACK);
+        assert_eq!(category_of("VS Code", &cfg), CAT_WORK);
+        assert_eq!(category_of("微信", &cfg), CAT_COMM);
+        // 未识别应用 → 其他（如浏览器：工作摸鱼两开花，交给用户自己定）
+        assert_eq!(category_of("Chrome", &cfg), CAT_OTHER);
+        // 用户覆盖优先级最高：把网易云标成工作（带薪听歌党）
+        cfg.app_categories
+            .insert("网易云音乐".to_string(), CAT_WORK.to_string());
+        assert_eq!(category_of("网易云音乐", &cfg), CAT_WORK);
+        // 覆盖为空串视同未覆盖（前端「恢复默认」的实现路径）
+        cfg.app_categories.insert("微信".to_string(), String::new());
+        assert_eq!(category_of("微信", &cfg), CAT_COMM);
+    }
+
+    #[test]
+    fn fold_categories_fixed_order_and_totals() {
+        let apps = vec![
+            ("VS Code", 3600i64, CAT_WORK),
+            ("网易云音乐", 600, CAT_SLACK),
+            ("微信", 300, CAT_COMM),
+            ("Chrome", 120, CAT_OTHER),
+            ("bilibili", 60, CAT_SLACK),
+        ];
+        let slices = fold_categories(&apps);
+        assert_eq!(slices.len(), 4, "固定四类切片");
+        // 固定顺序：工作 / 摸鱼 / 沟通 / 其他（前端堆叠条与配色锚点依赖此序）
+        assert_eq!(slices[0].key, "work");
+        assert_eq!(slices[0].label, CAT_WORK);
+        assert_eq!(slices[0].seconds, 3600);
+        assert_eq!(slices[1].key, "slack");
+        assert_eq!(slices[1].seconds, 660, "摸鱼 = 网易云 600 + bilibili 60");
+        assert_eq!(slices[2].key, "comm");
+        assert_eq!(slices[2].seconds, 300);
+        assert_eq!(slices[3].key, "other");
+        assert_eq!(slices[3].seconds, 120);
+    }
+
+    #[test]
+    fn fold_categories_empty_is_all_zero() {
+        let slices = fold_categories(&[]);
+        assert_eq!(slices.len(), 4);
+        assert!(slices.iter().all(|s| s.seconds == 0));
+    }
 
     /// `CUR` 是全局状态，而 cargo test 默认多线程并发跑用例，故访问它的用例先抢这把锁。
     /// 容忍中毒：单个用例断言失败不应把其余用例连坐成 panic。
