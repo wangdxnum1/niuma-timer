@@ -11,6 +11,7 @@ __pycache__/
 
 # AI 助手工作记忆（本地产物，不该入库）
 .workbuddy/
+.superpowers/
 
 # Tauri 编译生成物（tauri-build 每次构建重新生成，真相源是
 # src/main.rs 的 #[tauri::command] 与 capabilities/default.json）。
