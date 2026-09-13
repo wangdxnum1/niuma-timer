@@ -156,16 +156,6 @@ pub(crate) fn category_of(display: &str, cfg: &Config) -> String {
     CAT_OTHER.to_string()
 }
 
-/// 分类 key（前端配色锚点）：工作=work 摸鱼=slack 沟通=comm 其他=other
-pub(crate) fn category_key(cat: &str) -> &'static str {
-    match cat {
-        CAT_WORK => "work",
-        CAT_SLACK => "slack",
-        CAT_COMM => "comm",
-        _ => "other",
-    }
-}
-
 /// 单类切片（应用构成条的一个分段）
 #[derive(Debug, Clone, Serialize)]
 pub struct CategorySlice {
