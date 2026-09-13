@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=925f1fe7" />
+    <link rel="stylesheet" href="styles.css?v=247e3022" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -41,13 +41,16 @@
       setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
     </script>
 
-    <!-- 侧边导航栏（Windows 11 设置同款形态）：主页/明细/设置 三项纵排，
+    <!-- 侧边导航栏（Windows 11 设置同款形态）：主页/账单/明细/设置 四项纵排，
          图标 + 双字标签，当前项金色高亮。「明细」是聚合项，对应 4 个二级页，
          由翻页器二次切换；点击明细进入上次浏览的子页（lastDetailView 记忆）。
          图标用系统自带 Segoe Fluent / MDL2 字体，与原生应用同源 -->
     <nav class="rail" aria-label="主导航">
       <button class="rail-item active" data-nav="viewMain" title="主页">
         <span class="rail-ico" aria-hidden="true">&#xE80F;</span><span class="rail-txt">主页</span>
+      </button>
+      <button class="rail-item" data-nav="viewBill" title="账单">
+        <span class="rail-ico" aria-hidden="true">&#xE8AF;</span><span class="rail-txt">账单</span>
       </button>
       <button class="rail-item" data-nav="detail" title="明细">
         <span class="rail-ico" aria-hidden="true">&#xE823;</span><span class="rail-txt">明细</span>
@@ -201,6 +204,58 @@
       </section>
     </div>
 
+    <!-- 二级页面：周账单（小票/仪表盘双风格，同一 WeekBill 数据两套渲染；
+         懒渲染契约：进入本页才拉 get_week_bill，不接 tick 轮询——周级聚合） -->
+    <div class="app hidden" id="viewBill">
+      <div class="month-nav">
+        <button id="billPrevWeek" class="mn-btn">‹ 上一周</button>
+        <span id="billWeekLabel" class="mn-label">—</span>
+        <button id="billNextWeek" class="mn-btn">下一周 ›</button>
+      </div>
+
+      <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
+      <div id="billEmpty" class="bill-empty hidden">
+        <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+        <div class="bill-empty-txt">这一周还没有打工记录</div>
+      </div>
+
+      <!-- 风格一：小票（默认）。纸白票面 + 虚线行 + 7 日金条 + 右下红章 -->
+      <div id="billReceipt" class="receipt hidden">
+        <div class="rcp-head">
+          <div class="rcp-title">本周打工账单</div>
+          <div class="rcp-no" id="rcpNo">NO.000000</div>
+        </div>
+        <div class="rcp-amount-label">本周总入账</div>
+        <div class="rcp-amount" id="rcpAmount">¥0.00</div>
+        <div class="rcp-quote" id="rcpQuote"></div>
+        <div class="rcp-lines" id="rcpLines"></div>
+        <div class="rcp-days" id="rcpDays"></div>
+        <div class="rcp-footnote" id="rcpFootNote"></div>
+        <div class="rcp-stamp" aria-hidden="true">已验讫</div>
+      </div>
+
+      <!-- 风格二：仪表盘。KPI 环比 + 2×2 指标格 + 最累/最摸 + 每日双柱 + 键鼠脚注 -->
+      <div id="billDash" class="bill-dash hidden">
+        <section class="card">
+          <div class="kpi-row">
+            <div class="kpi-val" id="kpiAmount">¥0.00</div>
+            <div class="kpi-delta" id="kpiDelta"></div>
+          </div>
+          <div class="mini-grid">
+            <div class="mini"><span class="mini-k">基本工资</span><span class="mini-v" id="miniSalary">—</span></div>
+            <div class="mini"><span class="mini-k">加班费</span><span class="mini-v" id="miniOt">—</span></div>
+            <div class="mini"><span class="mini-k">摸鱼成本</span><span class="mini-v" id="miniSlack">—</span></div>
+            <div class="mini"><span class="mini-k">出勤工时</span><span class="mini-v" id="miniHours">—</span></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="dash-extreme" id="dashExtreme"></div>
+          <div class="dash-bars" id="dashBars"></div>
+          <div class="dash-foot" id="dashFoot"></div>
+        </section>
+      </div>
+    </div>
+
     <!-- 二级页面：设置 -->
     <div class="app hidden" id="viewSettings">
       <div class="page-head">
@@ -310,6 +365,14 @@
         </label>
         <button id="refreshBtn" class="ghost">刷新工作日数据</button>
         <div id="workdaysInfo" class="hint"></div>
+        <div class="switch-row">
+          <span>账单风格</span>
+          <div class="mon-seg" id="billStyleSeg" role="tablist" aria-label="账单风格切换">
+            <button class="mon-seg-item" data-bill="receipt">小票</button>
+            <button class="mon-seg-item" data-bill="dashboard">仪表盘</button>
+          </div>
+        </div>
+        <p class="hint">小票 = 晒单情绪；仪表盘 = 数据复盘。显示在侧栏「账单」页，切换后返回账单页生效</p>
       </section>
 
       <section class="card">
@@ -514,6 +577,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=925f1fe7"></script>
+    <script src="app.js?v=247e3022"></script>
   </body>
 </html>

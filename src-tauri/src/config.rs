@@ -102,6 +102,12 @@ pub struct Config {
     #[serde(default)]
     pub tagline_custom: String,
 
+    // ---- 周账单 ----
+    /// 账单展示风格：receipt 小票（默认）/ dashboard 仪表盘。
+    /// 纯前端消费，后端仅存取。
+    #[serde(default = "default_bill_style")]
+    pub bill_style: String,
+
     // ---- 数据保留 ----
     /// 历史数据保留天数（加班 / 活动 / 应用 / 媒体，共 7 张表）。
     /// **0 = 永久保留**（默认）：不删任何用户数据。
@@ -136,6 +142,10 @@ fn default_tagline_style() -> String {
     "dynamic".into()
 }
 
+fn default_bill_style() -> String {
+    "receipt".into()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -166,6 +176,7 @@ impl Default for Config {
             monitor_audio: true,
             tagline_style: "dynamic".into(),
             tagline_custom: String::new(),
+            bill_style: "receipt".into(),
             retention_days: 0,
         }
     }

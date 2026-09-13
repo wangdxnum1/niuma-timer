@@ -1379,3 +1379,274 @@ button:active {
 .k-icons { background: #d9c04a; }
 .k-config { background: #8a90a2; }
 .k-logs { background: #7f8a6a; }
+
+/* ==================== 本周打工账单（viewBill） ==================== */
+
+/* 整周零记录空态 */
+.bill-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 56px 0;
+  color: #6b7280;
+}
+.bill-empty-ico {
+  font-size: 42px;
+  opacity: 0.5;
+}
+.bill-empty-txt {
+  font-size: 13px;
+}
+
+/* ---- 小票风：纸白票面 + 上下锯齿边 + 虚线分区 + 右下红章 ---- */
+.receipt {
+  position: relative;
+  width: 340px;
+  margin: 22px auto;
+  padding: 22px 22px 48px;
+  background: #fdfdf8;
+  color: #2c2c28;
+  border-radius: 4px;
+}
+/* 锯齿边：两枚 45° 渐变拼出三角齿，上下各一条同色纸带 */
+.receipt::before,
+.receipt::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background-image:
+    linear-gradient(45deg, #fdfdf8 50%, transparent 50.5%),
+    linear-gradient(-45deg, #fdfdf8 50%, transparent 50.5%);
+  background-size: 12px 12px;
+  background-repeat: repeat-x;
+}
+.receipt::before {
+  top: -10px;
+  transform: scaleY(-1);
+}
+.receipt::after {
+  bottom: -10px;
+}
+.rcp-head {
+  text-align: center;
+  padding-bottom: 12px;
+  border-bottom: 2px dashed #d8d5c8;
+}
+.rcp-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 6px;
+}
+.rcp-no {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8a8878;
+  letter-spacing: 1px;
+}
+.rcp-amount-label {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #8a8878;
+  text-align: center;
+}
+.rcp-amount {
+  font-size: 38px;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.rcp-quote {
+  max-width: 260px;
+  margin: 12px auto 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  text-align: center;
+  color: #6f6d5c;
+  background: #f3f1e4;
+  border-radius: 4px;
+}
+.rcp-lines {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 2px dashed #d8d5c8;
+}
+.rcp-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 13px;
+  color: #4a4a42;
+}
+.rcp-line span:last-child {
+  font-weight: 600;
+  color: #2c2c28;
+  font-variant-numeric: tabular-nums;
+}
+.rcp-days {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 2px dashed #d8d5c8;
+}
+.rcp-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rcp-day-bar {
+  width: 14px;
+  height: 64px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.rcp-day-fill {
+  width: 12px;
+  background: #ffd650;
+  border-radius: 3px 3px 2px 2px;
+}
+.rcp-day-off {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: #b3b09b;
+}
+.rcp-day-wd {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #6f6d5c;
+}
+.rcp-day-date {
+  margin-top: 1px;
+  font-size: 10px;
+  color: #a09d8a;
+  font-variant-numeric: tabular-nums;
+}
+.rcp-footnote {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 2px dashed #d8d5c8;
+  font-size: 11px;
+  color: #8a8878;
+  text-align: center;
+}
+.rcp-stamp {
+  position: absolute;
+  right: 16px;
+  bottom: 26px;
+  padding: 4px 10px;
+  border: 2px solid #c0392b;
+  border-radius: 4px;
+  color: #c0392b;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  transform: rotate(-14deg);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* ---- 仪表盘风：复用 .card 容器，KPI 金色 + 2×2 指标格 + 每日双柱 ---- */
+.bill-dash {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+.kpi-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.kpi-val {
+  font-size: 32px;
+  font-weight: 800;
+  color: #ffd650;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-delta {
+  font-size: 12px;
+  color: #8a90a2;
+}
+.kpi-delta.up {
+  color: #57c7a5;
+}
+.kpi-delta.down {
+  color: #e0605f;
+}
+.mini-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+.mini {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+.mini-k {
+  font-size: 11px;
+  color: #98989e;
+}
+.mini-v {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e8e8ea;
+  font-variant-numeric: tabular-nums;
+}
+.dash-extreme {
+  font-size: 12px;
+  color: #98989e;
+}
+.dash-bars {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-top: 12px;
+  padding: 0 4px;
+}
+.bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.bar-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 90px;
+}
+.bar {
+  width: 9px;
+  border-radius: 2px 2px 0 0;
+}
+.bar-earn {
+  background: #ffd650;
+}
+.bar-slack {
+  background: #e0605f;
+  opacity: 0.75;
+}
+.bar-wd {
+  font-size: 10px;
+  color: #85858b;
+}
+.dash-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+}

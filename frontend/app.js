@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v925f1fe7";
+const FE_VER = "v247e3022";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -81,6 +81,7 @@ async function load() {
     $("monitor_audio").checked = cfg.monitor_audio !== false;
     syncMonitorState();
     $("retention_days").value = String(cfg.retention_days || 0);
+    setBillStyleUI(cfg.bill_style || "receipt");
     loadStorageInfo();
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
@@ -214,6 +215,7 @@ function readCfg() {
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
     app_whitelist: readWhitelist(),
     retention_days: parseInt($("retention_days").value) || 0,
+    bill_style: readBillStyle(),
   };
   // 月薪/发薪日留空：不传该字段，后端合并时保留旧值，避免误存 0/1，也不挡住其它开关保存
   if (salaryRaw !== "") cfg.monthly_salary = parseFloat(salaryRaw) || 0;
@@ -1576,6 +1578,7 @@ function showView(id) {
     b.classList.toggle("active", b.dataset.nav === id);
   });
   if (id === "viewMain") resetHistDates();
+  if (id === "viewBill") loadWeekBill(); // 懒渲染：进账单页才拉（周级聚合不进 tick）
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
   repaintCurrentView();
@@ -1601,6 +1604,7 @@ const MON_PANES = { act: "monAct", app: "monApp", audio: "monAudio" };
 const MON_VIEWS = { act: "viewAct", app: "viewApp", audio: "viewAudio" };
 document.querySelectorAll(".mon-seg-item").forEach((btn) => {
   btn.addEventListener("click", () => {
+    if (!btn.dataset.mon) return; // 设置页账单风格分段复用此类名，非监控分段不处理
     curMon = btn.dataset.mon;
     document.querySelectorAll(".mon-seg-item").forEach((b) => {
       b.classList.toggle("active", b === btn);
@@ -1623,6 +1627,240 @@ $("appuPrevDay").addEventListener("click", () => shiftHist("appu", -1, loadAppUs
 $("appuNextDay").addEventListener("click", () => shiftHist("appu", 1, loadAppUsage));
 $("audioPrevDay").addEventListener("click", () => shiftHist("audio", -1, loadAudioUsage));
 $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudioUsage));
+
+// ---- 本周打工账单（viewBill：进页拉一次，不接 tick 轮询——周级聚合）----
+
+// 周损味金句四档，按周摸鱼率降序取档；未配月薪时过滤掉提钱的 ≥40% 档（纯摸鱼率版）
+const WEEK_BILL_QUIPS = [
+  { min: 40, text: "本周工资建议原路退回" },
+  { min: 25, text: "将近三分之一的班，上给了手机" },
+  { min: 10, text: "摸得克制，装得敬业" },
+  { min: 0, text: "本周天选牛马，老板的战略合作伙伴" },
+];
+
+function weekBillQuip(ratePct, withMoney) {
+  const tiers = withMoney ? WEEK_BILL_QUIPS : WEEK_BILL_QUIPS.filter((q) => q.min < 40);
+  for (const q of tiers) {
+    if (ratePct >= q.min) return q.text;
+  }
+  return tiers[tiers.length - 1].text;
+}
+
+let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
+let billData = null; // 最近一次 WeekBill 缓存，切风格时免重拉
+let billStyle = "receipt";
+
+function fmtMoney(n) {
+  return "¥" + (Number(n) || 0).toFixed(2);
+}
+
+// 月薪未配（输入框空/0）：工资与摸鱼成本口径不成立，相关行一律隐藏
+function moneyConfigured() {
+  return parseFloat($("monthly_salary").value) > 0;
+}
+
+function readBillStyle() {
+  const active = document.querySelector("#billStyleSeg .mon-seg-item.active");
+  return active ? active.dataset.bill : "receipt";
+}
+
+function setBillStyleUI(style) {
+  billStyle = style === "dashboard" ? "dashboard" : "receipt";
+  document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
+    b.classList.toggle("active", b.dataset.bill === billStyle);
+  });
+}
+
+async function loadWeekBill() {
+  if (curView !== "viewBill") return;
+  try {
+    billData = await invoke("get_week_bill", { weekOffset });
+    paintWeekBill();
+  } catch (e) {
+    flog("get_week_bill ERR: " + (e && e.message ? e.message : String(e)));
+    $("billWeekLabel").textContent = "账单加载失败";
+  }
+}
+
+function shiftWeek(delta) {
+  const next = weekOffset + delta;
+  if (next < 0) return; // 本周封顶，不预看未来
+  weekOffset = next;
+  loadWeekBill();
+}
+
+function paintWeekBill() {
+  const bill = billData;
+  if (!bill || curView !== "viewBill") return;
+  const start = String(bill.week_start || "");
+  const end = String(bill.week_end || "");
+  $("billWeekLabel").textContent =
+    bill.week_no + " · " + start.slice(5).replace("-", ".") + "–" + end.slice(5).replace("-", ".");
+  $("billNextWeek").disabled = !!bill.is_current_week;
+  // 整周零记录 → 空态：工资虽是推算的，但没有任何监控证据就不评判，不排一排 ¥0.00
+  const anyRecord = (bill.days || []).some((d) => d.has_record);
+  $("billEmpty").classList.toggle("hidden", anyRecord);
+  $("billReceipt").classList.toggle("hidden", !anyRecord || billStyle !== "receipt");
+  $("billDash").classList.toggle("hidden", !anyRecord || billStyle !== "dashboard");
+  if (!anyRecord) return;
+  if (billStyle === "receipt") paintReceipt(bill);
+  else paintDash(bill);
+}
+
+function billLine(label, value) {
+  const div = document.createElement("div");
+  div.className = "rcp-line";
+  const l = document.createElement("span");
+  l.textContent = label;
+  const v = document.createElement("span");
+  v.textContent = value;
+  div.append(l, v);
+  return div;
+}
+
+// 休息日/未来日：金条位置放占位字
+function offDay(text) {
+  const t = document.createElement("div");
+  t.className = "rcp-day-off";
+  t.textContent = text;
+  return t;
+}
+
+function paintReceipt(bill) {
+  $("rcpNo").textContent = "NO." + String(bill.week_start || "").replace(/-/g, "");
+  $("rcpAmount").textContent = fmtMoney(bill.total_income);
+
+  // 金句门槛：front_seconds>0（无任何应用记录不评判）；摸鱼率=摸鱼秒÷四类前台总秒
+  const front = bill.front_seconds || 0;
+  const slackSecs = (bill.days || []).reduce((s, d) => s + (d.slack_seconds || 0), 0);
+  const quote = $("rcpQuote");
+  if (front > 0) {
+    quote.textContent = weekBillQuip((slackSecs / front) * 100, moneyConfigured());
+    quote.classList.remove("hidden");
+  } else {
+    quote.classList.add("hidden");
+  }
+
+  // 小票行：应赚工资 / 加班费 / 摸鱼成本 / 出勤工时
+  const lines = $("rcpLines");
+  lines.textContent = "";
+  if (moneyConfigured()) lines.append(billLine("应赚工资", fmtMoney(bill.base_salary)));
+  lines.append(billLine("加班费", fmtMoney(bill.ot_fee)));
+  if (moneyConfigured() && $("monitor_app_usage").checked)
+    lines.append(billLine("摸鱼成本", fmtMoney(bill.slack_cost)));
+  lines.append(
+    billLine(
+      "出勤工时",
+      bill.work_days == null ? "—" : "在岗约 " + (bill.work_hours || 0).toFixed(1) + "h"
+    )
+  );
+
+  // 7 日金条：满勤日画金条（按周内最大工资归一，保底 8%），休息/未来/未到特殊态
+  const box = $("rcpDays");
+  box.textContent = "";
+  const today = todayStr();
+  const maxSalary = Math.max(0.01, ...(bill.days || []).map((d) => d.salary || 0));
+  (bill.days || []).forEach((d) => {
+    const cell = document.createElement("div");
+    cell.className = "rcp-day";
+    if (!d.is_workday) {
+      cell.append(offDay("休"));
+    } else if (String(d.date) > today) {
+      cell.append(offDay("未到"));
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "rcp-day-bar";
+      const fill = document.createElement("div");
+      fill.className = "rcp-day-fill";
+      fill.style.height = Math.max(8, ((d.salary || 0) / maxSalary) * 100) + "%";
+      wrap.append(fill);
+      cell.append(wrap);
+    }
+    const wd = document.createElement("div");
+    wd.className = "rcp-day-wd";
+    wd.textContent = d.weekday || "";
+    const num = document.createElement("div");
+    num.className = "rcp-day-date";
+    num.textContent = String(d.date || "").slice(8);
+    cell.append(wd, num);
+    box.append(cell);
+  });
+
+  $("rcpFootNote").textContent = $("monitor_activity").checked
+    ? "键鼠 " + (bill.keys_total || 0) + " 次 · 点击 " + (bill.clicks_total || 0) + " 次"
+    : "键鼠监控未开启";
+}
+
+function paintDash(bill) {
+  $("kpiAmount").textContent = fmtMoney(bill.total_income);
+  const delta = $("kpiDelta");
+  if (bill.delta_pct == null) {
+    delta.textContent = ""; // 无上周基数不显示箭头，不出现 ∞
+    delta.className = "kpi-delta";
+  } else {
+    const up = bill.delta_pct >= 0;
+    delta.textContent = (up ? "▲ " : "▼ ") + Math.abs(bill.delta_pct).toFixed(1) + "% vs 上周";
+    delta.className = "kpi-delta " + (up ? "up" : "down");
+  }
+
+  $("miniSalary").textContent = moneyConfigured() ? fmtMoney(bill.base_salary) : "—";
+  $("miniOt").textContent = fmtMoney(bill.ot_fee);
+  $("miniSlack").textContent =
+    moneyConfigured() && $("monitor_app_usage").checked ? fmtMoney(bill.slack_cost) : "—";
+  $("miniHours").textContent =
+    bill.work_days == null ? "—" : (bill.work_hours || 0).toFixed(1) + "h";
+
+  const ext = [];
+  if (bill.hardest)
+    ext.push("最累 " + bill.hardest.weekday + " 加班 " + (bill.hardest.ot_hours || 0).toFixed(1) + "h");
+  if ($("monitor_app_usage").checked && bill.slackiest)
+    ext.push(
+      "最摸 " + bill.slackiest.weekday + " 摸鱼率 " + Math.round((bill.slackiest.rate || 0) * 100) + "%"
+    );
+  $("dashExtreme").textContent = ext.join(" · ");
+
+  // 每日双柱：入账(金)/摸鱼(红)各按自身最大值归一（保底 3%），休息/未来留空
+  const bars = $("dashBars");
+  bars.textContent = "";
+  const today = todayStr();
+  const maxEarn = Math.max(0.01, ...(bill.days || []).map((d) => (d.salary || 0) + (d.ot_total || 0)));
+  const maxSlack = Math.max(0.01, ...(bill.days || []).map((d) => d.slack_seconds || 0));
+  (bill.days || []).forEach((d) => {
+    const col = document.createElement("div");
+    col.className = "bar-col";
+    const pair = document.createElement("div");
+    pair.className = "bar-pair";
+    if (d.is_workday && String(d.date) <= today) {
+      const earn = document.createElement("div");
+      earn.className = "bar bar-earn";
+      earn.style.height = Math.max(3, (((d.salary || 0) + (d.ot_total || 0)) / maxEarn) * 100) + "%";
+      const slack = document.createElement("div");
+      slack.className = "bar bar-slack";
+      slack.style.height = Math.max(3, ((d.slack_seconds || 0) / maxSlack) * 100) + "%";
+      pair.append(earn, slack);
+    }
+    const wd = document.createElement("div");
+    wd.className = "bar-wd";
+    wd.textContent = d.weekday || "";
+    col.append(pair, wd);
+    bars.append(col);
+  });
+
+  $("dashFoot").textContent = $("monitor_activity").checked
+    ? "键鼠 " + (bill.keys_total || 0) + " 次 · 点击 " + (bill.clicks_total || 0) + " 次"
+    : "键鼠监控未开启";
+}
+
+// 账单页绑定：翻周 + 设置里的风格分段（切风格用缓存重画，免重拉）
+$("billPrevWeek").addEventListener("click", () => shiftWeek(1));
+$("billNextWeek").addEventListener("click", () => shiftWeek(-1));
+document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
+  b.addEventListener("click", () => {
+    setBillStyleUI(b.dataset.bill);
+    saveIfChanged();
+    paintWeekBill();
+  });
+});
 
 // 侧边导航栏 + 明细翻页器：任意视图直达（取代原「‹ 返回」的网页式导航）。
 // 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
@@ -1707,7 +1945,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=925f1fe7 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=247e3022 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

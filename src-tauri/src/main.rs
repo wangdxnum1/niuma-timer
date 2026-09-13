@@ -14,6 +14,7 @@ mod overtime;
 mod scheduler;
 mod sync;
 mod tray;
+mod weekbill;
 mod win;
 
 use std::io::Write;
@@ -417,6 +418,19 @@ fn get_audio_usage_summary(
     audio_usage::summary(&known_icons, date.as_deref())
 }
 
+/// 周账单聚合（week_offset：0=本周，正数往前翻历史周，负数封顶本周）
+///
+/// 锁内只取 config/holiday 快照，DB 查询全部在锁外（ABBA 死锁规避，见 weekbill 模块注释）。
+#[tauri::command(async)]
+fn get_week_bill(
+    state: State<'_, AppState>,
+    week_offset: i64,
+) -> Result<weekbill::WeekBill, String> {
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
+    weekbill::week_bill(&cfg, &hol, week_offset)
+}
+
 /// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
 #[tauri::command]
 fn write_debug_log(msg: String) {
@@ -628,6 +642,7 @@ fn main() {
             get_activity_summary,
             get_app_usage_summary,
             get_audio_usage_summary,
+            get_week_bill,
             write_debug_log,
             get_autostart,
             set_autostart,

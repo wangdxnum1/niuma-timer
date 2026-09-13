@@ -33,8 +33,12 @@ const DETAIL_VIEWS = ["viewOt", "viewAct", "viewApp", "viewAudio"];
 const railNavs = [...html.matchAll(/class="rail-item[^"]*"\s+data-nav="(\w+)"/g)].map((m) => m[1]);
 const dotNavs = [...html.matchAll(/class="pg-dot[^"]*"\s+data-nav="(view\w+)"/g)].map((m) => m[1]);
 
-eq("视图数量（.app）", viewIds.length, 6);
-eq("侧栏三项 = 主页/明细/设置", JSON.stringify(railNavs), JSON.stringify(["viewMain", "detail", "viewSettings"]));
+eq("视图数量（.app）", viewIds.length, 7);
+eq(
+  "侧栏四项 = 主页/账单/明细/设置",
+  JSON.stringify(railNavs),
+  JSON.stringify(["viewMain", "viewBill", "detail", "viewSettings"])
+);
 eq("主页是侧栏第一项", railNavs[0], "viewMain");
 eq("设置沉底（原生惯例）", railNavs[railNavs.length - 1], "viewSettings");
 eq("翻页器圆点按序覆盖 4 个明细视图", JSON.stringify(dotNavs), JSON.stringify(DETAIL_VIEWS));
@@ -46,7 +50,7 @@ eq(
 eq("明细视图映射到 detail 聚合项", appSrc.includes('? "detail" : id'), true);
 
 // 侧栏项可见标签（图标+文字双通道，无纯图标入口）
-for (const t of [">主页<", ">明细<", ">设置<"]) {
+for (const t of [">主页<", ">账单<", ">明细<", ">设置<"]) {
   eq("侧栏有可见标签 " + t, html.includes('rail-txt">' + t.slice(1)), true);
 }
 
