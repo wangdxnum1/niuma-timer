@@ -464,6 +464,50 @@ button:active {
   font-weight: 600;
 }
 
+/* 摸鱼烧钱行：hero 卡底部，与上方金色赚钱额对照的「一边赚一边烧」。
+   顶部分隔细线压出边界；金额用摸鱼红（同 cat-c-slack） */
+.slack-burn {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  margin-top: 1px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.slack-burn.hidden {
+  display: none;
+}
+.sb-main {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.sb-label {
+  font-size: 12px;
+  color: #98989e;
+}
+.sb-amt {
+  font-size: 19px;
+  font-weight: 700;
+  color: #ff6b6b;
+  font-variant-numeric: tabular-nums;
+}
+.sb-rate {
+  font-size: 11px;
+  color: #98989e;
+  font-variant-numeric: tabular-nums;
+}
+.sb-quip {
+  font-size: 11px;
+  color: #b97f7f;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 赚钱走势 sparkline：数字给「现在」，曲线给「趋势」 */
 .spark.hidden,
 .spark-axis.hidden {
@@ -1136,6 +1180,18 @@ button:active {
   font-weight: 600;
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+}
+/* 构成四格的折算金额：摸鱼类红色加粗，其余灰色次要 */
+.cat-money {
+  display: block;
+  font-size: 11px;
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+  color: #8a8f9c;
+}
+.cat-money-slack {
+  color: #ff6b6b;
+  font-weight: 600;
 }
 /* 分类配色（构成条分段 / 圆点共用）：工作绿 · 摸鱼红 · 沟通蓝 · 其他灰 */
 .cat-c-work {

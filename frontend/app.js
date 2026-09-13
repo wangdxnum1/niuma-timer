@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "ve0807aca";
+const FE_VER = "v925f1fe7";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -322,6 +322,7 @@ async function tick() {
     } else {
       liveProgress.classList.add("hidden");
     }
+    renderSlackBurn();
     renderTagline(s);
   } catch (e) {
     /* 忽略瞬时错误 */
@@ -1002,6 +1003,7 @@ function fmtDurCN(sec) {
 async function loadAppUsage() {
   if (!monitors.app_usage) {
     viewData.appu = null; // 同上，停用即清缓存
+    renderSlackBurn(); // 停用时 hero 烧钱行一并隐藏
     if (curView === "viewMain") {
       showCardHint("appuHomeList", "已在设置中关闭应用使用监控");
     }
@@ -1080,6 +1082,43 @@ function paintAppUsage() {
 
 // ---- 摸鱼统计：分类渲染与改分类 ----
 
+// 摸鱼率 → 损味文案四档（阈值边界：10 / 25 / 40，纯函数便于断言）
+const SLACK_QUIPS = [
+  [10, "老板的梦中情马"],
+  [25, "摸得克制，装得敬业"],
+  [40, "快三分之一的班白上了"],
+  [101, "老板看完连夜注销公司"],
+];
+function slackQuip(pct) {
+  for (const [ceil, q] of SLACK_QUIPS) {
+    if (pct < ceil) return q;
+  }
+  return SLACK_QUIPS[SLACK_QUIPS.length - 1][1];
+}
+
+// hero 卡烧钱行：摸鱼类时长 × 时薪。数据源 = 今日 app usage 的 categories +
+// 最近一次状态（时薪/工作日），零新 IPC。休息日、无薪、无任何应用记录时整块隐藏；
+// 摸鱼为 0 时显示 ¥0.00 不隐藏（正向激励）。由 tick() 与 paintAppUsage() 共同触发
+function renderSlackBurn() {
+  const box = $("slackBurn");
+  if (!box) return;
+  const st = lastStatus;
+  const appu = viewData.appu;
+  const cats = appu && appu.date && isToday(appu.date) ? appu.categories || [] : [];
+  const total = cats.reduce((a, c) => a + (c.seconds || 0), 0);
+  if (!st || !st.is_workday || !(st.hourly_rate > 0) || total <= 0) {
+    box.classList.add("hidden");
+    return;
+  }
+  const slackSec = (cats.find((c) => c.key === "slack") || {}).seconds || 0;
+  const cost = (slackSec / 3600) * st.hourly_rate;
+  const pct = (slackSec / total) * 100;
+  box.classList.remove("hidden");
+  $("sbAmt").textContent = "¥" + cost.toFixed(2);
+  $("sbRate").textContent = "摸鱼率 " + Math.round(pct) + "%";
+  $("sbQuip").textContent = slackQuip(pct);
+}
+
 // 分类循环顺序（点标签按此序切换）；key 为前端配色锚点
 const CAT_CYCLE = ["工作", "摸鱼", "沟通", "其他"];
 function catKey(label) {
@@ -1104,15 +1143,30 @@ function renderCategories(s) {
           : ""
     )
     .join("");
+  // 构成金额化：工作日有时薪时，每格时长下方补该类折算金额；摸鱼类红色加粗，
+  // 其余灰色小字（与 hero 烧钱行同口径：秒 ÷ 3600 × 时薪）
+  const rate = lastStatus && lastStatus.is_workday ? lastStatus.hourly_rate : 0;
   const cells = cats
-    .map(
-      (c) =>
+    .map((c) => {
+      const key = catKey(c.label);
+      const money =
+        rate > 0
+          ? '<span class="cat-money cat-money-' +
+            key +
+            '">¥' +
+            ((c.seconds / 3600) * rate).toFixed(2) +
+            "</span>"
+          : "";
+      return (
         '<div class="cat-cell"><span class="k">' +
         c.label +
         '</span><span class="v">' +
         fmtDurCN(c.seconds) +
-        "</span></div>"
-    )
+        "</span>" +
+        money +
+        "</div>"
+      );
+    })
     .join("");
   wrap.innerHTML =
     '<div class="cat-bar">' + bar + '</div><div class="cat-list">' + cells + "</div>";
@@ -1653,7 +1707,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=e0807aca = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=925f1fe7 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

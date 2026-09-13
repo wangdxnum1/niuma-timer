@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=e0807aca" />
+    <link rel="stylesheet" href="styles.css?v=925f1fe7" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -108,6 +108,16 @@
           </svg>
         </div>
         <div class="lp-cap spark-axis hidden" id="sparkAxis"><span>0 时</span><span>6 时</span><span>12 时</span><span>18 时</span><span>24 时</span></div>
+        <!-- 摸鱼烧钱行：摸鱼类时长 × 时薪，与上方赚钱大数字「一边赚一边烧」对照。
+             数据复用 app usage 的 categories + 状态时薪，零新 IPC；休息日/无薪/无记录时整块隐藏 -->
+        <div class="slack-burn hidden" id="slackBurn">
+          <div class="sb-main">
+            <span class="sb-label">🐟 摸掉</span>
+            <b class="sb-amt" id="sbAmt">¥0.00</b>
+            <span class="sb-rate" id="sbRate">摸鱼率 0%</span>
+          </div>
+          <span class="sb-quip" id="sbQuip"></span>
+        </div>
       </section>
 
       <!-- 今日时间轴：上班/午休/下班按配置分段 + 白色「现在」指针（裸条不装盒，轻） -->
@@ -504,6 +514,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=e0807aca"></script>
+    <script src="app.js?v=925f1fe7"></script>
   </body>
 </html>
