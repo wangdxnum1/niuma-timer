@@ -1,20 +1,23 @@
 @echo off
-rem 本文件为 UTF-8 编码：不切代码页的话，默认 GBK 控制台会把中文显示成乱码（release.bat 同款）
+rem This file is UTF-8 encoded; chcp 65001 below switches the console to UTF-8 so CJK echoes render (same as release.bat)
 chcp 65001 >nul
 setlocal
+rem By default use cargo from PATH. If the current window PATH lacks cargo (stale window / PATH not refreshed),
+rem run first:  set "CARGO_BIN=C:\Users\Tim\.cargo\bin\cargo.exe"   then run this script
+if not defined CARGO_BIN set "CARGO_BIN=cargo"
 set "ROOT=%~dp0"
 set "SRC=%ROOT%src-tauri"
 set "BIN=%ROOT%bin"
 
 if not exist "%BIN%" mkdir "%BIN%"
 
-rem 镜像偶发抽风的兜底参数（与 release.bat 一致）。另注：cargo 会继承 ~/.gitconfig
-rem 的全局 http.proxy——全局代理会把 cargo 的 TLS 握手掐断（Clash 的 SOCKS5 下必现），
-rem 该代理已改为仅对 github.com 生效，cargo 直连 rsproxy 毫无压力，勿改回全局。
+rem Mirror-flaky fallback params (same as release.bat). Note: cargo inherits ~/.gitconfig
+rem global http.proxy: a global proxy breaks cargo TLS handshake (always under Clash SOCKS5),
+rem that proxy now applies only to github.com; cargo reaches rsproxy directly, do NOT switch back to global.
 set "CARGO_NET_RETRY=10"
 set "CARGO_HTTP_TIMEOUT=180"
 
-rem 探测 rustc host triple，cargo 会按 target\<triple>\<flavor> 输出 exe
+rem Detect rustc host triple; cargo outputs exe to target\<triple>\<flavor>
 set "TRIPLE="
 for /f "tokens=2" %%i in ('rustc -vV 2^>nul ^| findstr /C:"host:"') do set "TRIPLE=%%i"
 if "%TRIPLE%"=="" set "TRIPLE=x86_64-pc-windows-msvc"
@@ -52,7 +55,7 @@ echo =========================================
 echo   Building %F% ...
 echo =========================================
 pushd "%SRC%"
-if "%F%"=="release" (cargo build --release) else (cargo build)
+if "%F%"=="release" (%CARGO_BIN% build --release) else (%CARGO_BIN% build)
 set "RC=%errorlevel%"
 popd
 if %RC% neq 0 (
@@ -76,7 +79,7 @@ echo =========================================
 echo   Packaging (NSIS + MSI) ...
 echo =========================================
 pushd "%SRC%"
-cargo tauri build
+%CARGO_BIN% tauri build
 set "RC=%errorlevel%"
 popd
 if %RC% neq 0 (
