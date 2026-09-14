@@ -7,6 +7,12 @@
 //    .transparent(true) 透明 WebView，裁剪渐变文字在透明表面下会渲染成不可见
 //    （主窗口不透明所以正常）。这是「大字金额消失」的根因。
 // 3) 休息日 .card.rest .amount 同步去掉裁剪，改置灰 color。
+// 4) 大字金额所在的 .hero 必须 flex:0 0 auto（不参与收缩）。.card 是 flex 列容器，
+//    .hero 是它唯一带 overflow:hidden 的子项——按 flex 规范其自动最小尺寸为 0，
+//    内容一超高，全部溢出量就被它独自吸收压扁，34px 金额只剩 1px 被裁没
+//    （2026-09-14 二次返工查出的真根因，比第 2 条更底层）。
+// 5) 窗口高度两侧必须一致：hover_card.html 的 body{height} == tray.rs HOVER_CARD_H - 16，
+//    且总高度够装下全部内容。任何一侧单独改动都会让金额再次消失。
 // 运行：node scripts/test_hover_card.js
 const fs = require("fs");
 const path = require("path");
@@ -91,6 +97,37 @@ const buildSrc = fs.readFileSync(
   "utf8"
 );
 has("build.rs 把 src/tray.rs 纳入缓存戳同步目标", buildSrc, '"src/tray.rs"');
+
+// --------------------------------- 6. 金额块不可收缩 + 窗口/CSS 尺寸契约（防再次返工）
+// 这是「大字金额消失」最底层的根因：flex 列容器里唯一 overflow:hidden 的子项
+// （.hero）自动最小尺寸退化为 0，内容超高时被它独自吸收，金额被裁得只剩 1px。
+const hero = ruleBlockRe(html, /\n[ \t]*\.hero\s*\{/);
+eq("存在 .hero 规则", hero !== null, true);
+has("hero 不参与 flex 收缩（否则金额会被压扁裁掉）", hero, "flex: 0 0 auto");
+has(
+  "卡片是 flex 列容器（收缩机制的前提，勿改）",
+  ruleBlockRe(html, /\n[ \t]*\.card\s*\{/),
+  "flex-direction: column"
+);
+
+// 两侧尺寸契约：窗口高（tray.rs）必须等于 CSS 的 body 高。body 自带上下各 8px
+// padding（box-sizing:border-box），故卡片实际高 = 窗口高 - 16 = 336。
+// body 的 height 紧邻 padding: 8px 出现，借此唯一定位（html,body 那条规则无 height）。
+const mBodyH = html.match(/height:\s*(\d+)px;\s*\n\s*padding:\s*8px;/);
+const mRustH = traySrc.match(/const HOVER_CARD_H: f64 = ([\d.]+);/);
+eq("能解析到 CSS body 高度", mBodyH !== null, true);
+eq("能解析到 tray.rs HOVER_CARD_H", mRustH !== null, true);
+if (mBodyH && mRustH) {
+  eq(
+    "body 高度 = HOVER_CARD_H（窗口与 CSS 不脱节）",
+    Number(mBodyH[1]),
+    Number(mRustH[1])
+  );
+  // 内容实测需要 ~305px（2026-09-14 按真实渲染逐块量过：head 17 + hero 34 + quips 14
+  // + lp 20 + c1 14 + tl 23 + grid 90 + otrow 29 + foot 15 + 8 个 6px 间隙 48），
+  // 再加卡片 padding 22 与 body padding 16，窗口低于 344 就装不下、金额必被挤扁。
+  eq("窗口高度留有装下全部内容的余量（>= 344）", Number(mRustH[1]) >= 344, true);
+}
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

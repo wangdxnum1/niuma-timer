@@ -18,7 +18,10 @@
           "Microsoft YaHei", system-ui, sans-serif;
         color: #f2f2f4;
         width: 320px;
-        height: 316px;
+        /* 必须与 src-tauri/src/tray.rs 的 HOVER_CARD_H 保持一致：
+           body height == HOVER_CARD_H（body 自带上下各 8px padding，box-sizing:border-box，
+           故卡片实际高 = 352 - 16 = 336）。两侧任改其一而不同步，大字金额就会被裁没。 */
+        height: 352px;
         padding: 8px;
         -webkit-font-smoothing: antialiased;
         user-select: none;
@@ -93,10 +96,16 @@
       .hero {
         text-align: center;
         margin: 0 0 2px;
+        /* 关键修复：.card 是 flex 列容器，而 .hero 是它唯一带 overflow:hidden 的子项。
+           按 CSS Flexbox 规范，flex item 只要 overflow 非 visible，其自动最小尺寸就
+           退化为 0——于是卡片内容一旦超高，全部溢出量都由 .hero 独自吸收压扁，
+           34px 大字金额被裁得只剩 1px（其它块 min-height:auto 等于内容高度，压不动）。
+           flex: 0 0 auto 让它彻底退出收缩，任何情况下金额都不再被挤没。 */
+        flex: 0 0 auto;
       }
-      /* 悬停卡窗口是 .transparent(true) 的透明 WebView，background-clip:text 在透明
-         表面下会渲染成不可见（主窗口不透明所以正常）。故金额用纯金实心色 + 轻微
-         阴影模拟立体感，保证一定可见——这是修复「大字金额消失」的关键。 */
+      /* 金额用纯金实心色 + 轻阴影，而非 background-clip:text 渐变裁剪文字：悬停卡是
+         .transparent(true) 透明 WebView，裁剪渐变文字在这种表面上的可靠性差，实心色
+         一定可见（「大字金额消失」的真根因是 .hero 被 flex 压扁，见上方 .hero 注释）。 */
       .amount {
         font-size: 34px;
         font-weight: 700;

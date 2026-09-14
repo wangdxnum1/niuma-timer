@@ -22,9 +22,16 @@ use tauri::{App, AppHandle, PhysicalPosition, WebviewUrl, WebviewWindow, Webview
 use crate::calc::DayStatus;
 use crate::icon_render::static_icon;
 
-/// 彩色悬停卡片尺寸（逻辑像素）。高度 316 = 卡片 300（时间轴/战果行/补账与预告行）+ 边距
+/// 彩色悬停卡片尺寸（逻辑像素）。高度 352 = 卡片 336 + 上下各 8px 透明边距。
+///
+/// **必须与 `frontend/hover_card.html` 的 `body { height }` 保持一致**：
+/// `body height == HOVER_CARD_H`（body 自带上下各 8px padding，卡片实际高 = 336）。
+/// 卡片内部是 flex 列布局，窗口一矮，
+/// 唯一可收缩的 `.hero`（唯一带 overflow:hidden 的子项，自动最小尺寸为 0）
+/// 就会被压扁、34px 大字金额被裁没。2026-09-14 实际踩过这个坑，
+/// `scripts/test_hover_card.js` 已加两侧尺寸一致性断言防回归。
 const HOVER_CARD_W: f64 = 320.0;
-const HOVER_CARD_H: f64 = 316.0;
+const HOVER_CARD_H: f64 = 352.0;
 
 /// 延迟显示时长（毫秒）：进入托盘后等待该时长，若仍停留才显示，
 /// 模仿系统原生 tooltip 的延迟出现，避免划过托盘就弹窗。
@@ -679,7 +686,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html?v=d777d54d".into()),
+        WebviewUrl::App("hover_card.html?v=38eefac4".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)
