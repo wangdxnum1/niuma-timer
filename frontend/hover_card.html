@@ -71,8 +71,8 @@
       }
       /* 休息日：金额置灰（不装作在赚钱） */
       .card.rest .amount {
-        background: none;
-        -webkit-text-fill-color: #6a6a70;
+        color: #6a6a70;
+        text-shadow: none;
       }
       .head {
         display: flex;
@@ -94,16 +94,17 @@
         text-align: center;
         margin: 0 0 2px;
       }
+      /* 悬停卡窗口是 .transparent(true) 的透明 WebView，background-clip:text 在透明
+         表面下会渲染成不可见（主窗口不透明所以正常）。故金额用纯金实心色 + 轻微
+         阴影模拟立体感，保证一定可见——这是修复「大字金额消失」的关键。 */
       .amount {
         font-size: 34px;
         font-weight: 700;
         line-height: 1;
         letter-spacing: -0.5px;
         font-variant-numeric: tabular-nums;
-        background: linear-gradient(180deg, #ffe9a8 0%, #ffd650 55%, #e0a93a 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #ffd650;
+        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
       }
       /* 全天赚钱进度条：已赚 / 全天应赚（时薪 × 日工时），每秒平滑生长 */
       .lp.hidden {
@@ -213,8 +214,13 @@
       .tl.hidden {
         display: none;
       }
+      /* 关键修复：用 flex 让 5 段（上午已/上午待/午休/下午已/下午待）横向排成
+         同一条 8px 时间轴，而非默认块级竖排成「多条进度条」。.tnow 是绝对定位，
+         不进 flex 流，仍相对 .taxis 定位。 */
       .taxis {
         position: relative;
+        display: flex;
+        align-items: stretch;
         height: 8px;
         border-radius: 4px;
         background: rgba(255, 255, 255, 0.1);
@@ -224,6 +230,7 @@
       .tseg {
         height: 100%;
         min-width: 0;
+        flex-shrink: 0;
       }
       .tseg:first-child {
         border-radius: 4px 0 0 4px;

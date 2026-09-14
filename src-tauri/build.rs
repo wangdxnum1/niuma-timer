@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 const FRONTEND: &str = "../frontend";
 const FE_VER_PREFIX: &str = "const FE_VER = \"";
 /// 需要同步缓存戳的文件（路径相对 build.rs 的工作目录，即 src-tauri/）
-const TARGETS: &[&str] = &["../frontend/index.html", "../frontend/app.js", "tauri.conf.json"];
+const TARGETS: &[&str] = &["../frontend/index.html", "../frontend/app.js", "tauri.conf.json", "src/tray.rs"];
 /// 主程序权限清单（自动补齐 `allow-*` 项）
 const CAPABILITIES: &str = "capabilities/default.json";
 
