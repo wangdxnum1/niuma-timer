@@ -4,6 +4,13 @@
   padding: 0;
 }
 
+/* 通用隐藏工具类：JS 以 classList 切换 hidden 的元素全靠它生效。
+   缺失时，自身带 display 的容器（如 .bill-dash / .bill-empty 的 flex）
+   会盖过同名形态规则，导致隐藏失效、空骨架显形。 */
+.hidden {
+  display: none !important;
+}
+
 /* ====== 基底：macOS 深色语言（分层灰阶 + 发丝线 + 品牌金唯一强调色）====== */
 body {
   font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>账单页原型 · 正常应显示的数据</title>
+<style>
+  :root{
+    --bg:#f3f4f6; --panel:#ffffff; --ink:#2c2c28; --muted:#6b7280;
+    --line:#e5e7eb; --gold:#f5b301; --red:#e0605f; --green:#57c7a5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.5;padding:24px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .wrap{max-width:980px;margin:0 auto}
+  .controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px;margin-bottom:18px}
+  .controls .grp{display:flex;align-items:center;gap:8px}
+  .controls label{font-size:13px;color:var(--muted)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;background:#fff;padding:7px 14px;font-size:13px;cursor:pointer;color:var(--muted)}
+  .seg button.on{background:var(--ink);color:#fff;font-weight:600}
+  select{font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .stage{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;min-height:480px}
+
+  /* ===== 小票风（复刻 app 浅色纸面） ===== */
+  .receipt{position:relative;width:340px;margin:8px auto;padding:22px 22px 48px;
+    background:#fdfdf8;color:#2c2c28;border-radius:4px}
+  .receipt::before,.receipt::after{content:"";position:absolute;left:0;right:0;height:10px;
+    background-image:linear-gradient(45deg,#fdfdf8 50%,transparent 50.5%),
+      linear-gradient(-45deg,#fdfdf8 50%,transparent 50.5%);
+    background-size:12px 12px;background-repeat:repeat-x}
+  .receipt::before{top:-10px;transform:scaleY(-1)}
+  .receipt::after{bottom:-10px}
+  .rcp-head{text-align:center;padding-bottom:12px;border-bottom:2px dashed #d8d5c8}
+  .rcp-title{font-size:18px;font-weight:700;letter-spacing:6px}
+  .rcp-no{margin-top:4px;font-size:11px;color:#8a8878;letter-spacing:1px}
+  .rcp-amount-label{margin-top:14px;font-size:12px;color:#8a8878;text-align:center}
+  .rcp-amount{font-size:38px;font-weight:800;text-align:center;letter-spacing:1px;
+    font-variant-numeric:tabular-nums}
+  .rcp-quote{max-width:260px;margin:12px auto 0;padding:8px 10px;font-size:12px;
+    text-align:center;color:#6f6d5c;background:#f3f1e4;border-radius:4px}
+  .rcp-lines{margin-top:14px;padding-top:10px;border-top:2px dashed #d8d5c8}
+  .rcp-line{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;color:#4a4a42}
+  .rcp-line span:last-child{font-weight:600;color:#2c2c28;font-variant-numeric:tabular-nums}
+  .rcp-days{display:flex;justify-content:space-between;margin-top:14px;padding-top:12px;
+    border-top:2px dashed #d8d5c8}
+  .rcp-day{display:flex;flex-direction:column;align-items:center}
+  .rcp-day-bar{width:14px;height:64px;display:flex;align-items:flex-end;justify-content:center}
+  .rcp-day-fill{width:12px;background:#ffd650;border-radius:3px 3px 2px 2px}
+  .rcp-day-off{height:64px;display:flex;align-items:center;font-size:11px;color:#b3b09b}
+  .rcp-day-wd{margin-top:6px;font-size:11px;color:#6f6d5c}
+  .rcp-day-date{margin-top:1px;font-size:10px;color:#a09d8a;font-variant-numeric:tabular-nums}
+  .rcp-footnote{margin-top:14px;padding-top:10px;border-top:2px dashed #d8d5c8;
+    font-size:11px;color:#8a8878;text-align:center}
+  .rcp-stamp{position:absolute;right:16px;bottom:26px;padding:4px 10px;border:2px solid #c0392b;
+    border-radius:4px;color:#c0392b;font-size:14px;font-weight:700;letter-spacing:4px;
+    transform:rotate(-14deg);opacity:.75}
+
+  /* ===== 仪表盘风（复刻 app 深色卡片） ===== */
+  .dash{background:#1f2330;color:#e8e8ea;border-radius:12px;padding:16px}
+  .card{background:#262b3a;border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:14px}
+  .kpi-row{display:flex;align-items:baseline;gap:10px}
+  .kpi-val{font-size:32px;font-weight:800;color:#ffd650;font-variant-numeric:tabular-nums}
+  .kpi-delta{font-size:12px;color:#8a90a2}
+  .kpi-delta.up{color:#57c7a5}.kpi-delta.down{color:#e0605f}
+  .mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+  .mini{display:flex;flex-direction:column;gap:4px;padding:10px 12px;
+    background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px}
+  .mini-k{font-size:11px;color:#98989e}.mini-v{font-size:16px;font-weight:700;color:#e8e8ea;
+    font-variant-numeric:tabular-nums}
+  .dash-extreme{font-size:12px;color:#98989e}
+  .dash-bars{display:flex;justify-content:space-between;align-items:flex-end;margin-top:12px;padding:0 4px}
+  .bar-col{display:flex;flex-direction:column;align-items:center;gap:5px}
+  .bar-pair{display:flex;align-items:flex-end;gap:3px;height:90px}
+  .bar{width:9px;border-radius:2px 2px 0 0}
+  .bar-earn{background:#ffd650}.bar-slack{background:#e0605f;opacity:.75}
+  .bar-wd{font-size:10px;color:#85858b}
+  .dash-foot{margin-top:10px;font-size:11px;color:#6b7280;text-align:center}
+
+  .bill-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;padding:56px 0;color:#6b7280}
+  .bill-empty .ico{font-size:42px;opacity:.5}
+  .bill-empty .txt{font-size:13px}
+
+  /* ===== 说明 ===== */
+  .explain{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .explain h2{font-size:16px;margin:0 0 12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#fafafa;color:var(--muted);font-weight:600}
+  td.k{font-weight:600;white-space:nowrap}
+  tr:nth-child(even) td{background:#fcfcfd}
+  .note{border-left:3px solid var(--gold);padding:10px 12px;border-radius:6px;
+    font-size:13px;margin-top:14px;color:#6b5b00;background:#fff8e6}
+  .warn{border-left-color:var(--red);color:#8a2b2b;background:#fdecec}
+  code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>账单页原型 · 正常应该显示什么数据</h1>
+  <div class="sub">复刻「牛马计时器」侧栏「账单」页。数据取自后端 <code>week_bill</code>（WeekBill 结构）。
+    下面左侧是真实渲染，右侧是字段说明。可切换风格 / 切换情景。</div>
+
+  <div class="controls">
+    <div class="grp">
+      <label>风格</label>
+      <div class="seg" id="segStyle">
+        <button data-bill="receipt" class="on">小票</button>
+        <button data-bill="dashboard">仪表盘</button>
+      </div>
+    </div>
+    <div class="grp">
+      <label>情景</label>
+      <select id="scenario">
+        <option value="normal">正常有数据的一周（第 37 周 09-07~09-13）</option>
+        <option value="empty">整周零记录 → 空态（即你看到的「这一周还没有打工记录」）</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="stage" id="stage"><!-- 渲染区 --></div>
+
+    <div class="explain" style="margin-top:0">
+      <h2>这张账单正常包含哪些数据</h2>
+      <table id="fieldTable">
+        <thead><tr><th>字段 / 位置</th><th>含义</th><th>计算口径（正常预期）</th></tr></thead>
+        <tbody><!-- JS 填充 --></tbody>
+      </table>
+      <div class="note">
+        <b>整周零记录为什么会显示「这一周还没有打工记录」？</b><br>
+        前端判定：7 天里<strong>每天都没有监控证据</strong>（无键鼠活动、无应用前台秒、也无加班记录）→ 整张账单隐藏，只显示这句空态文案。
+        哪怕按"满勤"推算本周本应有工资，只要没有任何一条监控/加班落库，就不会出小票。
+      </div>
+      <div class="note warn">
+        <b>值得你确认的 3 个点（可能是你"感觉数据不对"的来源）：</b>
+        <ol style="margin:8px 0 0;padding-left:18px">
+          <li><b>当前是周一（09-14）</b>：本周刚开始，今天若还没产生监控记录，整周就是零记录 → 空态。这是"看起来什么都没有"的最常见原因。</li>
+          <li><b>加班记录没被算进"有无记录"</b>：空态只看键鼠+应用，你手动记了加班但没开应用监控，账单仍会显示空态（潜在 bug）。</li>
+          <li><b>满勤工资被刻意藏起</b>：设计上"无记录就不评判"，所以历史某周即便应发工资已算出，也会因零记录而空态——你可能期待看到工资数字。</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== 样例数据（Week 37：09-07 周一 ~ 09-13 周日，月薪 22000 / 9月22工作日 / 日8h → 日薪¥1000、时薪¥125）=====
+const NORMAL = {
+  week_start:"2026-09-07", week_end:"2026-09-13", week_no:"第 37 周",
+  is_current_week:false,
+  total_income:5505.00, base_salary:5000.00, ot_fee:505.00, slack_cost:625.00,
+  prev_total:5200.00, delta_pct:5.9,
+  work_days:5, work_hours:45.0,
+  keys_total:42400, clicks_total:15700,
+  slack_rate:0.125, front_seconds:144000,
+  hardest:{date:"2026-09-10",weekday:"周四",ot_hours:3.0},
+  slackiest:{date:"2026-09-09",weekday:"周三",rate:0.25},
+  days:[
+    {date:"2026-09-07",weekday:"周一",is_workday:true, salary:1000, ot_total:0,  slack_seconds:1800,act_events:4200,keys:8000,clicks:3000,slack_rate:.0625,has_record:true},
+    {date:"2026-09-08",weekday:"周二",is_workday:true, salary:1000, ot_total:205,slack_seconds:3600,act_events:5100,keys:9500,clicks:3500,slack_rate:.125,has_record:true},
+    {date:"2026-09-09",weekday:"周三",is_workday:true, salary:1000, ot_total:0,  slack_seconds:7200,act_events:4800,keys:7000,clicks:2800,slack_rate:.25,has_record:true},
+    {date:"2026-09-10",weekday:"周四",is_workday:true, salary:1000, ot_total:300,slack_seconds:0,   act_events:5200,keys:8700,clicks:3300,slack_rate:0,has_record:true},
+    {date:"2026-09-11",weekday:"周五",is_workday:true, salary:1000, ot_total:0,  slack_seconds:5400,act_events:5400,keys:9200,clicks:3100,slack_rate:.1875,has_record:true},
+    {date:"2026-09-12",weekday:"周六",is_workday:false,salary:0,    ot_total:0,  slack_seconds:0,   act_events:0,   keys:0,   clicks:0,  slack_rate:0,has_record:false},
+    {date:"2026-09-13",weekday:"周日",is_workday:false,salary:0,    ot_total:0,  slack_seconds:0,   act_events:0,   keys:0,   clicks:0,  slack_rate:0,has_record:false},
+  ]
+};
+// 空态样例：7 天全 has_record=false
+const EMPTY = JSON.parse(JSON.stringify(NORMAL));
+EMPTY.days.forEach(d=>d.has_record=false);
+EMPTY.week_no="第 38 周";EMPTY.week_start="2026-09-14";EMPTY.week_end="2026-09-20";
+EMPTY.total_income=0;EMPTY.base_salary=0;EMPTY.ot_fee=0;EMPTY.slack_cost=0;
+EMPTY.work_days=0;EMPTY.work_hours=0;EMPTY.keys_total=0;EMPTY.clicks_total=0;
+EMPTY.slack_rate=0;EMPTY.front_seconds=0;EMPTY.hardest=null;EMPTY.slackiest=null;
+EMPTY.delta_pct=null;EMPTY.prev_total=0;EMPTY.is_current_week=true;
+
+const QUIPS=[
+  {min:40,text:"本周工资建议原路退回"},
+  {min:25,text:"将近三分之一的班，上给了手机"},
+  {min:10,text:"摸得克制，装得敬业"},
+  {min:0,text:"本周天选牛马，老板的战略合作伙伴"},
+];
+const moneyConfigured=true, monApp=true, monAct=true;
+const fmt=n=>"¥"+(Number(n)||0).toFixed(2);
+const todayStr=()=>"2026-09-14";
+
+function quip(rate){const t=QUIPS;for(const q of t)if(rate>=q.min)return q.text;return t[t.length-1].text;}
+
+function renderReceipt(b){
+  const front=b.front_seconds||0;
+  const slackSecs=b.days.reduce((s,d)=>s+(d.slack_seconds||0),0);
+  const q=(front>0)?quip((slackSecs/front)*100):"";
+  const maxS=Math.max(0.01,...b.days.map(d=>d.salary||0));
+  const lines=[];
+  if(moneyConfigured)lines.push(["应赚工资",fmt(b.base_salary)]);
+  lines.push(["加班费",fmt(b.ot_fee)]);
+  if(moneyConfigured&&monApp)lines.push(["摸鱼成本",fmt(b.slack_cost)]);
+  lines.push(["出勤工时",b.work_days==null?"—":"在岗约 "+(b.work_hours||0).toFixed(1)+"h"]);
+  const days=b.days.map(d=>{
+    let bar;
+    if(!d.is_workday)bar='<div class="rcp-day-off">休</div>';
+    else if(String(d.date)>todayStr())bar='<div class="rcp-day-off">未到</div>';
+    else{const h=Math.max(8,((d.salary||0)/maxS)*100);
+      bar='<div class="rcp-day-bar"><div class="rcp-day-fill" style="height:'+h+'%"></div></div>';}
+    return '<div class="rcp-day">'+bar+'<div class="rcp-day-wd">'+d.weekday+
+      '</div><div class="rcp-day-date">'+String(d.date).slice(8)+'</div></div>';
+  }).join("");
+  return '<div class="receipt">'+
+    '<div class="rcp-head"><div class="rcp-title">本周打工账单</div>'+
+    '<div class="rcp-no">NO.'+String(b.week_start).replace(/-/g,"")+'</div></div>'+
+    '<div class="rcp-amount-label">本周总入账</div>'+
+    '<div class="rcp-amount">'+fmt(b.total_income)+'</div>'+
+    (q?'<div class="rcp-quote">'+q+'</div>':"")+
+    '<div class="rcp-lines">'+lines.map(l=>'<div class="rcp-line"><span>'+l[0]+
+      '</span><span>'+l[1]+'</span></div>').join("")+'</div>'+
+    '<div class="rcp-days">'+days+'</div>'+
+    '<div class="rcp-footnote">'+(monAct?("键鼠 "+b.keys_total+" 次 · 点击 "+b.clicks_total+" 次"):"键鼠监控未开启")+'</div>'+
+    '<div class="rcp-stamp">已验讫</div></div>';
+}
+function renderDash(b){
+  const d=b.delta_pct;
+  const delta=(d==null)?"":((d>=0)?"▲ ":"▼ ")+Math.abs(d).toFixed(1)+"% vs 上周";
+  const dcls=(d==null)?"kpi-delta":("kpi-delta "+(d>=0?"up":"down"));
+  const ext=[];
+  if(b.hardest)ext.push("最累 "+b.hardest.weekday+" 加班 "+(b.hardest.ot_hours||0).toFixed(1)+"h");
+  if(monApp&&b.slackiest)ext.push("最摸 "+b.slackiest.weekday+" 摸鱼率 "+Math.round((b.slackiest.rate||0)*100)+"%");
+  const maxE=Math.max(0.01,...b.days.map(d=>(d.salary||0)+(d.ot_total||0)));
+  const maxS=Math.max(0.01,...b.days.map(d=>d.slack_seconds||0));
+  const bars=b.days.map(d=>{
+    let pair="";
+    if(d.is_workday&&String(d.date)<=todayStr()){
+      const eh=Math.max(3,(((d.salary||0)+(d.ot_total||0))/maxE)*100);
+      const sh=Math.max(3,((d.slack_seconds||0)/maxS)*100);
+      pair='<div class="bar-pair"><div class="bar bar-earn" style="height:'+eh+'%"></div>'+
+        '<div class="bar bar-slack" style="height:'+sh+'%"></div></div>';
+    }
+    return '<div class="bar-col">'+pair+'<div class="bar-wd">'+d.weekday+'</div></div>';
+  }).join("");
+  return '<div class="dash"><div class="card">'+
+    '<div class="kpi-row"><div class="kpi-val">'+fmt(b.total_income)+'</div>'+
+    '<div class="'+dcls+'">'+delta+'</div></div>'+
+    '<div class="mini-grid">'+
+    '<div class="mini"><span class="mini-k">基本工资</span><span class="mini-v">'+(moneyConfigured?fmt(b.base_salary):"—")+'</span></div>'+
+    '<div class="mini"><span class="mini-k">加班费</span><span class="mini-v">'+fmt(b.ot_fee)+'</span></div>'+
+    '<div class="mini"><span class="mini-k">摸鱼成本</span><span class="mini-v">'+(moneyConfigured&&monApp?fmt(b.slack_cost):"—")+'</span></div>'+
+    '<div class="mini"><span class="mini-k">出勤工时</span><span class="mini-v">'+(b.work_days==null?"—":(b.work_hours||0).toFixed(1)+"h")+'</span></div>'+
+    '</div></div>'+
+    '<div class="card"><div class="dash-extreme">'+ext.join(" · ")+'</div>'+
+    '<div class="dash-bars">'+bars+'</div>'+
+    '<div class="dash-foot">'+(monAct?("键鼠 "+b.keys_total+" 次 · 点击 "+b.clicks_total+" 次"):"键鼠监控未开启")+'</div></div>'+
+    '</div></div>';
+}
+function renderEmpty(){
+  return '<div class="bill-empty"><div class="ico">🧾</div>'+
+    '<div class="txt">这一周还没有打工记录</div></div>';
+}
+
+let style="receipt";
+function paint(){
+  const sc=document.getElementById("scenario").value;
+  const b=(sc==="empty")?EMPTY:NORMAL;
+  const stage=document.getElementById("stage");
+  const anyRecord=b.days.some(d=>d.has_record);
+  if(!anyRecord){stage.innerHTML=renderEmpty();return;}
+  stage.innerHTML=(style==="receipt")?renderReceipt(b):renderDash(b);
+}
+document.querySelectorAll("#segStyle button").forEach(btn=>{
+  btn.onclick=()=>{style=btn.dataset.bill;
+    document.querySelectorAll("#segStyle button").forEach(x=>x.classList.toggle("on",x===btn));
+    paint();};
+});
+document.getElementById("scenario").onchange=paint;
+
+// 字段说明表（随情景切换文案重点）
+function fillTable(){
+  const tb=document.querySelector("#fieldTable tbody");
+  const rows=[
+    ["顶部周标签","第 N 周 · 起始–结束日期","如「第 37 周 · 09.07–09.13」。本周（offset=0）时「下一周」按钮禁用，不能预看未来。"],
+    ["本周总入账 / KPI 金额","base_salary + ot_fee","应赚工资与加班费之和。<b>摸鱼成本只展示、不做减法</b>（即不从这个数字里扣）。正常满勤 5 天+少量加班≈¥5000~¥6000。"],
+    ["金句","按周摸鱼率四档","需本周有应用前台记录（front_seconds>0）才显示。本例 12.5% →「摸得克制，装得敬业」。"],
+    ["应赚工资","满勤日：月薪÷当月工作日；今天：实时已赚；未来/休息日：0","历史工作日即使无打卡也按满勤推算。休息日恒为 0。"],
+    ["加班费","本周 ot_records 的 SUM(total)","落盘的 fee+meal 合计。无加班则为 ¥0.00。"],
+    ["摸鱼成本","Σ(当日摸鱼秒÷3600 × 当日时薪)","按天折算，仅工作日计。需配置月薪且开启应用监控才显示。"],
+    ["出勤工时","出勤工作日×日工时 + 加班有效小时","仅在有监控时给数字，否则显示「—」。本例 5×8+5=45.0h。"],
+    ["7 日金条 / 双柱","每日工资（小票）或 入账+摸鱼（仪表盘）","按周内最大值归一。休息日标「休」，未来日标「未到」，不画柱。"],
+    ["最累 / 最摸","加班 valid_hours 最大日 / 摸鱼率最大日","无加班或无应用记录时整项不显示。"],
+    ["键鼠脚注","keys_total / clicks_total","本周按键次数与点击次数；监控关闭时显示「键鼠监控未开启」。"],
+    ["环比 ▲▼%","(本周−上周)/上周×100；上周无基数则为空","本例 5505 vs 5200 → ▲5.9%。上周 total≤0 时不显示箭头，避免 ∞。"],
+  ];
+  tb.innerHTML=rows.map(r=>'<tr><td class="k">'+r[0]+'</td><td>'+r[1]+'</td><td>'+r[2]+'</td></tr>').join("");
+}
+fillTable();
+paint();
+</script>
+</body>
+</html>
