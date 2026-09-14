@@ -14,27 +14,6 @@ rem 该代理已改为仅对 github.com 生效，cargo 直连 rsproxy 毫无压�
 set "CARGO_NET_RETRY=10"
 set "CARGO_HTTP_TIMEOUT=180"
 
-rem cargo 兜底：rustup 安装时可能没把 .cargo\bin 写进 PATH（装完后新开的终端才看得到），
-rem 这里自行探测补上；同时兼容 CARGO_HOME 自定义、rustup 已写 PATH 两种情况
-set "CARGO_DIR="
-where cargo >nul 2>&1
-if not errorlevel 1 goto :cargo_ok
-if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "CARGO_DIR=%USERPROFILE%\.cargo\bin"
-if not defined CARGO_DIR if exist "%CARGO_HOME%\bin\cargo.exe" set "CARGO_DIR=%CARGO_HOME%\bin"
-if not defined CARGO_DIR (
-  for /f "delims=" %%p in ('rustup which cargo 2^>nul') do set "CARGO_DIR=%%~dpp"
-)
-if defined CARGO_DIR (
-  set "PATH=%CARGO_DIR%;%PATH%"
-  goto :cargo_ok
-)
-echo [ERROR] 未在 PATH 中找到 cargo，也未能在以下位置探测到：
-echo   %USERPROFILE%\.cargo\bin\cargo.exe
-echo   %CARGO_HOME%\bin\cargo.exe   (CARGO_HOME=%CARGO_HOME%)
-echo   请先安装 Rust (https://rustup.rs)，或把 .cargo\bin 加入系统 PATH 后重开终端重试。
-exit /b 1
-:cargo_ok
-
 rem 探测 rustc host triple，cargo 会按 target\<triple>\<flavor> 输出 exe
 set "TRIPLE="
 for /f "tokens=2" %%i in ('rustc -vV 2^>nul ^| findstr /C:"host:"') do set "TRIPLE=%%i"
