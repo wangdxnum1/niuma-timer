@@ -88,6 +88,10 @@
   .bill-empty .ico{font-size:42px;opacity:.5}
   .bill-empty .txt{font-size:13px}
 
+  .bug-banner{border-left:3px solid var(--red);background:#fdecec;color:#8a2b2b;
+    font-size:12px;padding:10px 12px;border-radius:8px;margin-bottom:14px}
+  .stage .receipt,.stage .dash{margin-top:14px}
+
   /* ===== 说明 ===== */
   .explain{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
   .explain h2{font-size:16px;margin:0 0 12px}
@@ -119,8 +123,9 @@
     <div class="grp">
       <label>情景</label>
       <select id="scenario">
-        <option value="normal">正常有数据的一周（第 37 周 09-07~09-13）</option>
-        <option value="empty">整周零记录 → 空态（即你看到的「这一周还没有打工记录」）</option>
+        <option value="normal">✅ 修复后 · 正常有数据的一周（第 37 周）</option>
+        <option value="empty">✅ 修复后 · 整周零记录 → 只显示空态</option>
+        <option value="buggy">❌ 修复前 · .hidden 失效，三块同时显示</option>
       </select>
     </div>
   </div>
@@ -138,6 +143,12 @@
         <b>整周零记录为什么会显示「这一周还没有打工记录」？</b><br>
         前端判定：7 天里<strong>每天都没有监控证据</strong>（无键鼠活动、无应用前台秒、也无加班记录）→ 整张账单隐藏，只显示这句空态文案。
         哪怕按"满勤"推算本周本应有工资，只要没有任何一条监控/加班落库，就不会出小票。
+      </div>
+      <div class="note">
+        <b>已修复（d49607a）：</b>上面那种"三块一起冒出来"的根因是 styles.css 缺少通用 <code>.hidden</code> 工具类——
+        三个面板虽写了 <code>hidden</code> 类，却没有规则能隐藏它们，而 <code>.bill-dash</code>/<code>.bill-empty</code>
+        自带 <code>display:flex</code> 会盖过隐藏。现在加了通用 <code>.hidden{display:none!important}</code>，
+        三个面板恢复互斥；并把这条契约写进 <code>scripts/test_hidden.js</code>（可切换上方「修复前」情景对照）。
       </div>
       <div class="note warn">
         <b>值得你确认的 3 个点（可能是你"感觉数据不对"的来源）：</b>
@@ -263,11 +274,40 @@ function renderEmpty(){
     '<div class="txt">这一周还没有打工记录</div></div>';
 }
 
+// 「修复前」演示：.hidden 不生效时，三个面板同时出现，
+// 顶部误显空态文案、底部露出未渲染风格的骨架（就是 index.html 的默认占位值）
+function skeletonReceipt(){
+  return '<div class="receipt">'+
+    '<div class="rcp-head"><div class="rcp-title">本周打工账单</div>'+
+    '<div class="rcp-no">NO.000000</div></div>'+
+    '<div class="rcp-amount-label">本周总入账</div>'+
+    '<div class="rcp-amount">¥0.00</div>'+
+    '<div class="rcp-stamp">已验讫</div></div>';
+}
+function skeletonDash(){
+  const one='<div class="mini"><span class="mini-k">%K%</span><span class="mini-v">—</span></div>';
+  return '<div class="dash"><div class="card">'+
+    '<div class="kpi-row"><div class="kpi-val">¥0.00</div><div class="kpi-delta"></div></div>'+
+    '<div class="mini-grid">'+
+    one.replace("%K%","基本工资")+one.replace("%K%","加班费")+
+    one.replace("%K%","摸鱼成本")+one.replace("%K%","出勤工时")+
+    '</div></div>'+
+    '<div class="card"></div></div>'; // 第二张卡整块空白
+}
+function bugBanner(){
+  return '<div class="bug-banner">修复前：三个面板都带 <code>hidden</code> 类，'+
+    '但 styles.css 没有能匹配它们的规则 → 全部同时渲染。下面依次是：空态文案 → 小票骨架 → 仪表盘骨架。</div>';
+}
+
 let style="receipt";
 function paint(){
   const sc=document.getElementById("scenario").value;
-  const b=(sc==="empty")?EMPTY:NORMAL;
   const stage=document.getElementById("stage");
+  if(sc==="buggy"){
+    stage.innerHTML=bugBanner()+renderEmpty()+skeletonReceipt()+skeletonDash();
+    return;
+  }
+  const b=(sc==="empty")?EMPTY:NORMAL;
   const anyRecord=b.days.some(d=>d.has_record);
   if(!anyRecord){stage.innerHTML=renderEmpty();return;}
   stage.innerHTML=(style==="receipt")?renderReceipt(b):renderDash(b);
