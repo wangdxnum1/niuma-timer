@@ -600,16 +600,8 @@
 
         var now = new Date();
         var wd = ["日", "一", "二", "三", "四", "五", "六"][now.getDay()];
-        // 第 N 个搬砖日：从首次使用日起累计（localStorage 缺失则以今天为第 1 天）
-        var firstDay = lsGet("nc_firstDay");
-        if (!firstDay) {
-          firstDay = now.toDateString();
-          lsSet("nc_firstDay", firstDay);
-        }
-        var dayN =
-          Math.floor((new Date(now.toDateString()) - new Date(firstDay)) / 86400000) + 1;
         document.getElementById("date").textContent =
-          now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd + " · 第" + dayN + "天";
+          now.getMonth() + 1 + "月" + now.getDate() + "日 周" + wd;
 
         // 下班预告价值（C1）：剩余工时 × 时薪——「还要熬多久」直接换算成钱的期待
         var c1 = document.getElementById("c1");

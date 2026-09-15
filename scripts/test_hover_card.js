@@ -129,6 +129,14 @@ if (mBodyH && mRustH) {
   eq("窗口高度留有装下全部内容的余量（>= 344）", Number(mRustH[1]) >= 344, true);
 }
 
+// --------------------------------- 7. 日期行只显示「日期·周几」，去掉第几天计数器
+// （2026-09-15 用户反馈：第几天语义弱且易混淆——它数的是自然日而非工作日，
+//   且存在悬停卡独立 WebView 的 localStorage 里，与首装日不一致。改为只留日期与星期）
+lacks("日期不再引用 nc_firstDay 计数器", html, "nc_firstDay");
+lacks("日期不再计算 dayN", html, "dayN");
+lacks("日期文本不再拼接 第N天", html, " · 第");
+has("日期仍拼接星期（周几）", html, '"日 周" + wd');
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
