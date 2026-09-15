@@ -461,26 +461,6 @@ pub fn dump_raw_devices() {
     }
 }
 
-/// 记录「实际产生过输入的设备的句柄」，首次出现时把设备名落 debug.log。
-///
-/// 比 `dump_raw_devices` 更准：只有真正投递过输入的设备才会被记，
-/// 远程控制时键鼠输入来自虚拟 HID，首次见到即记其名，便于锁定远程设备。
-static SEEN_DEVICES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
-    std::sync::OnceLock::new();
-
-pub fn note_input_device(h: usize) {
-    let seen = SEEN_DEVICES.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-    {
-        let mut g = seen.lock().unwrap_or_else(|e| e.into_inner());
-        if g.contains(&h) {
-            return;
-        }
-        g.insert(h);
-    }
-    if let Some(name) = raw_input_device_name(HANDLE(h as *mut c_void)) {
-        crate::db::debug_log(&format!("[raw-device] h={} name={}", h, name));
-    }
-}
 
 
 /// 当前线程 ID（`GetCurrentThreadId`）。用于向特定线程投递 `WM_QUIT`。

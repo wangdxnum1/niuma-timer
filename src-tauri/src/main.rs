@@ -16,6 +16,7 @@ mod sync;
 mod tray;
 mod weekbill;
 mod win;
+mod remote;
 
 use std::io::Write;
 use std::panic;
@@ -249,6 +250,18 @@ fn maybe_record_overtime_lock(state: &AppState) {
     let Some(lock_ts) = lock_monitor::last_lock_timestamp() else {
         return;
     };
+    // 远程会话期间：锁屏事件不可信（连上/断开远程会伪造），跳过自动加班记录，
+    // 但标记已处理，避免远程结束后又把这条错误时间补记上。
+    if cfg.overtime_exclude_remote
+        && crate::remote::is_remote_active(crate::remote::REMOTE_WINDOW)
+    {
+        crate::db::debug_log(&format!(
+            "[overtime] 远程会话期间跳过自动加班记录（lock_ts={}）",
+            lock_ts
+        ));
+        *sync::lock(&state.last_lock_seen, "state.last_lock_seen") = Some(lock_ts);
+        return;
+    }
     {
         let seen = sync::lock(&state.last_lock_seen, "state.last_lock_seen");
         if *seen == Some(lock_ts) {

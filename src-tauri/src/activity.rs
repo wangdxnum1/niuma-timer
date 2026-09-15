@@ -674,9 +674,9 @@ unsafe extern "system" fn raw_wndproc(
                 // 解析收口在 win::parse_raw_input：长度按 dwType 分别校验
                 // （键盘载荷只有 40 字节，小于 RAWINPUT 的 48，拿 size_of::<RAWINPUT>()
                 // 当门槛会把所有键盘事件静默丢掉），union 也只在那里读。
-                // 诊断：记录本次输入来源设备（仅首次记其名，用于确认远程虚拟设备）
+                // 观测输入来源设备：识别远程虚拟设备（首次记设备名到 debug.log，供 remote 模块判定）
                 if let Some(h) = crate::win::raw_input_hdevice(&buf) {
-                    crate::win::note_input_device(h);
+                    crate::remote::observe_input_device(h);
                 }
                 match crate::win::parse_raw_input(&buf) {
                     Some(crate::win::RawEvent::Mouse(m)) => on_raw_mouse(&m),

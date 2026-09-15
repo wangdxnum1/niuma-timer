@@ -64,6 +64,14 @@ pub struct Config {
     /// 法定节假日加班费率（元/小时）。None = 沿用休息日费率，再没有则沿用工作日费率
     #[serde(default)]
     pub overtime_rate_holiday: Option<f64>,
+    /// 远程会话期间是否跳过自动加班记录（默认开启）。
+    ///
+    /// 远程连接（RDP / 向日葵 / ToDesk / UU）会制造假的锁屏 / 会话事件，
+    /// 把「连上/断开远程」误当「下班离开」，污染自动加班记录。开启后，
+    /// `main::maybe_record_overtime_lock` 在检测到远程会话时跳过自动记录；
+    /// 手动补录入口不受影响，远程日仍可事后手填。
+    #[serde(default = "default_true")]
+    pub overtime_exclude_remote: bool,
 
     // ---- 应用使用白名单 ----
     /// 仅统计白名单内应用（关闭或空名单=统计全部前台应用，兼容现状）
@@ -168,6 +176,7 @@ impl Default for Config {
             weekend_ot_start: None,
             overtime_rate_weekend: None,
             overtime_rate_holiday: None,
+            overtime_exclude_remote: true,
             app_whitelist_enabled: false,
             app_whitelist: Vec::new(),
             app_categories: HashMap::new(),
