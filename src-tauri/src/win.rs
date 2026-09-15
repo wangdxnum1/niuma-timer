@@ -20,7 +20,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
     BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
@@ -51,6 +51,10 @@ use windows::Win32::UI::Input::{
     GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
     RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
+};
+use windows::Win32::UI::Input::{
+    GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICENAME,
+    RID_DEVICE_INFO_TYPE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -362,6 +366,122 @@ pub fn message_time() -> u32 {
     // 负值（出错）按 u32 解释，与旧实现一致
     (unsafe { GetMessageTime() }) as u32
 }
+
+/// 从 `WM_INPUT` 原始缓冲的 `RAWINPUTHEADER.hDevice` 取出设备句柄（x64 下占 8 字节）。
+///
+/// 用来把「这次输入来自哪个设备」暴露给业务层——远程控制软件（RDP / 向日葵 / ToDesk / UU）
+/// 控制时，键鼠输入实际来自它们注入的虚拟 HID 设备，设备名带特征串，可据此判定
+/// 「操作是否来自远程」。只读取 header 前 16 字节，不做任何 union 解释，安全。
+pub fn raw_input_hdevice(buf: &[u8]) -> Option<usize> {
+    if buf.len() < size_of::<RAWINPUTHEADER>() {
+        return None;
+    }
+    // RAWINPUTHEADER 布局：dwSize(u32) dwType(u32) hDevice(HANDLE) wParam(WPARAM)
+    // hDevice 位于偏移 8，x64 下为 8 字节指针
+    let bytes = buf.get(8..16)?;
+    let v = u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+    ]);
+    Some(v as usize)
+}
+
+/// 解析某个 Raw Input 设备的接口名（`RIDI_DEVICENAME`）。
+///
+/// 返回形如 `\\?\HID#...` / `ACPI#...` / `ROOT#RDP_KBD#...` 的设备接口路径；
+/// 远程虚拟设备的名字通常含 `RDP` / `Sunlogin` / `ToDesk` / `UU` / `Virtual` / `Mirror` 等特征串。
+/// 系统调用失败或缓冲区不足时返回 None。
+pub fn raw_input_device_name(hdevice: HANDLE) -> Option<String> {
+    let mut name_len = 0u32;
+    let r = unsafe { GetRawInputDeviceInfoW(Some(hdevice), RIDI_DEVICENAME, None, &mut name_len) };
+    if r == u32::MAX || name_len == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; name_len as usize];
+    let r = unsafe {
+        GetRawInputDeviceInfoW(
+            Some(hdevice),
+            RIDI_DEVICENAME,
+            Some(buf.as_mut_ptr() as *mut c_void),
+            &mut name_len,
+        )
+    };
+    if r == u32::MAX {
+        return None;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let s = String::from_utf16_lossy(&buf[..end]);
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// 枚举当前注册的全部 Raw Input 设备（`GetRawInputDeviceList`），返回 `(dwType, name)`。
+///
+/// dwType：0=鼠标 1=键盘 2=HID 等。诊断用：把清单落 debug.log，
+/// 帮我们确认远程虚拟设备的确切名字（RDP / 向日葵 / ToDesk / UU 的虚拟 HID）。
+pub fn list_raw_input_devices() -> Vec<(u32, String)> {
+    let mut num = 0u32;
+    unsafe {
+        GetRawInputDeviceList(None, &mut num, size_of::<RAWINPUTDEVICELIST>() as u32);
+    }
+    if num == 0 {
+        return Vec::new();
+    }
+    let mut list: Vec<RAWINPUTDEVICELIST> =
+        vec![RAWINPUTDEVICELIST { hDevice: HANDLE::default(), dwType: RID_DEVICE_INFO_TYPE(0) }; num as usize];
+    let mut filled = num;
+    let ret = unsafe {
+        GetRawInputDeviceList(
+            Some(list.as_mut_ptr()),
+            &mut filled,
+            size_of::<RAWINPUTDEVICELIST>() as u32,
+        )
+    };
+    if ret == u32::MAX {
+        return Vec::new();
+    }
+    list.truncate(ret as usize);
+    let mut out = Vec::new();
+    for dev in &list {
+        if let Some(name) = raw_input_device_name(dev.hDevice) {
+            out.push((dev.dwType.0, name));
+        }
+    }
+    out
+}
+
+/// 诊断：把当前所有 Raw Input 设备清单写入 debug.log（前缀 `[raw-device-snapshot]`）。
+///
+/// 临时用——配合托盘菜单「调试：导出输入设备」触发，连接远程前后各点一次，
+/// 从 debug.log 里对比出远程虚拟设备的名字，据此固化远程判定允许列表。
+pub fn dump_raw_devices() {
+    let list = list_raw_input_devices();
+    crate::db::debug_log(&format!("[raw-device-snapshot] 共 {} 个设备", list.len()));
+    for (typ, name) in &list {
+        crate::db::debug_log(&format!("[raw-device-snapshot] type={} name={}", typ, name));
+    }
+}
+
+/// 记录「实际产生过输入的设备的句柄」，首次出现时把设备名落 debug.log。
+///
+/// 比 `dump_raw_devices` 更准：只有真正投递过输入的设备才会被记，
+/// 远程控制时键鼠输入来自虚拟 HID，首次见到即记其名，便于锁定远程设备。
+static SEEN_DEVICES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+    std::sync::OnceLock::new();
+
+pub fn note_input_device(h: usize) {
+    let seen = SEEN_DEVICES.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    {
+        let mut g = seen.lock().unwrap_or_else(|e| e.into_inner());
+        if g.contains(&h) {
+            return;
+        }
+        g.insert(h);
+    }
+    if let Some(name) = raw_input_device_name(HANDLE(h as *mut c_void)) {
+        crate::db::debug_log(&format!("[raw-device] h={} name={}", h, name));
+    }
+}
+
 
 /// 当前线程 ID（`GetCurrentThreadId`）。用于向特定线程投递 `WM_QUIT`。
 pub fn current_thread_id() -> u32 {
