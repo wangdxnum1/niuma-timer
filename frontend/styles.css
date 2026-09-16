@@ -904,12 +904,60 @@ button:active {
   opacity: 0.4;
   cursor: default;
 }
-.mn-summary {
-  font-size: 12px;
-  color: #98989e;
+/* 加班明细「合计」：原先是一行不起眼的灰字，升级为金色统计卡，
+   照搬主页「本月加班战果」金卡视觉语言（大号金色金额 + 时长/天数/日均 三格） */
+.ot-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(255, 214, 80, 0.07);
+  border: 1px solid rgba(255, 214, 80, 0.22);
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
+}
+.ot-summary.empty {
+  display: block;
+  background: transparent;
+  border: none;
   text-align: center;
-  margin-bottom: 8px;
-  min-height: 16px;
+  color: #6a6a70;
+  font-size: 13px;
+  padding: 10px 0;
+  margin-bottom: 10px;
+}
+.os-amount {
+  font-size: 30px;
+  font-weight: 700;
+  color: #ffd650;
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.os-meta {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+.os-meta .cell {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.os-meta .cell + .cell {
+  border-left: 0.5px solid rgba(255, 214, 80, 0.18);
+}
+.os-meta .k {
+  font-size: 11px;
+  color: #a8925c;
+}
+.os-meta .v {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  color: #f2f2f4;
 }
 
 .ot-table {

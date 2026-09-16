@@ -589,10 +589,23 @@ function renderOtTable(ot) {
   $("otMonthLabel").textContent = ot.year + " 年 " + ot.month + " 月";
   const sum = $("otMonthSummary");
   if (sum) {
-    sum.textContent = ot.records.length
-      ? "合计 ¥" + ot.total_all.toFixed(0) +
-        " · " + ot.total_hours.toFixed(1) + " 小时 · " + ot.days + " 天"
-      : "本月暂无加班记录";
+    if (ot.records.length) {
+      sum.classList.remove("empty");
+      const avg = ot.days > 0 ? ot.total_all / ot.days : 0;
+      sum.innerHTML =
+        '<div class="os-amount">¥' + ot.total_all.toFixed(0) + '</div>' +
+        '<div class="os-meta">' +
+          '<div class="cell"><div class="k">有效时长</div><div class="v">' +
+            ot.total_hours.toFixed(1) + 'h</div></div>' +
+          '<div class="cell"><div class="k">加班天数</div><div class="v">' +
+            ot.days + ' 天</div></div>' +
+          '<div class="cell"><div class="k">日均进账</div><div class="v">¥' +
+            avg.toFixed(0) + '</div></div>' +
+        '</div>';
+    } else {
+      sum.classList.add("empty");
+      sum.textContent = "该月暂无加班记录";
+    }
   }
   // 下一月按钮翻到当前月为止：未来没有加班记录
   const now = new Date();
