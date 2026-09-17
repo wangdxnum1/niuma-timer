@@ -588,7 +588,7 @@ fn main() {
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
             {
                 let app2 = app.handle().clone();
-                std::thread::spawn(move || {
+                let _ = std::thread::Builder::new().name("niuma-startup-show".to_string()).spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(1000));
                     if let Some(w) = app2.get_webview_window("main") {
                         let _ = w.show();

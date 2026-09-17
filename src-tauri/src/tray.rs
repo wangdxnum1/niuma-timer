@@ -416,7 +416,7 @@ impl HoverController {
                     let _ = w.set_focus();
                     // 延迟再抢一次焦点：绕过 Windows 前台锁定
                     let w2 = w.clone();
-                    std::thread::spawn(move || {
+                    let _ = std::thread::Builder::new().name("niuma-focus-retry".to_string()).spawn(move || {
                         std::thread::sleep(Duration::from_millis(300));
                         let _ = w2.set_focus();
                     });
@@ -576,7 +576,7 @@ impl HoverController {
 /// 启动悬停卡片工作线程（actor）：独占 HoverController，统一裁决所有定时任务。
 /// 通道断开（所有发送端释放）时退出。
 fn spawn_hover_worker(app: AppHandle, rx: mpsc::Receiver<HoverMsg>) {
-    std::thread::spawn(move || {
+    let _ = std::thread::Builder::new().name("niuma-hover".to_string()).spawn(move || {
         let mut ctrl = HoverController::default();
         hover_log("[hover_card] 工作线程已启动");
         loop {

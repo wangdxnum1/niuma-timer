@@ -251,7 +251,7 @@ pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(tick_loop);
+    let _ = std::thread::Builder::new().name("niuma-audio".to_string()).spawn(tick_loop);
 }
 
 /// 程序退出前调用（5 秒粒度最多丢 5 秒，可接受，无需额外结算）。

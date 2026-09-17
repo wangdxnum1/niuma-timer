@@ -687,7 +687,7 @@ pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(watch_thread);
+    let _ = std::thread::Builder::new().name("niuma-app-usage".to_string()).spawn(watch_thread);
 }
 
 /// 周期结算入口（由 `scheduler` 每 10 秒调用一次）：

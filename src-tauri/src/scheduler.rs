@@ -40,7 +40,7 @@ pub fn start(app: AppHandle) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    thread::spawn(move || {
+    let _ = std::thread::Builder::new().name("niuma-scheduler".to_string()).spawn(move || {
         let mut beats: u64 = 0;
         let mut last_visible: Option<bool> = None;
         let mut last_maint: Option<chrono::NaiveDate> = None;

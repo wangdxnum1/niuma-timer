@@ -50,7 +50,7 @@ pub fn start() {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(|| {
+    let _ = std::thread::Builder::new().name("niuma-lock-monitor".to_string()).spawn(|| {
         let mut delay = Duration::from_secs(1);
         loop {
             match try_run() {

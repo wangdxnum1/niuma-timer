@@ -507,9 +507,9 @@ pub fn start() {
     // 先恢复当天已落盘数据，再开始累加，重启不归零
     load_today();
     // 键盘事件工作线程：消费 WM_INPUT 键盘分支入队的按键增量（去重 / 计数 / 明细累加）
-    std::thread::spawn(keyq_worker);
+    let _ = std::thread::Builder::new().name("niuma-activity-keyq".to_string()).spawn(keyq_worker);
     // 原始输入线程：注册 Raw Input 后必须进入消息循环才能收到 WM_INPUT
-    std::thread::spawn(raw_thread);
+    let _ = std::thread::Builder::new().name("niuma-activity-raw".to_string()).spawn(raw_thread);
     // 周期落盘改由 scheduler 统一调度（每 10 秒调一次 `flush_now`），
     // 本模块只保留采集相关的两条线程，不再单独起合并线程。
 }
