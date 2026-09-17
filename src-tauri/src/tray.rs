@@ -603,8 +603,7 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "主界面", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新工作日", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let debug_devices = MenuItem::with_id(app, "debug_devices", "调试：导出输入设备", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &refresh, &quit, &debug_devices])?;
+    let menu = Menu::with_items(app, &[&settings, &refresh, &quit])?;
 
     let (tx, rx) = mpsc::channel::<HoverMsg>();
 
@@ -646,8 +645,6 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 crate::spawn_holiday_refresh(app.clone());
             } else if event.id == MenuId::new("quit") {
                 app.exit(0);
-            } else if event.id == MenuId::new("debug_devices") {
-                crate::win::dump_raw_devices();
             }
         })
         .on_tray_icon_event(move |_tray, event| match event {
@@ -689,7 +686,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html?v=c78977cc".into()),
+        WebviewUrl::App("hover_card.html?v=1e863e18".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)

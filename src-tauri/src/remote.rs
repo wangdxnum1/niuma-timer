@@ -21,10 +21,10 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION
 /// 第三方远程虚拟设备的设备名特征串（大小写不敏感）。
 ///
 /// - `RDP` / `RDP_KBD` / `RDP_MOU`：微软远程桌面虚拟键鼠，最稳。
-/// - `SUNLOGIN`：向日葵；`TODESK`：ToDesk；`UU`：UU 远程（待真实设备名确认后校准）。
+/// - `SUNLOGIN`：向日葵；`TODESK`：ToDesk；`UU`：UU 远程。
 ///
 /// 注意**不包含**裸 `VIRTUAL` / `MIRROR` —— 物理设备也可能报这类词，误伤会反噬。
-/// 名单在拿到真实设备名（托盘菜单「调试：导出输入设备」）后可继续扩充。
+/// 名单已覆盖主流远程工具，必要时可继续扩充。
 pub const REMOTE_WINDOW: Duration = Duration::from_secs(60);
 
 /// 最近一次「确认来自远程设备」的输入时刻；`None` = 从未见过远程输入。
@@ -47,9 +47,6 @@ pub fn remote_device_signature(name: &str) -> bool {
 }
 
 /// 观测一次输入的设备句柄：首次见到才解析设备名（开销大，故缓存），
-/// 命中远程特征串则刷新 `LAST_REMOTE_INPUT`；同时把设备名写 debug.log 供诊断
-/// （临时，拿到真实设备名后可去掉这行日志）。
-///
 /// 由 `activity::raw_wndproc` 的 `WM_INPUT` 回调每事件调用——已判定为远程的设备
 /// 只刷新时间戳、不重复解析；未判定过的设备才解析一次，故对高频鼠标事件零额外开销。
 pub fn observe_input_device(h: usize) {
@@ -79,10 +76,6 @@ pub fn observe_input_device(h: usize) {
         }
     };
     let is_rem = remote_device_signature(&name);
-    crate::db::debug_log(&format!(
-        "[raw-device] h={} name={} remote={}",
-        h, name, is_rem
-    ));
     if is_rem {
         if let Some(slot) = LAST_REMOTE_INPUT.get() {
             *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());

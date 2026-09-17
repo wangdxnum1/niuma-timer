@@ -53,8 +53,7 @@ use windows::Win32::UI::Input::{
     RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::Input::{
-    GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICENAME,
-    RID_DEVICE_INFO_TYPE,
+    GetRawInputDeviceInfoW, RIDI_DEVICENAME,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -413,55 +412,6 @@ pub fn raw_input_device_name(hdevice: HANDLE) -> Option<String> {
     let s = String::from_utf16_lossy(&buf[..end]);
     if s.is_empty() { None } else { Some(s) }
 }
-
-/// 枚举当前注册的全部 Raw Input 设备（`GetRawInputDeviceList`），返回 `(dwType, name)`。
-///
-/// dwType：0=鼠标 1=键盘 2=HID 等。诊断用：把清单落 debug.log，
-/// 帮我们确认远程虚拟设备的确切名字（RDP / 向日葵 / ToDesk / UU 的虚拟 HID）。
-pub fn list_raw_input_devices() -> Vec<(u32, String)> {
-    let mut num = 0u32;
-    unsafe {
-        GetRawInputDeviceList(None, &mut num, size_of::<RAWINPUTDEVICELIST>() as u32);
-    }
-    if num == 0 {
-        return Vec::new();
-    }
-    let mut list: Vec<RAWINPUTDEVICELIST> =
-        vec![RAWINPUTDEVICELIST { hDevice: HANDLE::default(), dwType: RID_DEVICE_INFO_TYPE(0) }; num as usize];
-    let mut filled = num;
-    let ret = unsafe {
-        GetRawInputDeviceList(
-            Some(list.as_mut_ptr()),
-            &mut filled,
-            size_of::<RAWINPUTDEVICELIST>() as u32,
-        )
-    };
-    if ret == u32::MAX {
-        return Vec::new();
-    }
-    list.truncate(ret as usize);
-    let mut out = Vec::new();
-    for dev in &list {
-        if let Some(name) = raw_input_device_name(dev.hDevice) {
-            out.push((dev.dwType.0, name));
-        }
-    }
-    out
-}
-
-/// 诊断：把当前所有 Raw Input 设备清单写入 debug.log（前缀 `[raw-device-snapshot]`）。
-///
-/// 临时用——配合托盘菜单「调试：导出输入设备」触发，连接远程前后各点一次，
-/// 从 debug.log 里对比出远程虚拟设备的名字，据此固化远程判定允许列表。
-pub fn dump_raw_devices() {
-    let list = list_raw_input_devices();
-    crate::db::debug_log(&format!("[raw-device-snapshot] 共 {} 个设备", list.len()));
-    for (typ, name) in &list {
-        crate::db::debug_log(&format!("[raw-device-snapshot] type={} name={}", typ, name));
-    }
-}
-
-
 
 /// 当前线程 ID（`GetCurrentThreadId`）。用于向特定线程投递 `WM_QUIT`。
 pub fn current_thread_id() -> u32 {
