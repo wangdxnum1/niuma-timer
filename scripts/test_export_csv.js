@@ -26,6 +26,9 @@ function eq(label, actual, expect) {
 function has(label, src, needle) {
   eq(label, src.includes(needle), true);
 }
+function hasNot(label, src, needle) {
+  eq(label, src.includes(needle), false);
+}
 
 // 提取顶层 function 源码（括号配对，函数体不嵌套同名）
 function extractFn(src, name) {
@@ -55,6 +58,10 @@ has("CSS 导出工具条 .export-bar", css, ".export-bar {");
 ["csvCell", "csvRows", "downloadCsv", "exportOvertimeCsv", "exportWeekBillCsv"].forEach(
   (n) => has("app.js 含函数 " + n, appSrc, "function " + n + "(")
 );
+
+// 2.5 修复机制锁：downloadCsv 必须走后端命令，不能再回到会被 WebView 取消的 <a download>
+has("downloadCsv 走 invoke 调用", appSrc, 'invoke("export_csv"');
+hasNot("downloadCsv 不再用 <a download>", appSrc, 'createElement("a")');
 
 // ---------------------------------------------------------------- 3. 真实逻辑跑通
 const sandbox = { lastOt: null, billData: null, captured: null };

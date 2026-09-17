@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v1e863e18";
+const FE_VER = "v681d5273";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -671,17 +671,15 @@ function csvCell(v) {
 function csvRows(rows) {
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }
-function downloadCsv(filename, csv) {
-  // BOM 让 Excel 正确识别 UTF-8 中文
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+// Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应；改走后端 export_csv 命令写盘，
+// 返回保存路径后用 alert 告知用户文件位置（BOM 由后端写入）。
+async function downloadCsv(filename, csv) {
+  try {
+    const path = await invoke("export_csv", { filename: filename, content: csv });
+    alert("\u5DF2\u5BFC\u51FA\u5230\uFF1A\n" + path);
+  } catch (e) {
+    alert("\u5BFC\u51FA\u5931\u8D25\uFF1A" + (e && e.message ? e.message : e));
+  }
 }
 function exportOvertimeCsv() {
   const ot = lastOt;
@@ -2044,7 +2042,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=1e863e18 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=681d5273 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

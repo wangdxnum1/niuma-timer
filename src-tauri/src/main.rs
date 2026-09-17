@@ -497,6 +497,35 @@ fn run_maintenance(state: State<'_, AppState>) -> Result<maintain::StorageInfo, 
     Ok(maintain::storage_info(&cfg))
 }
 
+
+/// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，文件名做安全清洗
+/// （只取 basename、剔除 Windows 非法字符），返回最终保存路径供前端提示文件位置。
+/// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
+#[tauri::command]
+fn export_csv(filename: String, content: String) -> Result<String, String> {
+    let base = std::path::Path::new(&filename)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "export.csv".to_string());
+    let safe: String = base
+        .chars()
+        .filter(|c| !"/\\:*?\"<>|".contains(*c))
+        .collect();
+    let safe = if safe.trim().is_empty() {
+        "export.csv".to_string()
+    } else {
+        safe
+    };
+    let dir = dirs::download_dir()
+        .or_else(dirs::document_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    let path = dir.join(&safe);
+    // 写 UTF-8 + BOM，Excel 双击中文不乱码
+    let mut bytes = b"\xef\xbb\xbf".to_vec();
+    bytes.extend_from_slice(content.as_bytes());
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{}", e))?;
+    Ok(path.to_string_lossy().into_owned())
+}
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -660,7 +689,8 @@ fn main() {
             get_autostart,
             set_autostart,
             get_storage_info,
-            run_maintenance
+            run_maintenance,
+            export_csv
         ])
         .build(tauri::generate_context!())
     ;

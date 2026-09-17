@@ -29,6 +29,7 @@
     "allow-set-autostart",
     "allow-get-storage-info",
     "allow-run-maintenance",
-    "allow-get-week-bill"
+    "allow-get-week-bill",
+    "allow-export-csv"
   ]
 }
