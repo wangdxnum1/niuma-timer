@@ -419,6 +419,15 @@ button:active {
   font-size: 12px;
   padding: 5px 11px;
 }
+/* 导出 CSV 工具条：右对齐，与月/周导航拉开距离 */
+.export-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -2px 0 8px;
+}
+.export-bar .ghost {
+  margin-left: auto;
+}
 
 /* ====== hero 卡：全页唯一视觉焦点（大金额 + 进度 + 走势）====== */
 .live {
@@ -892,8 +901,7 @@ button:active {
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #f2f2f4;
   font-size: 12px;
-  cursor: pointer;
-  padding: 4px 12px;
+  cursor: pointer;  padding: 4px 12px;
   border-radius: 6px;
   transition: filter 0.15s;
 }

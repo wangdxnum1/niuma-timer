@@ -585,7 +585,9 @@ function renderOtHome(ot) {
 }
 
 // 加班明细页：表格 + 所选月份小计，跟随 otView
+let lastOt = null; // 当前展示月份的加班数据缓存，供导出 CSV 使用
 function renderOtTable(ot) {
+  lastOt = ot;
   $("otMonthLabel").textContent = ot.year + " 年 " + ot.month + " 月";
   const sum = $("otMonthSummary");
   if (sum) {
@@ -657,6 +659,88 @@ function renderOtTable(ot) {
     tr.appendChild(opTd);
     tbody.appendChild(tr);
   }
+}
+
+// ---- 导出 CSV（纯前端：数据已在 JS 侧，用 Blob 下载，零 Rust / 零新 IPC）----
+// RFC4180 转义：含逗号/引号/换行才包双引号，内部引号翻倍
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function csvRows(rows) {
+  return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+function downloadCsv(filename, csv) {
+  // BOM 让 Excel 正确识别 UTF-8 中文
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function exportOvertimeCsv() {
+  const ot = lastOt;
+  if (!ot || !ot.records || ot.records.length === 0) return;
+  const rows = [
+    ["日期", "是否跨午夜", "锁屏/下班时刻", "有效时长(小时)", "加班费(元)", "餐补(元)", "合计(元)", "来源"],
+  ];
+  for (const r of [...ot.records].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    rows.push([
+      r.date,
+      r.cross_midnight ? "是" : "否",
+      r.cross_midnight ? "次日 " + r.lock_time : r.lock_time,
+      r.valid_hours,
+      r.fee,
+      r.meal,
+      r.total,
+      r.source === 1 ? "手动" : "自动",
+    ]);
+  }
+  rows.push([]);
+  rows.push(["（月度汇总）"]);
+  rows.push(["月份", ot.year + "-" + String(ot.month).padStart(2, "0")]);
+  rows.push(["合计金额(元)", ot.total_all]);
+  rows.push(["总有效时长(小时)", ot.total_hours]);
+  rows.push(["加班天数", ot.days]);
+  downloadCsv(
+    "加班明细_" + ot.year + "-" + String(ot.month).padStart(2, "0") + ".csv",
+    csvRows(rows)
+  );
+}
+function exportWeekBillCsv() {
+  const bill = billData;
+  if (!bill || !bill.days || bill.days.length === 0) return;
+  const rows = [["（周汇总）"]];
+  rows.push(["周次", bill.week_no]);
+  rows.push(["起始日期", bill.week_start]);
+  rows.push(["结束日期", bill.week_end]);
+  rows.push(["总进账(元)", bill.total_income]);
+  rows.push(["基本工资(元)", bill.base_salary]);
+  rows.push(["加班费(元)", bill.ot_fee]);
+  rows.push(["摸鱼成本(元)", bill.slack_cost]);
+  rows.push(["出勤工时(小时)", bill.work_hours]);
+  rows.push(["出勤天数", bill.work_days]);
+  rows.push(["键鼠次数", bill.keys_total]);
+  rows.push(["点击次数", bill.clicks_total]);
+  rows.push([]);
+  rows.push(["（每日明细）"]);
+  rows.push(["日期", "星期", "是否工作日", "有记录", "当日工资(元)", "摸鱼秒数"]);
+  for (const d of bill.days) {
+    rows.push([
+      d.date,
+      d.weekday,
+      d.is_workday ? "是" : "否",
+      d.has_record ? "是" : "否",
+      d.salary,
+      d.slack_seconds,
+    ]);
+  }
+  downloadCsv("周账单_" + (bill.week_start || "") + ".csv", csvRows(rows));
 }
 
 // ---- 加班记录手动增删改（仅当月）----
@@ -1549,6 +1633,7 @@ $("retention_days").addEventListener("change", saveNow);
 $("cleanupBtn").addEventListener("click", runCleanup);
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);
+$("otExportBtn").addEventListener("click", exportOvertimeCsv);
 $("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
 $("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
 $("otfSave").addEventListener("click", submitOtForm);
@@ -1866,6 +1951,7 @@ function paintDash(bill) {
 
 // 账单页绑定：翻周 + 设置里的风格分段（切风格用缓存重画，免重拉）
 $("billPrevWeek").addEventListener("click", () => shiftWeek(1));
+$("billExportBtn").addEventListener("click", exportWeekBillCsv);
 $("billNextWeek").addEventListener("click", () => shiftWeek(-1));
 document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
   b.addEventListener("click", () => {
