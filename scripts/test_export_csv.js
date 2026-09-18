@@ -3,6 +3,7 @@
 // 2) styles.css：.export-bar 工具条
 // 3) app.js：csvCell / csvRows / downloadCsv / exportOvertimeCsv / exportWeekBillCsv 真实函数存在
 // 4) 功能：用桩 downloadCsv 跑 exportOvertimeCsv / exportWeekBillCsv，断言 CSV 行/排序/转义/汇总正确
+// 5) 反馈走现有 showToast（不再用内联状态条 / <a download>）
 // 运行：node scripts/test_export_csv.js
 const fs = require("fs");
 const path = require("path");
@@ -52,24 +53,24 @@ function extractFn(src, name) {
 // ---------------------------------------------------------------- 1. 结构
 has("加班页导出按钮 otExportBtn", html, 'id="otExportBtn"');
 has("账单页导出按钮 billExportBtn", html, 'id="billExportBtn"');
-has("加班页导出状态条 otExportStatus", html, 'id="otExportStatus"');
-has("账单页导出状态条 billExportStatus", html, 'id="billExportStatus"');
 has("CSS 导出工具条 .export-bar", css, ".export-bar {");
-has("CSS 导出状态条 .export-status", css, ".export-status {");
+hasNot("已移除内联状态条 .export-status", css, ".export-status {");
 
 // ---------------------------------------------------------------- 2. 函数存在
 ["csvCell", "csvRows", "downloadCsv", "exportOvertimeCsv", "exportWeekBillCsv"].forEach(
   (n) => has("app.js 含函数 " + n, appSrc, "function " + n + "(")
 );
 
-// 2.5 修复机制锁：downloadCsv 必须走后端命令，不能再回到会被 WebView 取消的 <a download>
+// 2.5 反馈机制锁：downloadCsv 必须走后端命令 + 现有 showToast，不能再回到 <a download> 或内联状态条
 has("downloadCsv 走 invoke 调用", appSrc, 'invoke("export_csv"');
 hasNot("downloadCsv 不再用 <a download>", appSrc, 'createElement("a")');
+has("downloadCsv 用 showToast 提示", appSrc, 'showToast("已导出');
+hasNot("downloadCsv 不再用内联状态条", appSrc, 'export-status');
 
 // ---------------------------------------------------------------- 3. 真实逻辑跑通
 const sandbox = { lastOt: null, billData: null, captured: null };
-// 桩 downloadCsv：捕获文件名与 CSV 文本（btn/statusEl 为 null，不触发真实写盘）
-sandbox.downloadCsv = function (btn, statusEl, filename, csv) {
+// 桩 downloadCsv：捕获文件名与 CSV 文本（2 参，不触发真实写盘）
+sandbox.downloadCsv = function (filename, csv) {
   sandbox.captured = { filename: filename, csv: csv };
 };
 

@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=681d5273" />
+    <link rel="stylesheet" href="styles.css?v=4c61686b" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -212,7 +212,7 @@
         <span id="billWeekLabel" class="mn-label">—</span>
         <button id="billNextWeek" class="mn-btn">下一周 ›</button>
       </div>
-      <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button><span id="billExportStatus" class="export-status"></span></div>
+      <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button></div>
 
       <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
       <div id="billEmpty" class="bill-empty hidden">
@@ -580,6 +580,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=681d5273"></script>
+    <script src="app.js?v=4c61686b"></script>
   </body>
 </html>

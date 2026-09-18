@@ -428,19 +428,6 @@ button:active {
 .export-bar .ghost {
   margin-left: auto;
 }
-/* 导出状态条：点击后内联提示保存结果，替代阻塞式 alert */
-.export-status {
-  font-size: 12px;
-  margin-left: 8px;
-  align-self: center;
-  color: #98989e;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.export-status.ok { color: #5fd28a; }
-.export-status.err { color: #ff6b6b; }
 
 /* ====== hero 卡：全页唯一视觉焦点（大金额 + 进度 + 走势）====== */
 .live {

@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v681d5273";
+const FE_VER = "v4c61686b";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -672,31 +672,18 @@ function csvRows(rows) {
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }
 // 导出 CSV：经后端 export_csv 命令写盘到「下载」目录（BOM 由后端写入）。
-// 用内联状态条替代 alert：点击后按钮显示「导出中…」并短暂禁用，成功后状态条提示文件名，
-// 防止「点完没反应」误以为失败、反复点击刷出一堆同名文件。
-async function downloadCsv(btn, statusEl, filename, csv) {
-  if (btn) {
-    btn.disabled = true;
-    btn.dataset.label = btn.textContent;
-    btn.textContent = "导出中…";
-  }
+// 反馈走现有 showToast（窗口顶部居中气泡，非模态）；加并发守卫，避免连点刷出一堆同名文件。
+let exportingCsv = false;
+async function downloadCsv(filename, csv) {
+  if (exportingCsv) return;
+  exportingCsv = true;
   try {
     await invoke("export_csv", { filename: filename, content: csv });
-    if (statusEl) {
-      statusEl.textContent = "已导出 ✓ " + filename;
-      statusEl.className = "export-status ok";
-    }
+    showToast("已导出：" + filename, "ok");
   } catch (e) {
-    if (statusEl) {
-      statusEl.textContent = "导出失败：" + (e && e.message ? e.message : e);
-      statusEl.className = "export-status err";
-    }
+    showToast("导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
-    if (btn) {
-      btn.textContent = btn.dataset.label || "导出 CSV";
-      // 成功后冷却 1.5s 再解锁，避免重复点击产出大量同名文件
-      setTimeout(function () { if (btn) btn.disabled = false; }, 1500);
-    }
+    exportingCsv = false;
   }
 }
 function exportOvertimeCsv() {
@@ -724,8 +711,6 @@ function exportOvertimeCsv() {
   rows.push(["总有效时长(小时)", ot.total_hours]);
   rows.push(["加班天数", ot.days]);
   downloadCsv(
-    $("otExportBtn"),
-    $("otExportStatus"),
     "加班明细_" + ot.year + "-" + String(ot.month).padStart(2, "0") + ".csv",
     csvRows(rows)
   );
@@ -759,8 +744,6 @@ function exportWeekBillCsv() {
     ]);
   }
   downloadCsv(
-    $("billExportBtn"),
-    $("billExportStatus"),
     "周账单_" + (bill.week_start || "") + ".csv",
     csvRows(rows)
   );
@@ -2067,7 +2050,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=681d5273 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=4c61686b = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
