@@ -671,14 +671,32 @@ function csvCell(v) {
 function csvRows(rows) {
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }
-// Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应；改走后端 export_csv 命令写盘，
-// 返回保存路径后用 alert 告知用户文件位置（BOM 由后端写入）。
-async function downloadCsv(filename, csv) {
+// 导出 CSV：经后端 export_csv 命令写盘到「下载」目录（BOM 由后端写入）。
+// 用内联状态条替代 alert：点击后按钮显示「导出中…」并短暂禁用，成功后状态条提示文件名，
+// 防止「点完没反应」误以为失败、反复点击刷出一堆同名文件。
+async function downloadCsv(btn, statusEl, filename, csv) {
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.label = btn.textContent;
+    btn.textContent = "导出中…";
+  }
   try {
-    const path = await invoke("export_csv", { filename: filename, content: csv });
-    alert("\u5DF2\u5BFC\u51FA\u5230\uFF1A\n" + path);
+    await invoke("export_csv", { filename: filename, content: csv });
+    if (statusEl) {
+      statusEl.textContent = "已导出 ✓ " + filename;
+      statusEl.className = "export-status ok";
+    }
   } catch (e) {
-    alert("\u5BFC\u51FA\u5931\u8D25\uFF1A" + (e && e.message ? e.message : e));
+    if (statusEl) {
+      statusEl.textContent = "导出失败：" + (e && e.message ? e.message : e);
+      statusEl.className = "export-status err";
+    }
+  } finally {
+    if (btn) {
+      btn.textContent = btn.dataset.label || "导出 CSV";
+      // 成功后冷却 1.5s 再解锁，避免重复点击产出大量同名文件
+      setTimeout(function () { if (btn) btn.disabled = false; }, 1500);
+    }
   }
 }
 function exportOvertimeCsv() {
@@ -706,6 +724,8 @@ function exportOvertimeCsv() {
   rows.push(["总有效时长(小时)", ot.total_hours]);
   rows.push(["加班天数", ot.days]);
   downloadCsv(
+    $("otExportBtn"),
+    $("otExportStatus"),
     "加班明细_" + ot.year + "-" + String(ot.month).padStart(2, "0") + ".csv",
     csvRows(rows)
   );
@@ -738,7 +758,12 @@ function exportWeekBillCsv() {
       d.slack_seconds,
     ]);
   }
-  downloadCsv("周账单_" + (bill.week_start || "") + ".csv", csvRows(rows));
+  downloadCsv(
+    $("billExportBtn"),
+    $("billExportStatus"),
+    "周账单_" + (bill.week_start || "") + ".csv",
+    csvRows(rows)
+  );
 }
 
 // ---- 加班记录手动增删改（仅当月）----

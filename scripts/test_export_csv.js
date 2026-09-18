@@ -52,7 +52,10 @@ function extractFn(src, name) {
 // ---------------------------------------------------------------- 1. 结构
 has("加班页导出按钮 otExportBtn", html, 'id="otExportBtn"');
 has("账单页导出按钮 billExportBtn", html, 'id="billExportBtn"');
+has("加班页导出状态条 otExportStatus", html, 'id="otExportStatus"');
+has("账单页导出状态条 billExportStatus", html, 'id="billExportStatus"');
 has("CSS 导出工具条 .export-bar", css, ".export-bar {");
+has("CSS 导出状态条 .export-status", css, ".export-status {");
 
 // ---------------------------------------------------------------- 2. 函数存在
 ["csvCell", "csvRows", "downloadCsv", "exportOvertimeCsv", "exportWeekBillCsv"].forEach(
@@ -65,8 +68,8 @@ hasNot("downloadCsv 不再用 <a download>", appSrc, 'createElement("a")');
 
 // ---------------------------------------------------------------- 3. 真实逻辑跑通
 const sandbox = { lastOt: null, billData: null, captured: null };
-// 桩 downloadCsv：捕获文件名与 CSV 文本（不触发真实 Blob 下载）
-sandbox.downloadCsv = function (filename, csv) {
+// 桩 downloadCsv：捕获文件名与 CSV 文本（btn/statusEl 为 null，不触发真实写盘）
+sandbox.downloadCsv = function (btn, statusEl, filename, csv) {
   sandbox.captured = { filename: filename, csv: csv };
 };
 
@@ -76,7 +79,8 @@ const fns = ["csvCell", "csvRows", "exportOvertimeCsv", "exportWeekBillCsv"]
   .join("\n");
 const runner = new Function(
   "sandbox",
-  "var lastOt = sandbox.lastOt;\n" +
+  "var $ = function (id) { return null; };\n" + // 提取函数里会调 $() 取按钮/状态条，测试里返回 null（downloadCsv 已对 null 做守卫）
+    "var lastOt = sandbox.lastOt;\n" +
     "var billData = sandbox.billData;\n" +
     "var downloadCsv = sandbox.downloadCsv;\n" +
     fns +
