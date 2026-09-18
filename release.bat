@@ -74,7 +74,7 @@ if not "%VER%"=="%CURVER%" (
     exit /b 1
   )
   set "JSONVER="
-  for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "(Get-Content -Raw '%SRC%\tauri.conf.json' | ConvertFrom-Json).version"`) do set "JSONVER=%%a"
+  for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "(Get-Content -Raw -Encoding UTF8 '%SRC%\tauri.conf.json' | ConvertFrom-Json).version"`) do set "JSONVER=%%a"
   if not "!JSONVER!"=="%VER%" (
     echo [ERROR] version sync failed for tauri.conf.json. Restore with:
     echo     git checkout -- src-tauri\Cargo.toml src-tauri\tauri.conf.json
