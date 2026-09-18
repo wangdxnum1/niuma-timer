@@ -2,27 +2,21 @@
 rem This file is UTF-8 encoded; chcp 65001 below switches the console to UTF-8 so CJK echoes render (same as release.bat)
 chcp 65001 >nul
 setlocal
-rem By default use cargo from PATH. If the current window PATH lacks cargo (stale window / PATH not refreshed),
-rem run first:  set "CARGO_BIN=C:\Users\Tim\.cargo\bin\cargo.exe"   then run this script
-if not defined CARGO_BIN set "CARGO_BIN=cargo"
-set "ROOT=%~dp0"
-set "SRC=%ROOT%src-tauri"
-set "BIN=%ROOT%bin"
+rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat.
+rem The gitconfig-http.proxy warning there also explains the retry params.
+call "%~dp0common.bat"
 
 if not exist "%BIN%" mkdir "%BIN%"
-
-rem Mirror-flaky fallback params (same as release.bat). Note: cargo inherits ~/.gitconfig
-rem global http.proxy: a global proxy breaks cargo TLS handshake (always under Clash SOCKS5),
-rem that proxy now applies only to github.com; cargo reaches rsproxy directly, do NOT switch back to global.
-set "CARGO_NET_RETRY=10"
-set "CARGO_HTTP_TIMEOUT=180"
 
 rem Detect rustc host triple; cargo outputs exe to target\<triple>\<flavor>
 set "TRIPLE="
 for /f "tokens=2" %%i in ('rustc -vV 2^>nul ^| findstr /C:"host:"') do set "TRIPLE=%%i"
-if "%TRIPLE%"=="" set "TRIPLE=x86_64-pc-windows-msvc"
+if "%TRIPLE%"=="" (
+  echo   note: rustc probe failed, assuming x86_64-pc-windows-msvc
+  set "TRIPLE=x86_64-pc-windows-msvc"
+)
 
-rem Usage: build.bat [debug|release|all|package]
+rem Usage: build.bat [debug^|release^|all^|package^|test]
 set "FLAVOR=%~1"
 
 rem Read version from Cargo.toml (package section, first unindented "version =")
@@ -35,12 +29,22 @@ set "APPVER=%APPVER: =%"
 if "%APPVER%"=="" set "APPVER=0.0.0"
 if "%FLAVOR%"=="" set "FLAVOR=all"
 
+if not "%FLAVOR%"=="debug" if not "%FLAVOR%"=="release" if not "%FLAVOR%"=="all" if not "%FLAVOR%"=="package" if not "%FLAVOR%"=="test" (
+  echo [ERROR] unknown flavor "%FLAVOR%" - use: debug, release, all, package or test
+  exit /b 1
+)
+
 if "%FLAVOR%"=="debug" call :do_build debug
 if "%FLAVOR%"=="release" call :do_build release
 if "%FLAVOR%"=="all" (
   call :do_build debug
   if errorlevel 1 goto :fail
   call :do_build release
+)
+if "%FLAVOR%"=="test" (
+  call :do_test
+  if errorlevel 1 goto :fail
+  goto :test_done
 )
 
 if "%FLAVOR%"=="package" call :do_package
@@ -98,6 +102,35 @@ if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
 echo Done: %BIN%\package\
 goto :eof
+
+:do_test
+echo.
+echo =========================================
+echo   Testing (cargo test + frontend assert scripts) ...
+echo =========================================
+pushd "%SRC%"
+%CARGO_BIN% test --quiet
+set "RC=%errorlevel%"
+popd
+if %RC% neq 0 (
+  echo [ERROR] cargo test failed with code %RC%
+  exit /b 1
+)
+where node >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] node not found - frontend test scripts in scripts\test_*.js need Node.js
+  exit /b 1
+)
+node "%ROOT%scripts\run_all.js"
+if errorlevel 1 exit /b 1
+goto :eof
+
+:test_done
+echo.
+echo All tests passed.
+endlocal
+exit /b 0
+
 :fail
 echo Build failed.
 exit /b 1

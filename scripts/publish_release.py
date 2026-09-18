@@ -31,6 +31,12 @@ import urllib.request
 DEFAULT_REPO = "wangdxnum1/niuma-timer"
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
+# Env overrides so these no longer require editing the script:
+#   NIUMA_PROXY           "host:port" of the local proxy to probe (default
+#                         127.0.0.1:7890); "off" skips the probe, always direct
+#   NIUMA_DEFAULT_BRANCH  branch new releases target (default main)
+PROXY = os.environ.get("NIUMA_PROXY", "127.0.0.1:7890")
+DEFAULT_BRANCH = os.environ.get("NIUMA_DEFAULT_BRANCH", "main")
 
 
 def log(msg):
@@ -41,18 +47,28 @@ def log(msg):
 # network helpers
 # --------------------------------------------------------------------------
 def build_opener():
+    # GitHub is unreachable directly from some networks, so probe the local
+    # Clash mixed port and route through it when it is up. TLS verification is
+    # relaxed ONLY on the proxy path (Clash MITM presents a self-signed cert);
+    # direct connections keep strict certificate validation.
+    if PROXY.lower() == "off":
+        log("  network: direct (NIUMA_PROXY=off)")
+        return urllib.request.build_opener()
+    host, _, port_s = PROXY.rpartition(":")
+    if not host or not port_s.isdigit():
+        log("  network: NIUMA_PROXY=%r is not host:port, going direct" % PROXY)
+        return urllib.request.build_opener()
+    if not proxy_alive(host, int(port_s)):
+        log("  network: direct")
+        return urllib.request.build_opener()
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # Clash MITM uses a self-signed cert
-    op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    # GitHub is unreachable directly from some networks; 7890 is the usual
-    # local Clash mixed port. Try it, but fall back to a direct connection.
-    if proxy_alive("127.0.0.1", 7890):
-        op.add_handler(urllib.request.ProxyHandler(
-            {"https": "http://127.0.0.1:7890", "http": "http://127.0.0.1:7890"}))
-        log("  network: using local proxy 127.0.0.1:7890")
-    else:
-        log("  network: direct")
+    ctx.verify_mode = ssl.CERT_NONE
+    proxy_url = "http://%s:%s" % (host, port_s)
+    op = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ctx),
+        urllib.request.ProxyHandler({"https": proxy_url, "http": proxy_url}))
+    log("  network: using local proxy %s (TLS check relaxed for its self-signed cert)" % proxy_url)
     return op
 
 
@@ -117,6 +133,14 @@ def human_size(n):
     return "%.1f MB" % (n / 1024.0 / 1024.0)
 
 
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def describe(fname):
     low = fname.lower()
     if low.endswith(".msi"):
@@ -129,7 +153,12 @@ def describe(fname):
 
 
 def changelog_section(root, version):
-    """Pull the section for `version` out of CHANGELOG.md (if present)."""
+    """Pull the section for `version` out of CHANGELOG.md (if present).
+
+    Falls back to the [未发布] section with a warning when the version has no
+    section of its own, so the "what changed" block never disappears from the
+    release notes silently.
+    """
     path = os.path.join(root, "CHANGELOG.md")
     if not os.path.isfile(path):
         return ""
@@ -137,14 +166,24 @@ def changelog_section(root, version):
         text = open(path, encoding="utf-8").read()
     except OSError:
         return ""
-    m = re.search(r"^##\s+\[?%s\]?[^\n]*\n(.*?)(?=^##\s|\Z)" % re.escape(version),
-                  text, re.S | re.M)
-    if not m:
-        return ""
-    body = m.group(1).strip()
-    # drop the "release link" definition line that sits at the very end
-    body = re.sub(r"\n\[[^\]]+\]:\s*\S+\s*$", "", body).strip()
-    return body
+
+    def grab(pat):
+        m = re.search(pat, text, re.S | re.M)
+        if not m:
+            return ""
+        body = m.group(1).strip()
+        # drop the "release link" definition line that sits at the very end
+        return re.sub(r"\n\[[^\]]+\]:\s*\S+\s*$", "", body).strip()
+
+    body = grab(r"^##\s+\[?%s\]?[^\n]*\n(.*?)(?=^##\s|\Z)" % re.escape(version))
+    if body:
+        return body
+    body = grab(r"^##\s+\[?未发布\]?[^\n]*\n(.*?)(?=^##\s|\Z)")
+    if body:
+        log("  [WARN] CHANGELOG.md has no section for %s; using the [未发布] section" % version)
+        return body
+    log("  [WARN] CHANGELOG.md has no section for %s (and no [未发布] fallback)" % version)
+    return ""
 
 
 def build_notes(root, version, package_dir):
@@ -153,7 +192,7 @@ def build_notes(root, version, package_dir):
         for name in sorted(os.listdir(package_dir)):
             p = os.path.join(package_dir, name)
             if os.path.isfile(p) and name.lower().endswith((".exe", ".msi")):
-                files.append((name, os.path.getsize(p)))
+                files.append((name, os.path.getsize(p), sha256_file(p)))
     files.sort(key=lambda kv: (".msi" in kv[0].lower(), "portable" in kv[0].lower()))
 
     lines = []
@@ -165,10 +204,13 @@ def build_notes(root, version, package_dir):
     if files:
         lines.append("## 下载")
         lines.append("")
-        lines.append("| 文件 | 大小 | 说明 |")
-        lines.append("| --- | --- | --- |")
-        for name, size in files:
-            lines.append("| `%s` | %s | %s |" % (name, human_size(size), describe(name)))
+        lines.append("| 文件 | 大小 | SHA-256 | 说明 |")
+        lines.append("| --- | --- | --- | --- |")
+        for name, size, digest in files:
+            lines.append("| `%s` | %s | `%s` | %s |"
+                         % (name, human_size(size), digest[:8], describe(name)))
+        lines.append("")
+        lines.append("完整 SHA-256 校验和见附件 `SHA256SUMS.txt`。")
         lines.append("")
     lines.append("> 需要 Windows 10/11（64 位），依赖 WebView2 运行时。"
                  "Windows 11 已自带；Windows 10 若缺失，安装包会自动引导安装。")
@@ -244,7 +286,7 @@ def main():
             "body": "\n".join(body).strip(),
             "draft": False,
             "prerelease": False,
-            "target_commitish": "main",
+            "target_commitish": DEFAULT_BRANCH,
         }
         data = json.dumps(payload).encode("utf-8")
         st, rel = gh.call("POST", "%s/releases" % api, data,
@@ -269,6 +311,13 @@ def main():
 
     if not assets:
         log("  [WARN] no .exe/.msi found in %s" % package_dir)
+    else:
+        # Digest sheet shipped as an asset; the notes table links to it.
+        sums_path = os.path.join(package_dir, "SHA256SUMS.txt")
+        with open(sums_path, "w", encoding="utf-8", newline="\n") as f:
+            for path in assets:
+                f.write("%s  %s\n" % (sha256_file(path), os.path.basename(path)))
+        assets.append(sums_path)
 
     failed = False
     for path in assets:
@@ -280,7 +329,13 @@ def main():
             data = f.read()
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
-        st, res = gh.call("POST", url, data, ctype)
+        st, res = None, None
+        for attempt in (1, 2):  # one retry: uploads through the proxy hiccup
+            st, res = gh.call("POST", url, data, ctype)
+            if st in (200, 201):
+                break
+            if attempt == 1:
+                log("  [retry] %s failed HTTP %s, retrying once ..." % (name, st))
         if st in (200, 201):
             log("  [ok] %s  %.1f MB" % (name, len(data) / 1024.0 / 1024.0))
         else:

@@ -12,14 +12,9 @@ rem  Publishing needs no gh CLI: it reuses the GitHub token already
 rem  stored by Git Credential Manager (scripts/publish_release.py).
 rem ============================================================
 
-set "ROOT=%~dp0"
-set "SRC=%ROOT%src-tauri"
-set "BIN=%ROOT%bin"
+rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat
+call "%~dp0common.bat"
 set "REPO=wangdxnum1/niuma-timer"
-
-rem Cargo mirrors occasionally return 504; retry instead of failing outright.
-set "CARGO_NET_RETRY=10"
-set "CARGO_HTTP_TIMEOUT=180"
 
 set "AUTO=no"
 set "WANTVER=%~1"
@@ -30,6 +25,12 @@ rem --- Prefer system Git: WorkBuddy's bundled PortableGit has a broken
 rem     credential manager (segfaults). System Git + wincred works. ---
 set "GIT=C:\Program Files\Git\cmd\git.exe"
 if not exist "%GIT%" set "GIT=git"
+
+rem Push / tag / release all key off the current branch; the flow assumes main.
+rem A non-main branch would make the tag point at a commit that is not on main.
+set "BRANCH="
+for /f "usebackq delims=" %%b in (`"%GIT%" branch --show-current 2^>nul`) do set "BRANCH=%%b"
+if "%BRANCH%"=="" set "BRANCH=(unknown)"
 
 echo.
 echo =========================================
@@ -59,14 +60,22 @@ if not "%VER%"=="%CURVER%" (
   powershell -NoProfile -Command "$f='%SRC%\tauri.conf.json'; $t=[IO.File]::ReadAllText($f); $q=[char]34; $p=$q+'version'+$q+':\s*'+$q+[regex]::Escape('%CURVER%')+$q; $r=$q+'version'+$q+': '+$q+'%VER%'+$q; $t=[regex]::Replace($t,$p,$r); [IO.File]::WriteAllText($f,$t)"
   if errorlevel 1 ( echo [ERROR] failed to update tauri.conf.json & exit /b 1 )
   echo     Cargo.toml / tauri.conf.json updated
-  findstr /c:"%VER%" "%SRC%\Cargo.toml" >nul
-  if errorlevel 1 (
+  rem verify the sync actually landed: re-parse both files instead of just
+  rem checking that the version string appears somewhere
+  set "GOTVER="
+  for /f "usebackq tokens=2 delims==" %%a in (`findstr /b /c:"version" "%SRC%\Cargo.toml"`) do (
+    if not defined GOTVER set "GOTVER=%%a"
+  )
+  set "GOTVER=!GOTVER:"=!"
+  set "GOTVER=!GOTVER: =!"
+  if not "!GOTVER!"=="%VER%" (
     echo [ERROR] version sync failed for Cargo.toml. Restore with:
     echo     git checkout -- src-tauri\Cargo.toml src-tauri\tauri.conf.json
     exit /b 1
   )
-  findstr /c:"%VER%" "%SRC%\tauri.conf.json" >nul
-  if errorlevel 1 (
+  set "JSONVER="
+  for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "(Get-Content -Raw '%SRC%\tauri.conf.json' | ConvertFrom-Json).version"`) do set "JSONVER=%%a"
+  if not "!JSONVER!"=="%VER%" (
     echo [ERROR] version sync failed for tauri.conf.json. Restore with:
     echo     git checkout -- src-tauri\Cargo.toml src-tauri\tauri.conf.json
     exit /b 1
@@ -74,11 +83,7 @@ if not "%VER%"=="%CURVER%" (
 )
 
 rem ---------------- 2. environment ----------------
-rem Cargo fallback: rustup only updates the registry user PATH at install time;
-rem terminals opened BEFORE the install never see it (their env is a snapshot).
-rem Probe the default location ourselves, same as build.bat.
-where cargo >nul 2>&1
-if errorlevel 1 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+rem cargo PATH fallback is already handled in common.bat; this is the final check.
 where cargo >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] cargo not found. Install Rust first.
@@ -117,12 +122,24 @@ if errorlevel 1 (
 rem ---------------- 3. confirm ----------------
 echo.
 echo   Steps:
+echo     0. tests (cargo test + frontend assert scripts)
 echo     1. cargo build --release
 echo     2. cargo tauri build   (NSIS installer + MSI + portable exe)
 echo     3. git commit / tag v%VER%
-echo     4. git push origin main  +  push tag
+echo     4. git push origin %BRANCH%  +  push tag
 echo     5. create GitHub Release and upload artifacts
 echo.
+if not "%BRANCH%"=="main" (
+  echo   [WARN] current branch is "%BRANCH%", not main - the tag would point
+  echo          at a commit that is not on main.
+  if "%AUTO%"=="yes" (
+    echo [ERROR] refusing to release from a non-main branch in /y mode.
+    exit /b 1
+  )
+  set "ANS="
+  set /p "ANS=Continue releasing from %BRANCH%? [y/N] "
+  if /i not "!ANS!"=="Y" ( echo Aborted. & exit /b 0 )
+)
 if "%AUTO%"=="no" (
   set "ANS="
   set /p "ANS=Continue? [Y/N] "
@@ -135,6 +152,14 @@ if exist "%BIN%\package" (
   echo   clearing old artifacts in bin\package ...
   del /q "%BIN%\package\*.*" >nul 2>&1
 )
+
+rem ---------------- 5. tests ----------------
+echo.
+echo =========================================
+echo   [0/5] Testing (cargo test + frontend assert scripts) ...
+echo =========================================
+call "%ROOT%build.bat" test
+if errorlevel 1 ( echo [ERROR] tests failed & exit /b 1 )
 
 rem ---------------- 5. build ----------------
 echo.
@@ -167,6 +192,10 @@ echo =========================================
 echo   [3/5] Committing ...
 echo =========================================
 pushd "%ROOT%"
+rem Show what add -A is about to sweep in (also in /y mode) so nothing
+rem unexpected - stray temp files, secrets - gets committed sight unseen.
+echo   files about to be committed:
+"%GIT%" status --porcelain
 "%GIT%" add -A
 "%GIT%" diff --cached --quiet
 if errorlevel 1 (
@@ -209,16 +238,22 @@ if not errorlevel 1 (
 )
 set "GITCFG=-c credential.helper=wincred -c http.sslBackend=openssl %PROXYARG%"
 
-"%GIT%" %GITCFG% push origin main
+"%GIT%" %GITCFG% push origin "%BRANCH%"
 if errorlevel 1 (
   echo [ERROR] push failed. If it is a TLS error, make sure the proxy is on, or run:
-  echo     "%GIT%" -c credential.helper=wincred -c http.sslBackend=openssl push origin main
+  echo     "%GIT%" -c credential.helper=wincred -c http.sslBackend=openssl push origin "%BRANCH%"
   popd
   exit /b 1
 )
 "%GIT%" %GITCFG% push origin "v%VER%"
-if errorlevel 1 ( echo [ERROR] tag push failed & popd & exit /b 1 )
-echo     pushed main and tag v%VER%
+if errorlevel 1 (
+  echo [ERROR] tag push failed. If the remote tag v%VER% already exists from
+  echo         a previous release of this version, force-update it with:
+  echo     "%GIT%" push origin "v%VER%" --force
+  popd
+  exit /b 1
+)
+echo     pushed %BRANCH% and tag v%VER%
 
 rem ---------------- 11. GitHub Release ----------------
 echo.
@@ -239,7 +274,7 @@ if not defined PYEXE (
 
 rem  Generate release notes up front so both publish paths can use them
 if defined PYEXE (
-  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --generate-notes-only
+  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --generate-notes-only
 )
 
 where gh >nul 2>&1
