@@ -2,7 +2,7 @@
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
 > [中文文档](./README.zh-CN.md)
-> Current version **1.0.0** (2026-09-10) · [Changelog](./CHANGELOG.md)
+> Current version **1.1.0** (2026-09-18) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
@@ -33,6 +33,14 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Media playback monitoring** — audio-session peak polling measures playback time per app
 - **Local persistence** — all history (overtime, activity, app/audio usage) is stored in a WAL SQLite database; config & holiday cache remain JSON
 - **Storage visibility** — Settings shows total footprint plus a nine-way breakdown (overtime / activity / app usage / media / index & free pages / WAL / icon cache / config & holidays / logs), sorted by size; per-table figures come from SQLite `dbstat`. Retention is configurable (permanent by default) with one-click cleanup, and the WAL is shrunk on first launch each day
+- **Week bill** — a new "Bill" tab in the sidebar turns a week's shifts, money and slacking into a page-flippable bill; switch between receipt style and dashboard style in Settings
+- **Slacking cost in real time** — the home hero shows how much you have "burned" (¥X · slack rate Y%) right under the ticking earnings, with four tiers of roasting one-liners by slack rate
+- **App categories** — app usage is grouped into work / slack / chat / other; click a tag to change it and the whole history is reclassified instantly
+- **Cross-midnight overtime** — overnight overtime is attributed to the correct day (locking the screen before 06:00 counts for the previous day with +24h), so nothing is silently lost
+- **Weekend & holiday overtime** — driven by official holiday data, with separate start times and pay rates for rest days and statutory holidays
+- **History browsing + CSV export** — flip overtime details by month and activity / apps / media by day; export the week bill or overtime details as Excel-friendly CSV (UTF-8 BOM)
+- **Storage breakdown & cleanup** — a nine-way storage breakdown in Settings (exact `dbstat` figures), with a retention period and one-click cleanup that shrinks the write-ahead log
+- **Remote session detection** — auto overtime recording is skipped while this PC is remotely controlled via RDP / Sunlogin / ToDesk / UU (configurable; manual entry unaffected)
 
 ## How it works
 

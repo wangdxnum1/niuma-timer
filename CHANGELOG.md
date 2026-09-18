@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.1.0] - 2026-09-18
 
 ### 新增
 
@@ -112,3 +112,4 @@ CSV 字段走 RFC4180 转义（含逗号/引号/换行才包引号、内部引�
 - 节假日内置表仅含 2025/2026；未收录的年份在断网时会退化为按周一至周五估算
 
 [1.0.0]: https://github.com/wangdxnum1/niuma-timer/releases/tag/v1.0.0
+[1.1.0]: https://github.com/wangdxnum1/niuma-timer/releases/tag/v1.1.0
