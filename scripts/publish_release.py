@@ -191,8 +191,13 @@ def build_notes(root, version, package_dir):
     if os.path.isdir(package_dir):
         for name in sorted(os.listdir(package_dir)):
             p = os.path.join(package_dir, name)
-            if os.path.isfile(p) and name.lower().endswith((".exe", ".msi")):
-                files.append((name, os.path.getsize(p), sha256_file(p)))
+            if not (os.path.isfile(p) and name.lower().endswith((".exe", ".msi"))):
+                continue
+            if version not in name:
+                # stale bundle from an older release: keep it out of the table
+                log("  [skip] %s: not version %s" % (name, version))
+                continue
+            files.append((name, os.path.getsize(p), sha256_file(p)))
     files.sort(key=lambda kv: (".msi" in kv[0].lower(), "portable" in kv[0].lower()))
 
     lines = []
@@ -306,8 +311,13 @@ def main():
     if os.path.isdir(package_dir):
         for name in sorted(os.listdir(package_dir)):
             p = os.path.join(package_dir, name)
-            if os.path.isfile(p) and name.lower().endswith((".exe", ".msi")):
-                assets.append(p)
+            if not (os.path.isfile(p) and name.lower().endswith((".exe", ".msi"))):
+                continue
+            if args.version not in name:
+                # stale bundle from an older release: never upload or checksum it
+                log("  [skip] %s: not version %s" % (name, args.version))
+                continue
+            assets.append(p)
 
     if not assets:
         log("  [WARN] no .exe/.msi found in %s" % package_dir)

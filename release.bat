@@ -182,9 +182,21 @@ if not exist "%BIN%\package\*.exe" if not exist "%BIN%\package\*.msi" (
   echo [ERROR] no artifacts found in bin\package
   exit /b 1
 )
+rem Every artifact must carry the target version in its name: a file without
+rem it is a stale bundle from an older release that leaked into bin\package.
+set "BADART="
 echo.
 echo   Artifacts in bin\package:
-for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%~nxf
+for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do (
+  echo     %%~nxf
+  set "NAME=%%~nxf"
+  if "!NAME:%VER%=!"=="!NAME!" set "BADART=!BADART! %%~nxf"
+)
+if defined BADART (
+  echo [ERROR] artifacts without version %VER% found in bin\package:!BADART!
+  echo         Clean bin\package and src-tauri\target\...\bundle, then rerun.
+  exit /b 1
+)
 
 rem ---------------- 8. commit ----------------
 echo.

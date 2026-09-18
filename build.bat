@@ -94,9 +94,12 @@ if %RC% neq 0 (
 )
 set "BUNDLE=%SRC%\target\%TRIPLE%\release\bundle"
 if not exist "%BUNDLE%" set "BUNDLE=%SRC%\target\release\bundle"
+rem Copy only artifacts matching the current version: cargo tauri build never
+rem deletes stale bundles from older releases, so a bare *.exe/*.msi glob would
+rem sweep old-version installers into bin\package (and onto the GitHub Release).
 if not exist "%BIN%\package" mkdir "%BIN%\package"
-copy /Y "%BUNDLE%\nsis\*.exe" "%BIN%\package\"
-copy /Y "%BUNDLE%\msi\*.msi" "%BIN%\package\"
+copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe" "%BIN%\package\"
+copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\"
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
