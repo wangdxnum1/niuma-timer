@@ -1713,3 +1713,186 @@ button:active {
   color: #6b7280;
   text-align: center;
 }
+
+/* ==================== 数据洞察三视图（v1.2.0）：热力 / 趋势 / 身体账单 ==================== */
+/* 洞察页切换用明细同款翻页器（复用 .subnav / .pg-* 通用样式，无新增规则） */
+
+/* ---- 时段热力：7 行 × 24 列 div grid，sqrt 归一 4 级金色阶 ---- */
+.heat-summary {
+  font-size: 12.5px;
+  color: #98989e;
+  margin-bottom: 10px;
+}
+.heat-summary b {
+  color: #ffd650;
+  font-weight: 600;
+}
+.heat-head-row {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 3px;
+  align-items: end;
+}
+.heat-hours {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+}
+.heat-hour-tick {
+  font-size: 9px;
+  color: #6b7280;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.heat-grid {
+  display: grid;
+  grid-template-columns: 34px repeat(24, 1fr);
+  gap: 3px;
+  margin-top: 4px;
+}
+.heat-axis {
+  font-size: 10px;
+  color: #85858b;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  white-space: nowrap;
+}
+.heat-cell {
+  height: 18px;
+  border-radius: 3px;
+  background: #26262a;
+  cursor: default;
+}
+.heat-cell.lv1 {
+  background: #4d3f14;
+}
+.heat-cell.lv2 {
+  background: #8a6d1a;
+}
+.heat-cell.lv3 {
+  background: #c7a227;
+}
+.heat-cell.lv4 {
+  background: #ffd650;
+}
+.heat-cell:not(.lv0):hover {
+  outline: 1px solid rgba(255, 214, 80, 0.6);
+}
+.heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: #6b7280;
+}
+.heat-legend i {
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.heat-lv0 {
+  background: #26262a;
+}
+.heat-lv1 {
+  background: #4d3f14;
+}
+.heat-lv2 {
+  background: #8a6d1a;
+}
+.heat-lv3 {
+  background: #c7a227;
+}
+.heat-lv4 {
+  background: #ffd650;
+}
+.heat-legend-note {
+  margin-left: auto;
+  color: #6b7280;
+}
+
+/* ---- 多周趋势：手写 SVG 折线，金实线入账 + 红细线摸鱼率 ---- */
+.trend-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #98989e;
+}
+.trend-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.trend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.trend-dot.income {
+  background: #ffd650;
+}
+.trend-dot.slack {
+  background: #e0605f;
+}
+.trend-wrap {
+  position: relative;
+  height: 220px;
+}
+.trend-wrap svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.trend-tip {
+  position: absolute;
+  background: #2a2a2e;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 11px;
+  color: #e8e8ea;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -110%);
+  z-index: 5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.trend-xaxis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #6b7280;
+}
+
+/* ---- 身体账单：2×2 指标卡 + 按天金柱（复用 .dash-bars） ---- */
+.body-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.body-kpi .body-k {
+  font-size: 11px;
+  color: #98989e;
+}
+.body-kpi .body-v {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffd650;
+  font-variant-numeric: tabular-nums;
+}
+.body-kpi .body-s {
+  font-size: 11px;
+  color: #6b7280;
+}
+.body-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+}

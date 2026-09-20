@@ -94,7 +94,7 @@ has("分段：仪表盘", html, 'data-bill="dashboard"');
 
 // ---------------------------------------------------------------- 5. app.js 渲染与守卫
 has("invoke get_week_bill", appSrc, 'invoke("get_week_bill", { weekOffset })');
-has("懒渲染：进账单页才拉", appSrc, 'if (id === "viewBill") loadWeekBill();');
+has("懒渲染：进账单页同步翻页器并拉当前页", appSrc, "setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步");
 has("翻周状态 weekOffset", appSrc, "let weekOffset = 0;");
 has("本周封顶", appSrc, "if (next < 0) return;");
 has("四档金句表 WEEK_BILL_QUIPS", appSrc, "const WEEK_BILL_QUIPS");

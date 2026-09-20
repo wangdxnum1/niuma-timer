@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v0494e5f7";
+const FE_VER = "vab00d8fc";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -69,6 +69,8 @@ async function load() {
     $("overtime_rate").value = cfg.overtime_rate ?? 20;
     $("overtime_meal_enabled").checked = !!cfg.overtime_meal_enabled;
     $("overtime_meal").value = cfg.overtime_meal ?? 20;
+    // 旧配置缺该字段时后端 serde 默认下发 true，这里 !== false 与之对齐
+    $("overtime_exclude_remote").checked = cfg.overtime_exclude_remote !== false;
     $("weekend_overtime").checked = !!cfg.weekend_overtime;
     $("weekend_ot_start").value = cfg.weekend_ot_start || "";
     $("overtime_rate_weekend").value = cfg.overtime_rate_weekend ?? "";
@@ -201,6 +203,7 @@ function readCfg() {
     tagline_style: $("tagline_style").value || "dynamic",
     tagline_custom: $("tagline_custom").value || "",
     overtime_enabled: $("overtime_enabled").checked,
+    overtime_exclude_remote: $("overtime_exclude_remote").checked,
     overtime_start: $("overtime_start").value || null,
     overtime_rate: parseFloat($("overtime_rate").value) || 0,
     overtime_meal_enabled: $("overtime_meal_enabled").checked,
@@ -1480,6 +1483,7 @@ $("overtime_enabled").addEventListener("change", () => {
   if (on) loadOvertime();
 });
 $("overtime_meal_enabled").addEventListener("change", saveNow);
+$("overtime_exclude_remote").addEventListener("change", saveNow);
 $("weekend_overtime").addEventListener("change", () => {
   applyRestOvertimeVisibility($("weekend_overtime").checked);
   saveNow();
@@ -1661,7 +1665,7 @@ function showView(id) {
   curView = id;
   // 导航同步（契约见 scripts 目录的导航回归测试）：
   // 侧栏高亮——4 个明细视图都映射到「明细」聚合项，设置项在设置视图点亮；
-  // 翻页器——仅在明细视图显示，页名与圆点跟随当前页
+  // 翻页器——明细 / 账单各一条，仅在对应视图显示，页名与圆点跟随当前页
   const isDetail = DETAIL_VIEWS.includes(id);
   if (isDetail) lastDetailView = id;
   const navKey = isDetail ? "detail" : id;
@@ -1669,6 +1673,7 @@ function showView(id) {
     b.classList.toggle("active", b.dataset.nav === navKey);
   });
   $("detailPager").classList.toggle("hidden", !isDetail);
+  $("billPager").classList.toggle("hidden", id !== "viewBill");
   if (isDetail) {
     const names = {
       viewOt: "加班明细",
@@ -1678,11 +1683,14 @@ function showView(id) {
     };
     $("pgName").textContent = names[id];
   }
-  document.querySelectorAll(".pg-dot").forEach((b) => {
-    b.classList.toggle("active", b.dataset.nav === id);
+  document.querySelectorAll("#detailPager .pg-dot").forEach((b) => {
+    b.classList.toggle("active", b.dataset.nav === id); // 账单翻页器圆点由 setBillTabUI 同步
   });
   if (id === "viewMain") resetHistDates();
-  if (id === "viewBill") loadWeekBill(); // 懒渲染：进账单页才拉（周级聚合不进 tick）
+  if (id === "viewBill") {
+    setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步
+    loadBillTab(); // 懒渲染：进账单页才拉当前页（周级聚合不进 tick）
+  }
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
   repaintCurrentView();
@@ -1790,7 +1798,7 @@ function shiftWeek(delta) {
   const next = weekOffset + delta;
   if (next < 0) return; // 本周封顶，不预看未来
   weekOffset = next;
-  loadWeekBill();
+  loadBillTab(); // 翻周联动当前 tab（账单/热力/趋势/身体），不总是重拉账单
 }
 
 function paintWeekBill() {
@@ -1955,7 +1963,364 @@ function paintDash(bill) {
     : "键鼠监控未开启";
 }
 
+// ---- 洞察三视图（v1.2.0）：时段热力 / 周趋势 / 身体账单 ----
+// 口径与周账单严格一致（见 src-tauri/src/insights.rs）：
+// events = 键鼠全量（滚轮格数不计入）、clicks = 双击折算 1 次、
+// slack_rate = 摸鱼秒 ÷ 前台秒（前台 0 → null，前端断线不画 0）
+
+const WD_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]; // Date.getDay() 索引
+
+let curBillTab = "bill";
+const BILL_TAB_PANES = {
+  bill: "billTabBill",
+  heat: "billTabHeat",
+  trend: "billTabTrend",
+  body: "billTabBody",
+};
+const BILL_TAB_KEYS = ["bill", "heat", "trend", "body"]; // 翻页器循环顺序
+const BILL_TAB_NAMES = { bill: "本周账单", heat: "时段热力", trend: "趋势", body: "身体账单" };
+let heatData = null; // 各 tab 最近一次返回缓存（仅当前 tab 会被重画）
+let trendData = null;
+let bodyData = null;
+
+function setBillTabUI(tab) {
+  curBillTab = BILL_TAB_PANES[tab] ? tab : "bill";
+  // 账单翻页器（与明细同款）：页名跟随当前页，圆点只在 billPager 内点亮
+  $("billPgName").textContent = BILL_TAB_NAMES[curBillTab];
+  document.querySelectorAll("#billPager .pg-dot").forEach((b) => {
+    b.classList.toggle("active", b.dataset.btab === curBillTab);
+  });
+  Object.entries(BILL_TAB_PANES).forEach(([key, id]) =>
+    $(id).classList.toggle("hidden", key !== curBillTab)
+  );
+}
+
+// 懒加载分发：进页 / 切 tab / 翻周才拉对应命令（周级聚合，不进 tick 轮询）
+async function loadBillTab() {
+  if (curBillTab === "bill") return loadWeekBill();
+  if (curBillTab === "heat") return loadHourHeat();
+  if (curBillTab === "trend") return loadWeekTrend();
+  return loadBodyBill();
+}
+
+// 账单页顶部周导航随当前 tab 的数据更新（后端已封顶未来周，周日晚 ≥ 今天即本周）
+function paintBillNav(startIso, endIso) {
+  $("billWeekLabel").textContent =
+    String(startIso).slice(5).replace("-", ".") + "–" + String(endIso).slice(5).replace("-", ".");
+  $("billNextWeek").disabled = String(endIso) >= todayStr();
+}
+
+function fmtWan(n) {
+  n = Number(n) || 0;
+  return n >= 10000 ? (n / 10000).toFixed(1) + " 万" : String(n);
+}
+
+// ISO 日期（YYYY-MM-DD）+n 天，本地时区
+function isoAddDays(iso, n) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return fmtYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+// ---- 时段热力：7 行（周一~周日）× 24 列（0-23 时），sqrt 归一 4 级金色阶 ----
+
+async function loadHourHeat() {
+  if (curView !== "viewBill") return;
+  try {
+    heatData = await invoke("get_hour_heatmap", { weekOffset });
+    paintHourHeat();
+  } catch (e) {
+    flog("get_hour_heatmap ERR: " + (e && e.message ? e.message : String(e)));
+    $("heatSummary").textContent = "热力图加载失败";
+  }
+}
+
+// sqrt 归一拉开低值区分度：v≤0 → 0 级；>0 → 1+min(3, floor(sqrt(v/max)×4)) ∈ 1..4
+function heatLevel(v, max) {
+  if (v <= 0 || max <= 0) return 0;
+  return 1 + Math.min(3, Math.floor(Math.sqrt(v / max) * 4));
+}
+
+function paintHourHeat() {
+  const heat = heatData;
+  if (!heat || curView !== "viewBill") return;
+  paintBillNav(heat.week_start, heat.week_end);
+  const cells = heat.cells || [];
+  const hasCells = cells.length > 0;
+  $("heatEmpty").classList.toggle("hidden", hasCells);
+  $("heatSummary").classList.toggle("hidden", !hasCells);
+  $("heatGrid").closest("section").classList.toggle("hidden", !hasCells);
+  if (!hasCells) return;
+
+  const total = cells.reduce((s, c) => s + (c.events || 0), 0);
+  const summary = $("heatSummary");
+  summary.textContent = "";
+  const peak = document.createElement("b");
+  peak.textContent = heat.peak_hour == null ? "—" : heat.peak_hour + " 时";
+  summary.append("最忙时段 ", peak, " · 全周键鼠 " + fmtWan(total) + " 次");
+
+  // 列标 0-23 只建一次（静态内容，翻周不重建）
+  const hours = $("heatHours");
+  if (!hours.childElementCount) {
+    for (let h = 0; h < 24; h++) {
+      const t = document.createElement("span");
+      t.className = "heat-hour-tick";
+      t.textContent = h;
+      hours.append(t);
+    }
+  }
+
+  const maxEvents = Math.max(0, ...cells.map((c) => c.events || 0));
+  const byKey = new Map(cells.map((c) => [c.date + " " + c.hour, c]));
+  const grid = $("heatGrid");
+  grid.textContent = "";
+  for (let i = 0; i < 7; i++) {
+    const date = isoAddDays(heat.week_start, i);
+    const rowLabel = document.createElement("span");
+    rowLabel.className = "heat-axis";
+    rowLabel.textContent = WD_CN[new Date(date + "T00:00:00").getDay()];
+    grid.append(rowLabel);
+    for (let h = 0; h < 24; h++) {
+      const cell = document.createElement("div");
+      const c = byKey.get(date + " " + h);
+      const ev = c ? c.events || 0 : 0;
+      const lv = heatLevel(ev, maxEvents);
+      cell.className = "heat-cell lv" + lv;
+      if (c)
+        cell.title =
+          WD_CN[new Date(date + "T00:00:00").getDay()] +
+          " " +
+          h +
+          ":00 · 键鼠 " +
+          fmtWan(ev) +
+          " 次" +
+          (c.front_secs > 0 ? " · 前台 " + (c.front_secs / 3600).toFixed(1) + "h" : "") +
+          (c.audio_secs > 0 ? " · 在响 " + (c.audio_secs / 3600).toFixed(1) + "h" : "");
+      grid.append(cell);
+    }
+  }
+}
+
+// ---- 周趋势：手写 SVG 折线（无外部库）——金线周入账，红细线摸鱼率，null 断线 ----
+
+async function loadWeekTrend() {
+  if (curView !== "viewBill") return;
+  try {
+    trendData = await invoke("get_week_trend", { weekOffset });
+    paintWeekTrend();
+  } catch (e) {
+    flog("get_week_trend ERR: " + (e && e.message ? e.message : String(e)));
+    $("billWeekLabel").textContent = "趋势加载失败";
+  }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function paintWeekTrend() {
+  const trend = trendData;
+  if (!trend || curView !== "viewBill") return;
+  const pts = trend.points || [];
+  const last = pts[pts.length - 1];
+  if (last) paintBillNav(last.week_start, isoAddDays(last.week_start, 6));
+  // 空窗口：八周全零收入且无前台记录（slack_rate 全 null）→ 不画一条趴地的 0 线
+  const hasData = pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null);
+  $("trendSvg").closest("section").classList.toggle("hidden", !hasData);
+  $("trendEmpty").classList.toggle("hidden", hasData);
+  if (!hasData) return;
+
+  // 绘图区：viewBox 640×220（preserveAspectRatio=none，px 换算 x/640·y/220 各自缩放）
+  const L = 16,
+    R = 624,
+    T = 18,
+    B = 196;
+  const n = pts.length;
+  const xAt = (i) => L + (i * (R - L)) / Math.max(1, n - 1);
+  const maxIncome = Math.max(0, ...pts.map((p) => p.income || 0));
+  const yIncome = (v) => B - (maxIncome > 0 ? (v / maxIncome) * (B - T) : 0);
+  const ySlack = (r) => B - (r || 0) * (B - T);
+
+  const svg = $("trendSvg");
+  svg.textContent = "";
+  // 底轴 + 三条半高参考线（弱化，只作视觉锚）
+  svg.append(
+    svgEl("line", { x1: L, y1: B, x2: R, y2: B, stroke: "rgba(255,255,255,0.12)", "stroke-width": 1 })
+  );
+  [0.25, 0.5, 0.75].forEach((g) =>
+    svg.append(
+      svgEl("line", {
+        x1: L,
+        y1: (B - g * (B - T)).toFixed(1),
+        x2: R,
+        y2: (B - g * (B - T)).toFixed(1),
+        stroke: "rgba(255,255,255,0.05)",
+        "stroke-width": 1,
+      })
+    )
+  );
+
+  // 金实线：周入账（口径同账单页 total_income；无记录周 0 照画）
+  svg.append(
+    svgEl("polyline", {
+      points: pts.map((p, i) => xAt(i).toFixed(1) + "," + yIncome(p.income).toFixed(1)).join(" "),
+      fill: "none",
+      stroke: "#ffd650",
+      "stroke-width": 2,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    })
+  );
+
+  // 红细线：摸鱼率 0-1 归一；null（该周无前台记录）断线成多段
+  const seg = [];
+  const flushSeg = () => {
+    if (seg.length > 1)
+      svg.append(
+        svgEl("polyline", {
+          points: seg.join(" "),
+          fill: "none",
+          stroke: "#e0605f",
+          "stroke-width": 1.5,
+          opacity: 0.85,
+        })
+      );
+    seg.length = 0;
+  };
+  pts.forEach((p, i) => {
+    if (p.slack_rate == null) flushSeg();
+    else seg.push(xAt(i).toFixed(1) + "," + ySlack(p.slack_rate).toFixed(1));
+  });
+  flushSeg();
+
+  pts.forEach((p, i) => {
+    svg.append(
+      svgEl("circle", { cx: xAt(i).toFixed(1), cy: yIncome(p.income).toFixed(1), r: 3, fill: "#ffd650" })
+    );
+    if (p.slack_rate != null)
+      svg.append(
+        svgEl("circle", { cx: xAt(i).toFixed(1), cy: ySlack(p.slack_rate).toFixed(1), r: 2.5, fill: "#e0605f" })
+      );
+  });
+
+  // x 轴周标签（M.D）
+  const xa = $("trendXAxis");
+  xa.textContent = "";
+  pts.forEach((p) => {
+    const s = document.createElement("span");
+    s.textContent = String(p.week_start || "").slice(5).replace("-", ".");
+    xa.append(s);
+  });
+
+  // 悬停热区：每点一条竖带，最近邻取值 → trendTip（px 坐标按实际尺寸换算并防出边）
+  const tip = $("trendTip");
+  const zoneW = (R - L) / n;
+  const wrap = $("trendSvg").parentElement;
+  pts.forEach((p, i) => {
+    const z = svgEl("rect", {
+      x: (L + i * zoneW).toFixed(1),
+      y: T,
+      width: zoneW.toFixed(1),
+      height: B - T,
+      fill: "transparent",
+      "pointer-events": "all",
+    });
+    z.addEventListener("mouseenter", () => {
+      const range =
+        String(p.week_start || "").slice(5).replace("-", ".") +
+        "–" +
+        isoAddDays(p.week_start, 6).slice(5).replace("-", ".");
+      const rate = p.slack_rate == null ? "—" : Math.round(p.slack_rate * 100) + "%";
+      tip.textContent = range + " · 入账 " + fmtMoney(p.income) + " · 摸鱼率 " + rate;
+      const px = Math.max(
+        70,
+        Math.min(wrap.clientWidth - 70, (xAt(i) / 640) * wrap.clientWidth)
+      );
+      const py = (yIncome(p.income) / 220) * wrap.clientHeight;
+      tip.style.left = px.toFixed(0) + "px";
+      tip.style.top = py.toFixed(0) + "px";
+      tip.classList.remove("hidden");
+    });
+    z.addEventListener("mouseleave", () => tip.classList.add("hidden"));
+    svg.append(z);
+  });
+}
+
+// ---- 身体账单：一周键鼠损耗四指标 + 按天金柱（复用 dash-bars 单柱模式） ----
+
+async function loadBodyBill() {
+  if (curView !== "viewBill") return;
+  try {
+    bodyData = await invoke("get_body_bill", { weekOffset });
+    paintBodyBill();
+  } catch (e) {
+    flog("get_body_bill ERR: " + (e && e.message ? e.message : String(e)));
+    $("billWeekLabel").textContent = "身体账单加载失败";
+  }
+}
+
+// 像素 → 米（96dpi 估算：1in = 96px = 2.54cm）
+function fmtMeters(px) {
+  return (((Number(px) || 0) * 2.54) / 96 / 100).toFixed(1) + " m";
+}
+
+function paintBodyBill() {
+  const body = bodyData;
+  if (!body || curView !== "viewBill") return;
+  paintBillNav(body.week_start, body.week_end);
+  const days = body.days || [];
+  const hasData = days.some((d) => (d.events || 0) > 0);
+  $("bodyEmpty").classList.toggle("hidden", hasData);
+  $("bodyClicks").closest(".body-grid").classList.toggle("hidden", !hasData);
+  $("bodyBusiest").closest("section").classList.toggle("hidden", !hasData);
+  if (!hasData) return;
+
+  const recDays = Math.max(1, days.filter((d) => (d.events || 0) > 0).length);
+  $("bodyClicks").textContent = fmtWan(body.clicks) + " 次";
+  $("bodyClicksAvg").textContent = "日均 " + fmtWan(Math.round(body.clicks / recDays)) + " 次";
+  $("bodyKeys").textContent = fmtWan(body.keys) + " 次";
+  $("bodyKeysAvg").textContent = "日均 " + fmtWan(Math.round(body.keys / recDays)) + " 次";
+  $("bodyPixels").textContent = fmtMeters(body.pixels);
+  $("bodyPixelsAvg").textContent = "日均 " + fmtMeters(body.pixels / recDays) + "（96dpi 估算）";
+  $("bodyWheel").textContent = fmtWan(body.wheel_ticks) + " 格";
+  $("bodyWheelAvg").textContent = "日均 " + fmtWan(Math.round(body.wheel_ticks / recDays)) + " 格";
+
+  $("bodyBusiest").textContent = body.busiest
+    ? "最累 " + body.busiest.weekday + " · 键鼠 " + fmtWan(body.busiest.events) + " 次"
+    : "";
+
+  // 按天键鼠单金柱：events 归一保底 3%，未来日不画
+  const bars = $("bodyBars");
+  bars.textContent = "";
+  const today = todayStr();
+  const maxEv = Math.max(0.01, ...days.map((d) => d.events || 0));
+  days.forEach((d) => {
+    const col = document.createElement("div");
+    col.className = "bar-col";
+    const pair = document.createElement("div");
+    pair.className = "bar-pair";
+    if (String(d.date) <= today && (d.events || 0) > 0) {
+      const bar = document.createElement("div");
+      bar.className = "bar bar-earn";
+      bar.style.height = Math.max(3, ((d.events || 0) / maxEv) * 100) + "%";
+      pair.append(bar);
+    }
+    const wd = document.createElement("div");
+    wd.className = "bar-wd";
+    wd.textContent = d.weekday || "";
+    col.append(pair, wd);
+    bars.append(col);
+  });
+
+  $("bodyFoot").textContent = "点击 = 单击+右键+中键+侧键，双击折算 1 次 · 滑行距离按 96dpi 估算";
+}
+
 // 账单页绑定：翻周 + 设置里的风格分段（切风格用缓存重画，免重拉）
+// 洞察翻页交互（billPager）绑定见文件尾部明细翻页器旁，共用冷却逻辑
 $("billPrevWeek").addEventListener("click", () => shiftWeek(1));
 $("billExportBtn").addEventListener("click", exportWeekBillCsv);
 $("billNextWeek").addEventListener("click", () => shiftWeek(-1));
@@ -1983,7 +2348,7 @@ function pgStep(delta) {
 }
 $("pgPrev").addEventListener("click", () => pgStep(-1));
 $("pgNext").addEventListener("click", () => pgStep(1));
-document.querySelectorAll(".pg-dot").forEach((btn) => {
+document.querySelectorAll("#detailPager .pg-dot").forEach((btn) => {
   btn.addEventListener("click", () => showView(btn.dataset.nav));
 });
 
@@ -2012,6 +2377,43 @@ DETAIL_VIEWS.forEach((vid) => {
     { passive: true }
   );
 });
+
+// 账单翻页器：与明细同款交互——‹ › 循环切洞察页（账单→热力→趋势→身体→账单），
+// 圆点直达；滚轮翻页与明细共用 wheelFlipUntil 冷却（两条翻页器不同时可见）
+function billStep(delta) {
+  const i = BILL_TAB_KEYS.indexOf(curBillTab);
+  if (i < 0) return;
+  setBillTabUI(BILL_TAB_KEYS[(i + delta + BILL_TAB_KEYS.length) % BILL_TAB_KEYS.length]);
+  loadBillTab();
+}
+$("billPgPrev").addEventListener("click", () => billStep(-1));
+$("billPgNext").addEventListener("click", () => billStep(1));
+document.querySelectorAll("#billPager .pg-dot").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setBillTabUI(btn.dataset.btab);
+    loadBillTab();
+  });
+});
+$("viewBill").addEventListener(
+  "wheel",
+  (e) => {
+    if (Date.now() < wheelFlipUntil) return;
+    const el = e.currentTarget;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    if (!atTop && !atBottom) return;
+    const i = BILL_TAB_KEYS.indexOf(curBillTab);
+    if (i < 0) return;
+    if (e.deltaY > 0 && atBottom) {
+      wheelFlipUntil = Date.now() + 500;
+      billStep(1);
+    } else if (e.deltaY < 0 && atTop) {
+      wheelFlipUntil = Date.now() + 500;
+      billStep(-1);
+    }
+  },
+  { passive: true }
+);
 
 // 启动即把三页导航条初始化为「今天」，并禁用「后一天」
 for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
@@ -2050,7 +2452,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=0494e5f7 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=ab00d8fc = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

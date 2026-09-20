@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=0494e5f7" />
+    <link rel="stylesheet" href="styles.css?v=ab00d8fc" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -77,6 +77,21 @@
         <button class="pg-dot" data-nav="viewAct" title="键鼠明细"></button>
         <button class="pg-dot" data-nav="viewApp" title="应用明细"></button>
         <button class="pg-dot" data-nav="viewAudio" title="媒体明细"></button>
+      </div>
+    </div>
+
+    <!-- 账单翻页器：与明细同款交互（‹ 页名 › 循环 + 圆点直达 + 滚轮翻页），仅在账单视图可见 -->
+    <div class="subnav hidden" id="billPager">
+      <div class="pg-row">
+        <button class="pg-btn" id="billPgPrev" aria-label="上一页">‹</button>
+        <span class="pg-name" id="billPgName">本周账单</span>
+        <button class="pg-btn" id="billPgNext" aria-label="下一页">›</button>
+      </div>
+      <div class="pg-dots">
+        <button class="pg-dot" data-btab="bill" title="本周账单"></button>
+        <button class="pg-dot" data-btab="heat" title="时段热力"></button>
+        <button class="pg-dot" data-btab="trend" title="趋势"></button>
+        <button class="pg-dot" data-btab="body" title="身体账单"></button>
       </div>
     </div>
 
@@ -204,56 +219,137 @@
       </section>
     </div>
 
-    <!-- 二级页面：周账单（小票/仪表盘双风格，同一 WeekBill 数据两套渲染；
-         懒渲染契约：进入本页才拉 get_week_bill，不接 tick 轮询——周级聚合） -->
+    <!-- 二级页面：周账单。四个洞察页：本周账单（小票/仪表盘双风格）+ 时段热力 + 趋势 + 身体账单，
+         切页交互与明细一致（顶部翻页器 + 滚轮翻页，翻页器 DOM 在 detailPager 旁的 billPager）；
+         共用周导航翻周；懒渲染契约：切页 / 翻周才拉对应命令，不接 tick 轮询——周级聚合 -->
     <div class="app hidden" id="viewBill">
       <div class="month-nav">
         <button id="billPrevWeek" class="mn-btn">‹ 上一周</button>
         <span id="billWeekLabel" class="mn-label">—</span>
         <button id="billNextWeek" class="mn-btn">下一周 ›</button>
       </div>
-      <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button></div>
 
-      <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
-      <div id="billEmpty" class="bill-empty hidden">
-        <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
-        <div class="bill-empty-txt">这一周还没有打工记录</div>
-      </div>
+      <!-- tab 1：本周账单（原有双风格内容原样保留，导出 CSV 只对本 tab 有意义） -->
+      <div id="billTabBill">
+        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button></div>
 
-      <!-- 风格一：小票（默认）。纸白票面 + 虚线行 + 7 日金条 + 右下红章 -->
-      <div id="billReceipt" class="receipt hidden">
-        <div class="rcp-head">
-          <div class="rcp-title">本周打工账单</div>
-          <div class="rcp-no" id="rcpNo">NO.000000</div>
+        <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
+        <div id="billEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">这一周还没有打工记录</div>
         </div>
-        <div class="rcp-amount-label">本周总入账</div>
-        <div class="rcp-amount" id="rcpAmount">¥0.00</div>
-        <div class="rcp-quote" id="rcpQuote"></div>
-        <div class="rcp-lines" id="rcpLines"></div>
-        <div class="rcp-days" id="rcpDays"></div>
-        <div class="rcp-footnote" id="rcpFootNote"></div>
-        <div class="rcp-stamp" aria-hidden="true">已验讫</div>
+
+        <!-- 风格一：小票（默认）。纸白票面 + 虚线行 + 7 日金条 + 右下红章 -->
+        <div id="billReceipt" class="receipt hidden">
+          <div class="rcp-head">
+            <div class="rcp-title">本周打工账单</div>
+            <div class="rcp-no" id="rcpNo">NO.000000</div>
+          </div>
+          <div class="rcp-amount-label">本周总入账</div>
+          <div class="rcp-amount" id="rcpAmount">¥0.00</div>
+          <div class="rcp-quote" id="rcpQuote"></div>
+          <div class="rcp-lines" id="rcpLines"></div>
+          <div class="rcp-days" id="rcpDays"></div>
+          <div class="rcp-footnote" id="rcpFootNote"></div>
+          <div class="rcp-stamp" aria-hidden="true">已验讫</div>
+        </div>
+
+        <!-- 风格二：仪表盘。KPI 环比 + 2×2 指标格 + 最累/最摸 + 每日双柱 + 键鼠脚注 -->
+        <div id="billDash" class="bill-dash hidden">
+          <section class="card">
+            <div class="kpi-row">
+              <div class="kpi-val" id="kpiAmount">¥0.00</div>
+              <div class="kpi-delta" id="kpiDelta"></div>
+            </div>
+            <div class="mini-grid">
+              <div class="mini"><span class="mini-k">基本工资</span><span class="mini-v" id="miniSalary">—</span></div>
+              <div class="mini"><span class="mini-k">加班费</span><span class="mini-v" id="miniOt">—</span></div>
+              <div class="mini"><span class="mini-k">摸鱼成本</span><span class="mini-v" id="miniSlack">—</span></div>
+              <div class="mini"><span class="mini-k">出勤工时</span><span class="mini-v" id="miniHours">—</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="dash-extreme" id="dashExtreme"></div>
+            <div class="dash-bars" id="dashBars"></div>
+            <div class="dash-foot" id="dashFoot"></div>
+          </section>
+        </div>
       </div>
 
-      <!-- 风格二：仪表盘。KPI 环比 + 2×2 指标格 + 最累/最摸 + 每日双柱 + 键鼠脚注 -->
-      <div id="billDash" class="bill-dash hidden">
+      <!-- tab 2：时段热力图。7 行（周一~周日）× 24 列（0-23 时），键鼠事件 sqrt 归一 4 级金阶 -->
+      <div id="billTabHeat" class="hidden">
+        <div class="heat-summary" id="heatSummary"></div>
         <section class="card">
-          <div class="kpi-row">
-            <div class="kpi-val" id="kpiAmount">¥0.00</div>
-            <div class="kpi-delta" id="kpiDelta"></div>
+          <div class="heat-head-row">
+            <span class="heat-axis">时</span>
+            <div class="heat-hours" id="heatHours"></div>
           </div>
-          <div class="mini-grid">
-            <div class="mini"><span class="mini-k">基本工资</span><span class="mini-v" id="miniSalary">—</span></div>
-            <div class="mini"><span class="mini-k">加班费</span><span class="mini-v" id="miniOt">—</span></div>
-            <div class="mini"><span class="mini-k">摸鱼成本</span><span class="mini-v" id="miniSlack">—</span></div>
-            <div class="mini"><span class="mini-k">出勤工时</span><span class="mini-v" id="miniHours">—</span></div>
+          <div id="heatGrid" class="heat-grid"></div>
+          <div class="heat-legend">
+            <span>少</span>
+            <i class="heat-lv0"></i><i class="heat-lv1"></i><i class="heat-lv2"></i><i class="heat-lv3"></i><i class="heat-lv4"></i>
+            <span>多</span>
+            <span class="heat-legend-note">颜色越亮 = 键鼠越忙</span>
           </div>
         </section>
+        <div id="heatEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">这一周还没有键鼠记录</div>
+        </div>
+      </div>
+
+      <!-- tab 3：多周趋势。手写 SVG 折线（无外部库）：金线=周入账，红线=周摸鱼率（null 断线） -->
+      <div id="billTabTrend" class="hidden">
         <section class="card">
-          <div class="dash-extreme" id="dashExtreme"></div>
-          <div class="dash-bars" id="dashBars"></div>
-          <div class="dash-foot" id="dashFoot"></div>
+          <div class="trend-legend">
+            <span class="trend-key"><i class="trend-dot income"></i>周入账</span>
+            <span class="trend-key"><i class="trend-dot slack"></i>周摸鱼率</span>
+          </div>
+          <div class="trend-wrap">
+            <svg id="trendSvg" viewBox="0 0 640 220" preserveAspectRatio="none"></svg>
+            <div id="trendTip" class="trend-tip hidden"></div>
+          </div>
+          <div class="trend-xaxis" id="trendXAxis"></div>
         </section>
+        <div id="trendEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">最近八周还没有打工记录</div>
+        </div>
+      </div>
+
+      <!-- tab 4：身体账单。一周键鼠损耗四指标 + 按天分布 + 最累日 -->
+      <div id="billTabBody" class="hidden">
+        <div class="body-grid">
+          <section class="card body-kpi">
+            <div class="body-k">手指点击</div>
+            <div class="body-v" id="bodyClicks">—</div>
+            <div class="body-s" id="bodyClicksAvg"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">键盘敲击</div>
+            <div class="body-v" id="bodyKeys">—</div>
+            <div class="body-s" id="bodyKeysAvg"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">鼠标滑行</div>
+            <div class="body-v" id="bodyPixels">—</div>
+            <div class="body-s" id="bodyPixelsAvg"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">滚轮滚动</div>
+            <div class="body-v" id="bodyWheel">—</div>
+            <div class="body-s" id="bodyWheelAvg"></div>
+          </section>
+        </div>
+        <section class="card">
+          <div class="dash-extreme" id="bodyBusiest"></div>
+          <div class="dash-bars" id="bodyBars"></div>
+          <div class="body-foot" id="bodyFoot"></div>
+        </section>
+        <div id="bodyEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">这一周还没有键鼠记录</div>
+        </div>
       </div>
     </div>
 
@@ -382,6 +478,11 @@
           <span>启用加班追踪</span>
           <input id="overtime_enabled" type="checkbox" class="switch" />
         </label>
+        <label class="switch-row">
+          <span>远程会话不计加班</span>
+          <input id="overtime_exclude_remote" type="checkbox" class="switch" />
+        </label>
+        <p class="hint">检测到远程桌面会话时暂停自动加班记录，回到本机后继续；手动补录的加班不受影响</p>
         <label>
           <span>加班起算时间（留空=下班时间）</span>
           <input id="overtime_start" type="time" placeholder="下班时间" />
@@ -580,6 +681,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=0494e5f7"></script>
+    <script src="app.js?v=ab00d8fc"></script>
   </body>
 </html>

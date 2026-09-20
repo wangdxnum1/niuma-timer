@@ -30,6 +30,9 @@
     "allow-get-storage-info",
     "allow-run-maintenance",
     "allow-get-week-bill",
-    "allow-export-csv"
+    "allow-export-csv",
+    "allow-get-body-bill",
+    "allow-get-hour-heatmap",
+    "allow-get-week-trend"
   ]
 }

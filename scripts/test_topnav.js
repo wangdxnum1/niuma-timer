@@ -98,7 +98,7 @@ for (const [name, src] of [
 // ---------------------------------------------------------------- 3. 侧栏与翻页器绑定
 eq("app.js 绑定 .rail-item 点击", appSrc.includes('querySelectorAll(".rail-item")'), true);
 eq("app.js 侧栏按 navKey 同步高亮", appSrc.includes("b.dataset.nav === navKey"), true);
-eq("app.js 绑定 .pg-dot 直达", appSrc.includes('querySelectorAll(".pg-dot")'), true);
+eq("app.js 绑定明细 .pg-dot 直达", appSrc.includes('querySelectorAll("#detailPager .pg-dot")'), true);
 eq("app.js 绑定 pgPrev", appSrc.includes('$("pgPrev").addEventListener'), true);
 eq("app.js 绑定 pgNext", appSrc.includes('$("pgNext").addEventListener'), true);
 eq("app.js 翻页器仅在明细视图显示", appSrc.includes('classList.toggle("hidden", !isDetail)'), true);
