@@ -12,6 +12,8 @@ mod insights;
 mod lock_monitor;
 mod maintain;
 mod overtime;
+mod pause;
+mod remind;
 mod scheduler;
 mod sync;
 mod tray;
@@ -86,6 +88,21 @@ fn install_crash_log() {
     }));
 }
 
+/// 构建信息：版本 / 编译时间 / git 提交 / 前端指纹。
+///
+/// 同版本号可以构建很多次，光看 `v1.2.0` 分不清用户装的是哪一次构建、哪个提交、
+/// 哪份前端资源。这四项由 build.rs 在编译期注入，用户报问题先看启动日志这一行即可对号入座。
+/// 用 `option_env!` 兜底 `unknown`：源码包（无 .git / 无注入）也要能正常启动。
+fn build_info() -> String {
+    format!(
+        "v{} build={} git={} fe={}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("BUILD_TIME").unwrap_or("unknown"),
+        option_env!("BUILD_GIT").unwrap_or("unknown"),
+        option_env!("BUILD_FE_VER").unwrap_or("unknown"),
+    )
+}
+
 /// 启动致命错误：弹系统消息框（release 无控制台，必须给可见反馈），同时写 panic.log。
 /// 把「双击无反应 / 静默退出」转成可操作的错误提示（尤其是缺 WebView2 的场景）。
 #[cfg(windows)]
@@ -123,7 +140,10 @@ pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
         wd < 5
     });
     let mw = current_monthly_workdays(&cfg, &hol);
-    calc::compute(&cfg, is_workday, mw, now)
+    let mut st = calc::compute(&cfg, is_workday, mw, now);
+    // v1.3.0 守护：暂停状态随每秒状态快照广播（托盘文案 / 前端徽章 / 悬停卡片共用）
+    st.paused = pause::is_paused();
+    st
 }
 
 /// 装载节假日数据并刷新托盘。
@@ -194,6 +214,8 @@ fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) -> Res
     config::save(&merged);
     // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
     apply_monitor_switches(&merged);
+    // 全局快捷键即时生效（开关关闭 → 解注册；开启 → 重新注册）
+    apply_shortcuts(&app, &merged);
     let st = get_status(state.inner());
     tray::update_tray(&app, &st);
     Ok(())
@@ -213,6 +235,43 @@ fn apply_monitor_switches(cfg: &config::Config) {
     // 重开时把当前前台窗口立即纳入统计
     if cfg.monitor_app_usage {
         app_usage::refresh_foreground();
+    }
+}
+
+/// 把配置里的快捷键开关同步到 global-shortcut 插件（启动时与保存配置后调用）。
+/// 先全量解注册再按需注册，保证开关切换后状态一致。
+/// 单个快捷键注册失败（被其他软件占用）只记日志、不中断——快捷键是锦上添花，
+/// 不能因为冲突让设置保存或启动失败。
+fn apply_shortcuts(app: &tauri::AppHandle, cfg: &config::Config) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let mgr = app.global_shortcut();
+    let _ = mgr.unregister_all();
+    if !cfg.shortcuts_enabled {
+        return;
+    }
+    // Alt+Shift+N：显隐主窗（可见 → 隐藏；否则还原 + 显示 + 抢焦点）
+    if let Err(e) = mgr.on_shortcut("Alt+Shift+N", |app, _sc, event| {
+        if event.state == ShortcutState::Pressed {
+            if let Some(w) = app.get_webview_window("main") {
+                if w.is_visible().unwrap_or(false) {
+                    let _ = w.hide();
+                } else {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        }
+    }) {
+        db::debug_log(&format!("全局快捷键 Alt+Shift+N 注册失败（可能被占用）: {e:?}"));
+    }
+    // Alt+Shift+P：切换手动暂停（与托盘菜单同款：暂停前先结算应用使用时长）
+    if let Err(e) = mgr.on_shortcut("Alt+Shift+P", |app, _sc, event| {
+        if event.state == ShortcutState::Pressed {
+            toggle_pause(app);
+        }
+    }) {
+        db::debug_log(&format!("全局快捷键 Alt+Shift+P 注册失败（可能被占用）: {e:?}"));
     }
 }
 
@@ -334,6 +393,69 @@ async fn refresh_holidays(
 #[tauri::command]
 fn get_status_cmd(state: State<AppState>) -> calc::DayStatus {
     get_status(state.inner())
+}
+
+/// 切换手动暂停（托盘菜单 / 全局快捷键 / 前端共用入口）。返回切换后的暂停状态。
+///
+/// 暂停前先结算一段应用使用时长（tick_now）——此刻 is_paused() 仍为 false，
+/// 暂停前的最后一段会正常入账；再晚一步就会被暂停守卫丢掉。
+pub fn toggle_pause(app: &tauri::AppHandle) -> bool {
+    if pause::is_paused() {
+        pause::set_manual(false);
+    } else {
+        app_usage::tick_now();
+        pause::set_manual(true);
+    }
+    let state = app.state::<AppState>();
+    let st = get_status(state.inner());
+    tray::update_tray(app, &st);
+    pause::is_paused()
+}
+
+#[tauri::command]
+fn pause_monitor(app: tauri::AppHandle) -> pause::PauseView {
+    toggle_pause(&app);
+    pause::view()
+}
+
+/// 调试卡「下班提醒」：直发一条真实文案的系统通知，点一下即可验证通知通道
+#[tauri::command]
+fn test_offwork_notify(app: tauri::AppHandle) {
+    let st = get_status(app.state::<AppState>().inner());
+    let (title, body) = remind::offwork_texts(st.earned);
+    remind::notify(&app, &title, &body);
+}
+
+/// 调试卡「休息提醒」：直发久坐提醒文案（分钟数取当前配置阈值），验证通知通道
+#[tauri::command]
+fn test_sedentary_notify(app: tauri::AppHandle) {
+    let cfg = load_config(app.state::<AppState>());
+    let (title, body) = remind::sedentary_texts(cfg.remind_sedentary_minutes as i64);
+    remind::notify(&app, &title, &body);
+}
+
+/// 调试卡「重置提醒状态」：清空下班「今天已提醒」标记与久坐冷却/连续计时。
+/// 下班提醒每天只触发一次，不重置当天就没法再复测真实触发链路。
+#[tauri::command]
+fn reset_remind_state() {
+    remind::reset_state();
+}
+
+/// 调试卡「立即调度」：按真实规则跑一次提醒判定（久坐 + 下班），与后台每 60 秒
+/// 的自动调度走同一函数，用来验证触发条件而不必干等下一拍。
+#[tauri::command]
+fn run_remind_tick(app: tauri::AppHandle) {
+    remind::tick(&app);
+}
+
+/// 调试卡「模拟久坐」：把连续活跃起点前拨到阈值之前，再跑一次真实调度，
+/// 秒级复现「久坐满阈值」的触发链路（判定 / 文案 / 通知 / 状态重置全走真实代码）。
+/// 真实链路阈值最小 1 分钟、tick 又是 60 秒一拍，手工复测至少要等一拍。
+#[tauri::command]
+fn test_sedentary_trigger(app: tauri::AppHandle) {
+    let cfg = load_config(app.state::<AppState>());
+    remind::force_sedentary_since(cfg.remind_sedentary_minutes as i64);
+    remind::tick(&app);
 }
 
 /// 隐藏主窗口（点关闭按钮时调用）
@@ -593,10 +715,17 @@ if (!window.__TAURI__) {
 
 fn main() {
     install_crash_log();
+    // 两条日志都在 .setup 之前：webview 起不来时也能留下「装的是哪一版」的痕迹
+    db::debug_log(&format!("build: {}", build_info()));
+    trace_startup(&format!("build: {}", build_info()));
     let app = tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
         // 并在回调里把已存在的主窗口显示并置前，自己退出。
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
+        // 系统通知（v1.3.0 守护）：主窗隐藏时久坐/下班提醒走系统通知通道
+        .plugin(tauri_plugin_notification::init())
+        // 全局快捷键（v1.3.0 守护）：Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -633,6 +762,27 @@ fn main() {
             }
             trace_startup("setup: window icons set");
 
+            // 绿色 exe 的系统通知通道：AUMID 未注册时 Windows 会静默丢弃 toast
+            //（2026-09-23 排查：exe 放非 target 目录时插件误判已安装、用未注册 AUMID 发通知）。
+            // WinRT toast 的 IconUri 指向 exe 提取图标不稳定，内嵌 ico 落盘后指向文件。
+            // 每次启动幂等注册；失败只记日志，不影响主流程。
+            #[cfg(windows)]
+            {
+                let icon_uri = match crate::win::write_aumid_icon_file(&config::config_dir()) {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(e) => {
+                        db::debug_log(&format!("AUMID 图标写出失败，退回 exe 图标: {e}"));
+                        std::env::current_exe()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    }
+                };
+                let icon = if icon_uri.is_empty() { None } else { Some(icon_uri.as_str()) };
+                if let Err(e) = crate::win::register_aumid(&app.config().identifier, "牛马计时器", icon) {
+                    db::debug_log(&format!("AUMID 注册失败，系统通知将不弹: {e}"));
+                }
+            }
+
             // 创建托盘
             let _tray = tray::create_tray(app)?;
             trace_startup("setup: tray created");
@@ -657,6 +807,10 @@ fn main() {
             // （而非回调里空转），故必须在 activity::start() 之前调用。
             apply_monitor_switches(&sync::lock(&app.state::<AppState>().config, "state.config").clone());
             trace_startup("setup: monitor switches applied");
+
+            // 注册全局快捷键（Alt+Shift+N / Alt+Shift+P，可被配置关闭）
+            apply_shortcuts(app.handle(), &sync::lock(&app.state::<AppState>().config, "state.config").clone());
+            trace_startup("setup: shortcuts applied");
 
             // 启动鼠标/键盘活动统计（Raw Input 旁路采集，常驻托盘即持续统计，输入法零延迟）
             activity::start();
@@ -699,6 +853,12 @@ fn main() {
             save_config,
             refresh_holidays,
             get_status_cmd,
+            pause_monitor,
+            test_offwork_notify,
+            test_sedentary_notify,
+            test_sedentary_trigger,
+            reset_remind_state,
+            run_remind_tick,
             hide_window,
             show_window,
             focus_window,

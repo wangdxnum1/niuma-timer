@@ -219,6 +219,11 @@ fn tick_loop() {
             std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
             continue;
         }
+        if crate::pause::is_paused() {
+            // 手动暂停 / 定时休息：跳过枚举与记账，纯休眠（与停用同等零开销）
+            std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+            continue;
+        }
         match crate::win::audio_meters() {
             // Core Audio 不可用（无渲染设备 / COM 异常）：标记失效，前端据此提示。
             // 旧实现把「枚举失败」和「没有会话」混为一谈，WATCH_OK 一旦置 true 就不回退，

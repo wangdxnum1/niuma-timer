@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=ab00d8fc" />
+    <link rel="stylesheet" href="styles.css?v=fec22d0e" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -353,189 +353,266 @@
       </div>
     </div>
 
-    <!-- 二级页面：设置 -->
-    <div class="app hidden" id="viewSettings">
-      <div class="page-head">
-        <h2>设置</h2>
-      </div>
+<!-- 二级页面：设置（六卡：薪资与作息 → 加班 → 守护 → 数据监控 → 外观 → 系统与数据） -->
+<div class="app hidden" id="viewSettings">
+  <div class="page-head">
+    <h2>设置</h2>
+  </div>
 
-      <section class="card">
-        <h2>功能监控</h2>
-        <label class="switch-row">
-          <span>鼠标键盘活动监控</span>
-          <input id="monitor_activity" type="checkbox" class="switch" />
-        </label>
-        <label class="switch-row">
-          <span>应用使用监控</span>
-          <input id="monitor_app_usage" type="checkbox" class="switch" />
-        </label>
-        <label class="switch-row">
-          <span>媒体播放监控</span>
-          <input id="monitor_audio" type="checkbox" class="switch" />
-        </label>
-        <p class="hint">监控在后台持续运行会占用少量 CPU，不需要的功能可关闭，已统计的数据不受影响</p>
-      </section>
-
-      <section class="card">
-        <h2>数据存储</h2>
-        <label>
-          <span>历史数据保留</span>
-          <select id="retention_days">
-            <option value="0">永久保留（默认）</option>
-            <option value="180">半年</option>
-            <option value="365">1 年</option>
-            <option value="730">2 年</option>
-          </select>
-        </label>
-        <div id="storageInfo" class="storage-box"><span class="hint">读取中…</span></div>
-        <button id="cleanupBtn" class="ghost">立即整理</button>
-        <p class="hint">每天首次启动会自动整理一次。写前日志（WAL）是 SQLite 的临时写入区，程序常驻不退出时它不会自动收缩，整理后通常能从数 MB 降到几十 KB；图标缓存超过 180 天会重新提取。以上都不影响你的数据，只有「保留期」会真正删除历史记录</p>
-      </section>
-
-      <section class="card">
-        <h2>基础配置</h2>
-        <label class="switch-row">
-          <span>开机自动启动</span>
-          <input id="launch_on_boot" type="checkbox" class="switch" />
-        </label>
-        <p class="hint">写入系统启动项（注册表 Run），登录 Windows 时自动在托盘运行；也可随时在任务管理器「启动」页关闭</p>
-        <label>
-          <span>月薪（元）</span>
-          <input id="monthly_salary" type="number" min="0" step="100" />
-        </label>
-        <div class="row">
-          <label>
-            <span>上午上班</span>
-            <input id="am_start" type="time" />
-          </label>
-          <label>
-            <span>上午下班</span>
-            <input id="am_end" type="time" />
-          </label>
-        </div>
-        <div class="row">
-          <label>
-            <span>下午上班</span>
-            <input id="pm_start" type="time" />
-          </label>
-          <label>
-            <span>下午下班</span>
-            <input id="pm_end" type="time" />
-          </label>
-        </div>
-        <label>
-          <span>发薪日（每月几号）</span>
-          <input id="payday" type="number" min="1" max="31" />
-        </label>
-        <label>
-          <span>时长显示格式</span>
-          <select id="duration_format">
-            <option value="hms">几小时几分几秒（如 5小时10分30秒）</option>
-            <option value="hm">几小时几分（如 5小时10分）</option>
-            <option value="h">小数小时（如 5.2h）</option>
-          </select>
-        </label>
-        <label class="switch-row">
-          <span>托盘悬停显示彩色卡片</span>
-          <input id="tray_hover_card" type="checkbox" class="switch" />
-        </label>
-        <label>
-          <span>首页副标题文案</span>
-          <select id="tagline_style">
-            <option value="dynamic">动态状态（随开工 / 快下班自动变）</option>
-            <option value="price">你今天的每一分钟，都明码标价</option>
-            <option value="rise">每一秒，钱都在涨</option>
-            <option value="count">搬砖的每一分钟，都算数</option>
-            <option value="classic">实时计算你今天赚了多少钱（原版）</option>
-            <option value="none">不显示这一行</option>
-            <option value="custom">自定义…</option>
-          </select>
-        </label>
-        <label id="taglineCustomRow">
-          <span>自定义文案</span>
-          <input id="tagline_custom" type="text" maxlength="40" placeholder="写你想看到的那句话" />
-        </label>
-        <p class="hint">副标题显示在主界面顶部。选「动态状态」会随未开工、午休、快下班（剩 30 分钟内）、已下班、休息日自动切换</p>
-        <label>
-          <span>当月实际上班天数（留空=自动）</span>
-          <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
-        </label>
-        <button id="refreshBtn" class="ghost">刷新工作日数据</button>
-        <div id="workdaysInfo" class="hint"></div>
-        <div class="switch-row">
-          <span>账单风格</span>
-          <div class="mon-seg" id="billStyleSeg" role="tablist" aria-label="账单风格切换">
-            <button class="mon-seg-item" data-bill="receipt">小票</button>
-            <button class="mon-seg-item" data-bill="dashboard">仪表盘</button>
-          </div>
-        </div>
-        <p class="hint">小票 = 晒单情绪；仪表盘 = 数据复盘。显示在侧栏「账单」页，切换后返回账单页生效</p>
-      </section>
-
-      <section class="card">
-        <h2>加班配置</h2>
-        <label class="switch-row">
-          <span>启用加班追踪</span>
-          <input id="overtime_enabled" type="checkbox" class="switch" />
-        </label>
-        <label class="switch-row">
-          <span>远程会话不计加班</span>
-          <input id="overtime_exclude_remote" type="checkbox" class="switch" />
-        </label>
-        <p class="hint">检测到远程桌面会话时暂停自动加班记录，回到本机后继续；手动补录的加班不受影响</p>
-        <label>
-          <span>加班起算时间（留空=下班时间）</span>
-          <input id="overtime_start" type="time" placeholder="下班时间" />
-        </label>
-        <label>
-          <span>加班费（元/小时）</span>
-          <input id="overtime_rate" type="number" min="0" step="5" value="20" />
-        </label>
-        <label class="switch-row">
-          <span>饭补</span>
-          <input id="overtime_meal_enabled" type="checkbox" class="switch" />
-        </label>
-        <label>
-          <span>饭补金额（元）</span>
-          <input id="overtime_meal" type="number" min="0" step="5" value="20" />
-        </label>
-        <label class="switch-row">
-          <span>休息日 / 节假日加班</span>
-          <input id="weekend_overtime" type="checkbox" class="switch" />
-        </label>
-        <div id="restOtFields">
-          <label>
-            <span>休息日加班起算时间</span>
-            <input id="weekend_ot_start" type="time" placeholder="09:00" />
-          </label>
-          <label>
-            <span>休息日费率（元/小时）</span>
-            <input id="overtime_rate_weekend" type="number" min="0" step="1" placeholder="同工作日" />
-          </label>
-          <label>
-            <span>法定节假日费率（元/小时）</span>
-            <input id="overtime_rate_holiday" type="number" min="0" step="1" placeholder="同休息日" />
-          </label>
-          <p class="hint">休息日没有「下班时间」概念，起算时间默认 09:00——沿用工作日的 18:00 会让上午来、下午走的人一分钱算不到。费率留空表示沿用上一级（法定节假日 → 休息日 → 工作日）。调休补班日按工作日规则计算，不受本开关影响</p>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>应用使用白名单</h2>
-        <label class="switch-row">
-          <span>仅统计白名单内应用</span>
-          <input id="app_whitelist_enabled" type="checkbox" class="switch" />
-        </label>
-        <p class="hint">关闭或名单为空 = 统计全部前台应用；开启后只统计下方列出的应用（按展示名、大小写不敏感，如「微信」「钉钉」「VS Code」）</p>
-        <div class="wl-editor">
-          <div class="wl-input-row">
-            <input id="appWhitelistInput" type="text" placeholder="输入应用名后点添加" />
-            <button id="appWhitelistAdd" class="primary wl-add">添加</button>
-          </div>
-          <div id="appWhitelistList" class="wl-list"></div>
-        </div>
-      </section>
+  <!-- 卡①：怎么算钱（原「基础配置」拆出） -->
+  <section class="card">
+    <h2>薪资与作息</h2>
+    <div class="row">
+      <label>
+        <span>月薪（元）</span>
+        <input id="monthly_salary" type="number" min="0" step="100" />
+      </label>
+      <label>
+        <span>发薪日（每月几号）</span>
+        <input id="payday" type="number" min="1" max="31" />
+      </label>
     </div>
+    <label>
+      <span>当月实际上班天数（留空=自动）</span>
+      <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
+    </label>
+    <button id="refreshBtn" class="ghost">刷新工作日数据</button>
+    <div id="workdaysInfo" class="hint"></div>
+    <div class="sub-section">
+      <div class="time-grid">
+        <label>
+          <span>上午上班</span>
+          <input id="am_start" type="time" />
+        </label>
+        <label>
+          <span>上午下班</span>
+          <input id="am_end" type="time" />
+        </label>
+        <label>
+          <span>下午上班</span>
+          <input id="pm_start" type="time" />
+        </label>
+        <label>
+          <span>下午下班</span>
+          <input id="pm_end" type="time" />
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- 卡②：加班（原「加班配置」，长说明收进折叠） -->
+  <section class="card">
+    <h2>加班</h2>
+    <label class="switch-row">
+      <span>启用加班追踪</span>
+      <input id="overtime_enabled" type="checkbox" class="switch" />
+    </label>
+    <label class="switch-row">
+      <span>远程会话不计加班</span>
+      <input id="overtime_exclude_remote" type="checkbox" class="switch" />
+    </label>
+    <p class="hint">检测到远程桌面会话时暂停自动加班记录，回到本机后继续</p>
+    <label>
+      <span>加班起算时间（留空=下班时间）</span>
+      <input id="overtime_start" type="time" placeholder="下班时间" />
+    </label>
+    <label>
+      <span>加班费（元/小时）</span>
+      <input id="overtime_rate" type="number" min="0" step="5" value="20" />
+    </label>
+    <label class="switch-row">
+      <span>饭补</span>
+      <input id="overtime_meal_enabled" type="checkbox" class="switch" />
+    </label>
+    <label>
+      <span>饭补金额（元）</span>
+      <input id="overtime_meal" type="number" min="0" step="5" value="20" />
+    </label>
+    <div class="sub-section">
+      <label class="switch-row">
+        <span>休息日 / 节假日加班</span>
+        <input id="weekend_overtime" type="checkbox" class="switch" />
+      </label>
+      <div id="restOtFields">
+        <label>
+          <span>休息日加班起算时间</span>
+          <input id="weekend_ot_start" type="time" placeholder="09:00" />
+        </label>
+        <label>
+          <span>休息日费率（元/小时）</span>
+          <input id="overtime_rate_weekend" type="number" min="0" step="1" placeholder="同工作日" />
+        </label>
+        <label>
+          <span>法定节假日费率（元/小时）</span>
+          <input id="overtime_rate_holiday" type="number" min="0" step="1" placeholder="同休息日" />
+        </label>
+        <details class="hint-details">
+          <summary>详情</summary>
+          <p>休息日没有「下班时间」概念，起算时间默认 09:00——沿用工作日的 18:00 会让上午来、下午走的人一分钱算不到。费率留空表示沿用上一级（法定节假日 → 休息日 → 工作日）。调休补班日按工作日规则计算，不受本开关影响</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- 卡③：守护（v1.3.0，hint 压一行 + 折叠） -->
+  <section class="card">
+    <h2>守护</h2>
+    <label class="switch-row">
+      <span>久坐提醒</span>
+      <input id="remind_sedentary_enabled" type="checkbox" class="switch" />
+    </label>
+    <label>
+      <span>连续活跃阈值（分钟）</span>
+      <input id="remind_sedentary_minutes" type="number" min="1" max="120" step="1" />
+    </label>
+    <label class="switch-row">
+      <span>下班提醒</span>
+      <input id="remind_offwork_enabled" type="checkbox" class="switch" />
+    </label>
+    <!-- shortcuts_enabled 关闭后 Rust 端 apply_shortcuts 会注销全部全局快捷键 -->
+    <label class="switch-row">
+      <span>全局快捷键</span>
+      <input id="shortcuts_enabled" type="checkbox" class="switch" />
+    </label>
+    <p class="hint">Alt+Shift+N 显隐主窗 · Alt+Shift+P 暂停/恢复监控</p>
+    <details class="hint-details">
+      <summary>详情</summary>
+      <p>提醒通过系统通知发送；快捷键与其他软件冲突时可关闭此开关</p>
+    </details>
+  </section>
+
+  <!-- 卡④：数据监控（原「功能监控」+「应用使用白名单」合并） -->
+  <section class="card">
+    <h2>数据监控</h2>
+    <label class="switch-row">
+      <span>鼠标键盘活动监控</span>
+      <input id="monitor_activity" type="checkbox" class="switch" />
+    </label>
+    <label class="switch-row">
+      <span>应用使用监控</span>
+      <input id="monitor_app_usage" type="checkbox" class="switch" />
+    </label>
+    <label class="switch-row">
+      <span>媒体播放监控</span>
+      <input id="monitor_audio" type="checkbox" class="switch" />
+    </label>
+    <p class="hint">监控在后台持续运行会占用少量 CPU，关闭不影响已统计数据</p>
+    <div class="sub-section">
+      <label class="switch-row">
+        <span>仅统计白名单内应用</span>
+        <input id="app_whitelist_enabled" type="checkbox" class="switch" />
+      </label>
+      <details class="hint-details">
+        <summary>详情</summary>
+        <p>关闭或名单为空 = 统计全部前台应用；开启后只统计下方列出的应用（按展示名、大小写不敏感，如「微信」「钉钉」「VS Code」）</p>
+      </details>
+      <div class="wl-editor">
+        <div class="wl-input-row">
+          <input id="appWhitelistInput" type="text" placeholder="输入应用名后点添加" />
+          <button id="appWhitelistAdd" class="primary wl-add">添加</button>
+        </div>
+        <div id="appWhitelistList" class="wl-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 卡⑤：外观（原「基础配置」拆出） -->
+  <section class="card">
+    <h2>外观</h2>
+    <label>
+      <span>时长显示格式</span>
+      <select id="duration_format">
+        <option value="hms">几小时几分几秒（如 5小时10分30秒）</option>
+        <option value="hm">几小时几分（如 5小时10分）</option>
+        <option value="h">小数小时（如 5.2h）</option>
+      </select>
+    </label>
+    <label>
+      <span>首页副标题文案</span>
+      <select id="tagline_style">
+        <option value="dynamic">动态状态（随开工 / 快下班自动变）</option>
+        <option value="price">你今天的每一分钟，都明码标价</option>
+        <option value="rise">每一秒，钱都在涨</option>
+        <option value="count">搬砖的每一分钟，都算数</option>
+        <option value="classic">实时计算你今天赚了多少钱（原版）</option>
+        <option value="none">不显示这一行</option>
+        <option value="custom">自定义…</option>
+      </select>
+    </label>
+    <label id="taglineCustomRow">
+      <span>自定义文案</span>
+      <input id="tagline_custom" type="text" maxlength="40" placeholder="写你想看到的那句话" />
+    </label>
+    <details class="hint-details">
+      <summary>详情</summary>
+      <p>副标题显示在主界面顶部。选「动态状态」会随未开工、午休、快下班（剩 30 分钟内）、已下班、休息日自动切换</p>
+    </details>
+    <div class="switch-row">
+      <span>账单风格</span>
+      <div class="mon-seg" id="billStyleSeg" role="tablist" aria-label="账单风格切换">
+        <button class="mon-seg-item" data-bill="receipt">小票</button>
+        <button class="mon-seg-item" data-bill="dashboard">仪表盘</button>
+      </div>
+    </div>
+    <p class="hint">小票 = 晒单情绪；仪表盘 = 数据复盘。切换后返回账单页生效</p>
+    <label class="switch-row">
+      <span>托盘悬停显示彩色卡片</span>
+      <input id="tray_hover_card" type="checkbox" class="switch" />
+    </label>
+  </section>
+
+  <!-- 卡⑥：系统与数据（原「数据存储」+ 基础配置的开机自启合并） -->
+  <section class="card">
+    <h2>系统与数据</h2>
+    <label class="switch-row">
+      <span>开机自动启动</span>
+      <input id="launch_on_boot" type="checkbox" class="switch" />
+    </label>
+    <p class="hint">写入系统启动项（注册表 Run），登录 Windows 时自动在托盘运行</p>
+    <div class="sub-section">
+      <label>
+        <span>历史数据保留</span>
+        <select id="retention_days">
+          <option value="0">永久保留（默认）</option>
+          <option value="180">半年</option>
+          <option value="365">1 年</option>
+          <option value="730">2 年</option>
+        </select>
+      </label>
+      <div id="storageInfo" class="storage-box"><span class="hint">读取中…</span></div>
+      <button id="cleanupBtn" class="ghost">立即整理</button>
+      <details class="hint-details">
+        <summary>详情</summary>
+        <p>每天首次启动会自动整理一次。写前日志（WAL）是 SQLite 的临时写入区，程序常驻不退出时它不会自动收缩，整理后通常能从数 MB 降到几十 KB；图标缓存超过 180 天会重新提取。以上都不影响你的数据，只有「保留期」会真正删除历史记录</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- 调试卡：2 秒内连点设置按钮 5 次开关（进程级，重启失效，初始必隐藏）。
+       终端控制台风格，与业务卡视觉区隔，一眼可辨「这是调试区」 -->
+  <section id="debugCard" class="debug-card hidden">
+    <div class="debug-head">
+      <span class="debug-dot"></span><span class="debug-dot"></span><span class="debug-dot"></span>
+      <span class="debug-title">niuma-timer — debug console</span>
+    </div>
+    <div class="debug-body">
+      <p class="debug-hint"># 直发系统通知，验证通知通道与文案</p>
+      <div class="debug-actions">
+        <button id="testOffworkBtn" class="debug-btn">下班提醒</button>
+        <button id="testSedentaryBtn" class="debug-btn">休息提醒</button>
+      </div>
+      <p class="debug-hint"># 下班提醒每天只触发一次：先「重置」再「立即调度」即可复测真实链路</p>
+      <div class="debug-actions">
+        <button id="testResetBtn" class="debug-btn">重置提醒状态</button>
+        <button id="testTickBtn" class="debug-btn">立即调度</button>
+      </div>
+      <p class="debug-hint"># 久坐真实链路：模拟连续活跃满阈值后立即调度（秒级，判定/文案/通知全走真实代码）</p>
+      <div class="debug-actions">
+        <button id="testSedentaryTriggerBtn" class="debug-btn">模拟久坐并触发</button>
+      </div>
+    </div>
+  </section>
+</div>
 
     <!-- 二级页面：加班每日明细 -->
     <div class="app hidden" id="viewOt">
@@ -681,6 +758,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=ab00d8fc"></script>
+    <script src="app.js?v=fec22d0e"></script>
   </body>
 </html>

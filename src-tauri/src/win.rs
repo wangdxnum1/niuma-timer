@@ -1107,6 +1107,39 @@ mod tests {
         );
     }
 
+    /// AUMID 注册回归：注册 → 读回 DisplayName / IconUri → 清理。
+    /// IconUri 仅在传入 Some 时写入（WinRT toast 指向独立 ico 最可靠，
+    /// 见 write_aumid_icon_file）。用测试专用键名，避开真应用的 AUMID。
+    #[test]
+    fn register_aumid_writes_display_name_and_icon() {
+        let aumid = "com.tim.niuma-timer.test.aumid-probe";
+        register_aumid(aumid, "牛马计时器-测试", Some("C:\\fake\\probe.ico")).expect("注册应成功");
+
+        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let path = format!(r"SOFTWARE\Classes\AppUserModelId\{aumid}");
+        let key = hkcu.open_subkey(&path).expect("注册后键应存在");
+        let name: String = key.get_value("DisplayName").expect("DisplayName 应已写入");
+        assert_eq!(name, "牛马计时器-测试", "DisplayName 应与传入一致");
+        let icon: String = key.get_value("IconUri").expect("IconUri 应已写入");
+        assert_eq!(icon, "C:\\fake\\probe.ico", "IconUri 应为传入的图标路径");
+
+        hkcu.delete_subkey(&path).expect("清理测试键应成功");
+    }
+
+    /// 图标文件写出回归：写到临时目录 → 存在、非空、ICO 魔数（00 00 01 00）正确。
+    /// 魔数校验保证内容确实是 ICO 而非空壳，WinRT toast 才能正常渲染图标。
+    #[test]
+    fn write_aumid_icon_file_writes_valid_ico() {
+        let dir = std::env::temp_dir().join(format!("niuma-aumid-icon-{}", std::process::id()));
+        let path = write_aumid_icon_file(&dir).expect("写出图标文件应成功");
+
+        let bytes = std::fs::read(&path).expect("图标文件应存在");
+        assert!(bytes.len() > 1024, "图标文件应非空（实际 {} 字节）", bytes.len());
+        assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x01, 0x00], "应为 ICO 魔数头");
+
+        std::fs::remove_dir_all(&dir).ok(); // 清理临时目录
+    }
+
 }
 
 /// 用 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
@@ -1168,5 +1201,42 @@ pub fn message_box(title: &str, msg: &str) {
             MB_OK | MB_ICONERROR,
         );
     }
+}
+
+/// 注册 AppUserModelID 到 HKCU\SOFTWARE\Classes\AppUserModelId\<aumid>。
+/// 绿色 exe（不经安装器）发系统 toast 时，若该 AUMID 未注册，Windows 会静默丢弃
+/// 通知，且 tauri-plugin-notification 连同真实错误一起吞掉，排查零线索
+/// （2026-09-23 实测踩坑：exe 放 Tools 目录即触发）。幂等设计：键名用应用
+/// identifier（与安装目录无关），每次启动覆盖写，换目录自动刷新；仅写 HKCU，
+/// 无需管理员权限。失败返回 Err，由调用方记 debug.log。
+/// `icon_uri`：toast 图标来源，建议传独立 .ico 文件路径（见 write_aumid_icon_file）；
+/// WinRT toast 的 IconUri 指向 exe 时提取图标不稳定（实测显示空白）。
+pub fn register_aumid(aumid: &str, display_name: &str, icon_uri: Option<&str>) -> Result<(), String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let path = format!(r"SOFTWARE\Classes\AppUserModelId\{aumid}");
+    let (key, _) = hkcu
+        .create_subkey(&path)
+        .map_err(|e| format!("创建注册表键 {path} 失败: {e:?}"))?;
+    key.set_value("DisplayName", &display_name.to_string())
+        .map_err(|e| format!("写 DisplayName 失败: {e:?}"))?;
+    if let Some(icon) = icon_uri {
+        key.set_value("IconUri", &icon.to_string())
+            .map_err(|e| format!("写 IconUri 失败: {e:?}"))?;
+    }
+    Ok(())
+}
+
+/// 把编译期内嵌的应用图标（src-tauri/icons/icon.ico，与 exe 图标同源）写出到
+/// dir/icon.ico 并返回路径。目录不存在时自动创建；内容随构建固定，覆盖写幂等。
+/// WinRT toast 的 IconUri 对「指向 exe」的提取不稳定，指向独立 .ico 最可靠。
+pub fn write_aumid_icon_file(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录 {} 失败: {e:?}", dir.display()))?;
+    let path = dir.join("icon.ico");
+    std::fs::write(&path, include_bytes!("../icons/icon.ico"))
+        .map_err(|e| format!("写图标文件 {} 失败: {e:?}", path.display()))?;
+    Ok(path)
 }
 

@@ -1,9 +1,11 @@
 //! 构建脚本。
 //!
-//! 负责两件事：
+//! 负责三件事：
 //!
 //! 1. 让 `frontend/` 的内容变化真正反映到 exe 里（tauri-build 默认不监控该目录）；
-//! 2. **自动同步缓存戳**——改完前端直接编译即可，不再需要手工改四处版本号。
+//! 2. **自动同步缓存戳**——改完前端直接编译即可，不再需要手工改四处版本号；
+//! 3. **注入构建信息**（版本 / 编译时间 / git 提交 / 前端指纹），运行时由
+//!    `main.rs` 写进日志——同版本号可构建多次，靠这四项才能确认「装的是哪一次」。
 //!
 //! # 为什么必须有缓存戳
 //! WebView2 会缓存 `tauri.localhost` 下的 HTML/CSS/JS。即使 exe 里嵌入的是新资源，
@@ -238,6 +240,21 @@ fn sync_capabilities(cmds: &[String]) -> usize {
     added
 }
 
+/// git 最后一次提交的短号；源码包 / 无 git 时降级 `unknown`。
+///
+/// 缺了它只是日志不好看，不该让编译或启动失败，所以整条链路都不 panic。
+fn git_rev() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn main() {
     // 前端资源目录变化时强制重跑 tauri-build（把 HTML/CSS/JS 重新嵌入 exe）。
     // tauri-build 默认不监控 frontend/，不写这条会导致改前端文件后 exe 里仍是旧资源。
@@ -246,6 +263,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend/index.html");
     println!("cargo:rerun-if-changed=../frontend/app.js");
     println!("cargo:rerun-if-changed=../frontend/styles.css");
+    // 提交后让构建信息里的 git 短号跟着刷新（否则同一份 exe 会一直报旧提交号）
+    println!("cargo:rerun-if-changed=../.git/logs/HEAD");
 
     let fp = frontend_fingerprint(Path::new(FRONTEND));
     // 折叠成 32 位：高低位异或，避免只用低位（FNV-1a 的低位散列质量相对差）
@@ -260,6 +279,12 @@ fn main() {
 
     // 指纹注入：frontend 内容一变 → rustc-env 值变化 → cargo 自动重编 crate → 宏重跑嵌入新资源
     println!("cargo:rustc-env=TAURI_FRONTEND_FP={fp}");
+
+    // 构建信息注入：同版本号可以构建很多次，光看 v1.2.0 分不清用户装的是哪一次构建、
+    // 哪个提交、哪份前端资源。这四项在编译期写死进 exe，运行时由 main.rs 落日志。
+    println!("cargo:rustc-env=BUILD_TIME={}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    println!("cargo:rustc-env=BUILD_GIT={}", git_rev());
+    println!("cargo:rustc-env=BUILD_FE_VER={ver}");
 
     // 命令名单从 src/main.rs 解析，capabilities 缺的 allow-* 也自动补上。
     // 解析为空宁可让编译失败——静默变成「没有任何命令可用」更难排查。

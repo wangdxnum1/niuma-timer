@@ -669,7 +669,11 @@ unsafe extern "system" fn raw_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_INPUT {
-        if !crate::lock_monitor::is_away() && ENABLED.load(Ordering::Relaxed) {
+        // 守卫链：锁屏离开 / 手动暂停（或定时休息）/ 停用 → 直接放行，不污染活动数据
+        if !crate::lock_monitor::is_away()
+            && !crate::pause::is_paused()
+            && ENABLED.load(Ordering::Relaxed)
+        {
             if let Some(buf) = crate::win::read_raw_input(lparam) {
                 // 解析收口在 win::parse_raw_input：长度按 dwType 分别校验
                 // （键盘载荷只有 40 字节，小于 RAWINPUT 的 48，拿 size_of::<RAWINPUT>()

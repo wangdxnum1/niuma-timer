@@ -4,6 +4,8 @@ src-tauri/target/
 bin/
 *.user
 build_*.log
+# 运行期调试日志（debug_log 落在 %APPDATA%，从仓库根启动时会落到这里）
+debug.log
 # Trae 编辑器本地文件（不该入库）
 .trae/
 # Python

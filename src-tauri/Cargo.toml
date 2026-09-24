@@ -1,6 +1,6 @@
 [package]
 name = "niuma-timer"
-version = "1.1.0"
+version = "1.2.0"
 description = "牛马计时器 - 实时显示今天赚了多少钱、上了多少小时班"
 authors = ["Tim"]
 edition = "2021"
@@ -8,11 +8,15 @@ rust-version = "1.77"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs 取本地编译时间写入 BUILD_TIME（与运行期同一个 chrono，不额外下载）
+chrono = "0.4"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -23,6 +27,8 @@ png = "0.17"
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
+# 注册 AppUserModelID（HKCU）：绿色 exe 发系统 toast 的前置条件，见 win.rs register_aumid
+winreg = "0.55"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

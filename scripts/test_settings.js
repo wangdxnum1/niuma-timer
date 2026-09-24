@@ -59,6 +59,7 @@ const store = {
   monitor_activity: true,
   monitor_app_usage: false,
   monitor_audio: true,
+  remind_sedentary_minutes: "50",
   weekend_overtime: false,
   weekend_ot_start: "",
   overtime_rate_weekend: "",
@@ -110,6 +111,15 @@ eq("填了月薪会传", cfg2.monthly_salary, 12000);
 eq("填了发薪日会传", cfg2.payday, 10);
 eq("清空覆盖 -> null", cfg2.workdays_override, null);
 eq("清空覆盖所属月 -> null", cfg2.workdays_override_for, null);
+
+console.log("== 久坐阈值钳制 1–120 ==");
+store.remind_sedentary_minutes = "1";
+eq("阈值 1 原样保存", api.readCfg().remind_sedentary_minutes, 1);
+store.remind_sedentary_minutes = "0";
+eq("阈值 0 回退默认 50", api.readCfg().remind_sedentary_minutes, 50);
+store.remind_sedentary_minutes = "999";
+eq("阈值 999 钳到 120", api.readCfg().remind_sedentary_minutes, 120);
+store.remind_sedentary_minutes = "50";
 
 console.log("== 保存路径 ==");
 ok(

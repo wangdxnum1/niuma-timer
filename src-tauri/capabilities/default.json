@@ -33,6 +33,13 @@
     "allow-export-csv",
     "allow-get-body-bill",
     "allow-get-hour-heatmap",
-    "allow-get-week-trend"
+    "allow-get-week-trend",
+    "allow-pause-monitor",
+    "allow-test-offwork-notify",
+    "allow-test-sedentary-notify",
+    "allow-reset-remind-state",
+    "allow-run-remind-tick",
+    "notification:default",
+    "allow-test-sedentary-trigger"
   ]
 }

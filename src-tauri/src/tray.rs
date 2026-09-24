@@ -10,6 +10,7 @@
 
 use crate::sync;
 use std::sync::mpsc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::Emitter;
@@ -57,6 +58,10 @@ const REGION_PAD: f64 = 12.0;
 /// hover_show 分档重发延迟（毫秒）：首帧在 do_show 立即发送，
 /// 之后按此序列补发，覆盖 WebView2 冷启动加载期（可达 1s+）。
 const RETRY_DELAYS: &[u64] = &[200, 500, 1000, 1800];
+
+/// 托盘「暂停监控」菜单项句柄：update_tray 每秒按全局暂停状态维护文案
+/// （"暂停监控" ↔ "恢复监控"）。create_tray 时写入，之后只读使用。
+static PAUSE_ITEM: Mutex<Option<MenuItem<tauri::Wry>>> = Mutex::new(None);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -602,8 +607,10 @@ fn spawn_hover_worker(app: AppHandle, rx: mpsc::Receiver<HoverMsg>) {
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "主界面", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新工作日", true, None::<&str>)?;
+    let pause_item = MenuItem::with_id(app, "pause", "暂停监控", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &refresh, &quit])?;
+    *sync::lock(&PAUSE_ITEM, "tray::PAUSE_ITEM") = Some(pause_item.clone());
+    let menu = Menu::with_items(app, &[&settings, &refresh, &pause_item, &quit])?;
 
     let (tx, rx) = mpsc::channel::<HoverMsg>();
 
@@ -643,6 +650,8 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 }
             } else if event.id == MenuId::new("refresh") {
                 crate::spawn_holiday_refresh(app.clone());
+            } else if event.id == MenuId::new("pause") {
+                crate::toggle_pause(app);
             } else if event.id == MenuId::new("quit") {
                 app.exit(0);
             }
@@ -686,7 +695,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html?v=ab00d8fc".into()),
+        WebviewUrl::App("hover_card.html?v=fec22d0e".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)
@@ -723,6 +732,13 @@ pub fn update_tray(app: &AppHandle, status: &DayStatus) {
             let _ = tray.set_tooltip::<&str>(None);
         } else {
             let _ = tray.set_tooltip(Some(&status.tooltip));
+        }
+    }
+    // 暂停菜单项文案跟随全局状态；先比对现文案，避免每秒对原生菜单做无谓的 set_text
+    if let Some(item) = sync::lock(&PAUSE_ITEM, "tray::PAUSE_ITEM").as_ref() {
+        let want = if status.paused { "恢复监控" } else { "暂停监控" };
+        if item.text().map(|t| t != want).unwrap_or(true) {
+            let _ = item.set_text(want);
         }
     }
     if let Some(w) = app.get_webview_window("hover_card") {

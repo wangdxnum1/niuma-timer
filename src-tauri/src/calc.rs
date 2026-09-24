@@ -30,6 +30,8 @@ pub struct DayStatus {
     pub tooltip: String,
     /// 托盘图标文字（如 ¥328）
     pub icon_text: String,
+    /// 暂停中（手动暂停）。compute 恒为 false，由 main::get_status 按全局状态覆写
+    pub paused: bool,
 }
 
 /// 时长格式化（分钟 → 人可读文本）
@@ -60,7 +62,7 @@ pub fn format_duration(minutes: f64, fmt: &str) -> String {
     }
 }
 
-fn to_min(s: &str) -> f64 {
+pub fn to_min(s: &str) -> f64 {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() == 2 {
         if let (Ok(h), Ok(m)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
@@ -209,6 +211,7 @@ pub fn compute(
         to_off_str,
         tooltip,
         icon_text,
+        paused: false,
     }
 }
 

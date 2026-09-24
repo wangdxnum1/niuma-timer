@@ -568,6 +568,10 @@ fn settle(now_mono: u64, with_icon: bool) {
     if crate::lock_monitor::is_away() {
         return;
     }
+    // 手动暂停 / 定时休息：同样不记账（门控丢弃，不还原段起点——那些秒本来就不该记）
+    if crate::pause::is_paused() {
+        return;
+    }
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }

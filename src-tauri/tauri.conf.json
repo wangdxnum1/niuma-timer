@@ -1,6 +1,6 @@
 {
   "productName": "niuma-timer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "identifier": "com.tim.niuma-timer",
   "build": {
     "beforeDevCommand": "",
@@ -13,7 +13,7 @@
       {
         "label": "main",
         "title": "牛马计时器",
-        "url": "index.html?v=ab00d8fc",
+        "url": "index.html?v=fec22d0e",
         "width": 520,
         "height": 700,
         "resizable": false,

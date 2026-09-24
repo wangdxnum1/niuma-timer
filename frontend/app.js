@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vab00d8fc";
+const FE_VER = "vfec22d0e";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -82,6 +82,11 @@ async function load() {
     $("monitor_app_usage").checked = cfg.monitor_app_usage !== false;
     $("monitor_audio").checked = cfg.monitor_audio !== false;
     syncMonitorState();
+    // 守护设置（v1.3.0）：开关缺省 true 与后端 serde default 对齐，阈值缺省 50
+    $("remind_sedentary_enabled").checked = cfg.remind_sedentary_enabled !== false;
+    $("remind_sedentary_minutes").value = cfg.remind_sedentary_minutes ?? 50;
+    $("remind_offwork_enabled").checked = cfg.remind_offwork_enabled !== false;
+    $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
     $("retention_days").value = String(cfg.retention_days || 0);
     setBillStyleUI(cfg.bill_style || "receipt");
     loadStorageInfo();
@@ -211,6 +216,14 @@ function readCfg() {
     monitor_activity: $("monitor_activity").checked,
     monitor_app_usage: $("monitor_app_usage").checked,
     monitor_audio: $("monitor_audio").checked,
+    // 守护（v1.3.0）：阈值钳制在设计区间 1–120，空值回退默认 50
+    remind_sedentary_enabled: $("remind_sedentary_enabled").checked,
+    remind_sedentary_minutes: Math.min(
+      120,
+      Math.max(1, parseInt($("remind_sedentary_minutes").value, 10) || 50)
+    ),
+    remind_offwork_enabled: $("remind_offwork_enabled").checked,
+    shortcuts_enabled: $("shortcuts_enabled").checked,
     weekend_overtime: $("weekend_overtime").checked,
     weekend_ot_start: $("weekend_ot_start").value || null,
     overtime_rate_weekend: numOrNull($("overtime_rate_weekend").value),
@@ -341,10 +354,13 @@ function fmtShortH(h) {
   return h < 1 ? Math.max(1, Math.round(h * 60)) + " 分钟" : h.toFixed(1) + "h";
 }
 
-// 状态徽章：主页品牌行右侧的动态状态（搬砖中 / 已下班 / 今天休息）
+// 状态徽章：主页品牌行右侧的动态状态（搬砖中 / 已下班 / 今天休息）。
 function renderBadge(s) {
   const badge = $("statusBadge");
-  if (!s.is_workday) {
+  if (s.paused) {
+    badge.textContent = "已暂停 · 钱先冻结";
+    badge.className = "badge off";
+  } else if (!s.is_workday) {
     badge.textContent = "今天休息";
     badge.className = "badge off";
   } else if (s.off_work) {
@@ -1471,6 +1487,11 @@ $("tagline_custom").addEventListener("input", () => {
 $("tagline_custom").addEventListener("blur", saveIfChanged);
 // 开关：立即保存
 $("tray_hover_card").addEventListener("change", saveNow);
+// 守护设置（v1.3.0）：开关即存；阈值失焦存
+$("remind_sedentary_enabled").addEventListener("change", saveNow);
+$("remind_offwork_enabled").addEventListener("change", saveNow);
+$("shortcuts_enabled").addEventListener("change", saveNow);
+$("remind_sedentary_minutes").addEventListener("blur", saveIfChanged);
 // 加班设置：输入框失焦保存，开关立即保存
 ["overtime_start", "overtime_rate", "overtime_meal"].forEach((id) =>
   $(id).addEventListener("blur", saveIfChanged),
@@ -2332,12 +2353,37 @@ document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
   });
 });
 
+// 调试模式彩蛋：2 秒内连点设置按钮 5 次开关（进程级，不落盘，重启失效）
+let debugOn = false;
+let eggClicks = 0;
+let eggTimer = 0;
+
+function toggleDebug() {
+  debugOn = !debugOn;
+  const card = $("debugCard");
+  card.classList.toggle("hidden", !debugOn);
+  // 卡片在长设置页最底部，仅显隐不足以让用户看到：开启时滚入视野（block:nearest
+  // 已可见则不动，避免无谓跳动）
+  if (debugOn) card.scrollIntoView({ block: "nearest" });
+  showToast(debugOn ? "调试模式已开启" : "调试模式已关闭", "ok");
+}
+
 // 侧边导航栏 + 明细翻页器：任意视图直达（取代原「‹ 返回」的网页式导航）。
 // 自动保存（离开设置页）与历史日期复位（回主页）仍由 showView 统一处理
 document.querySelectorAll(".rail-item").forEach((btn) => {
-  btn.addEventListener("click", () =>
-    showView(btn.dataset.nav === "detail" ? lastDetailView : btn.dataset.nav)
-  );
+  btn.addEventListener("click", () => {
+    // 调试彩蛋：设置按钮 2 秒内连点 5 次翻转调试模式（滑动窗口，每击重置计时）
+    if (btn.dataset.nav === "viewSettings") {
+      eggClicks++;
+      clearTimeout(eggTimer);
+      eggTimer = setTimeout(() => (eggClicks = 0), 2000);
+      if (eggClicks >= 5) {
+        eggClicks = 0;
+        toggleDebug();
+      }
+    }
+    showView(btn.dataset.nav === "detail" ? lastDetailView : btn.dataset.nav);
+  });
 });
 
 // 明细翻页器：‹ › 循环切页（加班→键鼠→应用→媒体→加班），圆点直达任意页
@@ -2452,7 +2498,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=ab00d8fc = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=fec22d0e = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
@@ -2495,6 +2541,27 @@ async function watchVisibility() {
     flog("vis listen failed: " + (err && err.message ? err.message : String(err)));
   }
 }
+
+// 调试卡按钮组：直发通知验证通道 / 重置提醒状态 / 按真实规则立即调度一次。
+// 点击给 toast 反馈——系统通知可能被勿扰模式吞掉，前端确认能区分「命令没发出去」
+// 与「发出去了但系统没弹」；失败一律 flog 落 debug.log（命令层失败不再静默）。
+// （调试卡由彩蛋开关：2 秒内连点设置按钮 5 次显隐，进程级不落盘）
+function bindDebugBtn(id, cmd, label, okMsg) {
+  $(id).addEventListener("click", () => {
+    invoke(cmd)
+      .then(() => showToast(okMsg || `${label}：已执行`, "ok"))
+      .catch((e) => {
+        flog(`${label}失败: ${e}`);
+        showToast(`${label}失败，详见日志`, "err");
+      });
+  });
+}
+bindDebugBtn("testOffworkBtn", "test_offwork_notify", "下班提醒");
+bindDebugBtn("testSedentaryBtn", "test_sedentary_notify", "休息提醒");
+bindDebugBtn("testResetBtn", "reset_remind_state", "重置提醒状态");
+bindDebugBtn("testTickBtn", "run_remind_tick", "立即调度", "已调度：满足条件才会弹");
+// 「模拟久坐」：只伪造连续活跃起点，随后走真实 tick——不用等阈值分钟数
+bindDebugBtn("testSedentaryTriggerBtn", "test_sedentary_trigger", "模拟久坐", "已模拟并调度：满足条件才会弹");
 
 boot();
 watchVisibility();

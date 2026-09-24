@@ -267,6 +267,78 @@ select:focus-visible {
   gap: 10px;
 }
 
+/* 调试卡（彩蛋）：终端控制台风格，与业务卡刻意区隔——monospace + 终端绿 +
+   深底标题栏，一眼可辨「这是调试区」。连点设置按钮 5 次显隐，进程级不落盘。
+   flex-shrink:0 必须保留：本卡是 .app（限高纵向 flex）的子项，而 overflow:hidden
+   会让 flex 子项的 min-height:auto 退化为 0——设置页内容溢出时它会被压成 0 高度，
+   表现为「hidden 已移除却看不见」。业务卡 .card 因 overflow 默认 visible 而免疫 */
+.debug-card {
+  flex-shrink: 0;
+  background: #0c110e;
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+}
+.debug-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(74, 222, 128, 0.07);
+  border-bottom: 1px solid rgba(74, 222, 128, 0.16);
+}
+.debug-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2f3a33;
+}
+.debug-dot:nth-child(1) { background: #ff5f56; }
+.debug-dot:nth-child(2) { background: #ffbd2e; }
+.debug-dot:nth-child(3) { background: #27c93f; }
+.debug-title {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #6ee7a0;
+  letter-spacing: 0.3px;
+}
+.debug-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+}
+.debug-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5f7a68;
+}
+.debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.debug-btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  color: #86efac;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.debug-btn:hover {
+  background: rgba(74, 222, 128, 0.16);
+  border-color: rgba(74, 222, 128, 0.55);
+}
+.debug-btn:active {
+  background: rgba(74, 222, 128, 0.24);
+}
+
 .card h2 {
   font-size: 12px;
   color: #98989e;
@@ -776,6 +848,50 @@ button:active {
   color: #85858b;
   line-height: 1.6;
   min-height: 15px;
+}
+
+/* ====== 设置卡内部层级：时间 2×2 网格 / 虚线分节 / 折叠长说明 ====== */
+.time-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* 合并卡内小节：虚线分隔，呼应 hint 的弱化风格 */
+.sub-section {
+  border-top: 1px dashed rgba(255, 255, 255, 0.14);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 折叠式长说明：summary 一行「▸ 详情」，正文沿用 .hint 字号色 */
+.hint-details {
+  font-size: 11.5px;
+  color: #85858b;
+  line-height: 1.6;
+}
+.hint-details summary {
+  cursor: pointer;
+  color: #98989e;
+  user-select: none;
+  min-height: 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.hint-details summary::before {
+  content: "▸";
+  font-size: 10px;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.hint-details[open] summary::before {
+  transform: rotate(90deg);
+}
+.hint-details p {
+  margin: 6px 0 0;
 }
 
 /* ====== 自动保存 toast：窗口顶部居中提示，非模态 ====== */

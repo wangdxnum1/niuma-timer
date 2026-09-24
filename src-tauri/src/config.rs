@@ -116,6 +116,20 @@ pub struct Config {
     #[serde(default = "default_bill_style")]
     pub bill_style: String,
 
+    // ---- 守护提醒（v1.3.0「牛马守护」）----
+    /// 久坐提醒开关
+    #[serde(default = "default_true")]
+    pub remind_sedentary_enabled: bool,
+    /// 久坐提醒阈值：连续活跃多少分钟后提醒（1–120，默认 50）
+    #[serde(default = "default_remind_sedentary_minutes")]
+    pub remind_sedentary_minutes: u32,
+    /// 下班提醒开关（工作日过 pm_end 且当日有监控记录时提醒一次）
+    #[serde(default = "default_true")]
+    pub remind_offwork_enabled: bool,
+    /// 全局快捷键开关（Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停）
+    #[serde(default = "default_true")]
+    pub shortcuts_enabled: bool,
+
     // ---- 数据保留 ----
     /// 历史数据保留天数（加班 / 活动 / 应用 / 媒体，共 7 张表）。
     /// **0 = 永久保留**（默认）：不删任何用户数据。
@@ -154,6 +168,10 @@ fn default_bill_style() -> String {
     "receipt".into()
 }
 
+fn default_remind_sedentary_minutes() -> u32 {
+    50
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -186,6 +204,10 @@ impl Default for Config {
             tagline_style: "dynamic".into(),
             tagline_custom: String::new(),
             bill_style: "receipt".into(),
+            remind_sedentary_enabled: true,
+            remind_sedentary_minutes: 50,
+            remind_offwork_enabled: true,
+            shortcuts_enabled: true,
             retention_days: 0,
         }
     }

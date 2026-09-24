@@ -99,6 +99,8 @@ pub fn start(app: AppHandle) {
                         crate::maintain::run_daily(&cfg);
                     });
                 }
+                // 守护提醒（久坐/下班）：分钟级精度足够，每分钟判定一次
+                run("remind_tick", || crate::remind::tick(&app));
             }
         }
     });
