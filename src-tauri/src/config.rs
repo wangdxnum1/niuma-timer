@@ -116,6 +116,10 @@ pub struct Config {
     #[serde(default = "default_bill_style")]
     pub bill_style: String,
 
+    /// 账单视图上次选择的跨度："week" / "month" / "year"
+    #[serde(default = "default_bill_span")]
+    pub bill_span: String,
+
     // ---- 守护提醒（v1.3.0「牛马守护」）----
     /// 久坐提醒开关
     #[serde(default = "default_true")]
@@ -126,6 +130,9 @@ pub struct Config {
     /// 下班提醒开关（工作日过 pm_end 且当日有监控记录时提醒一次）
     #[serde(default = "default_true")]
     pub remind_offwork_enabled: bool,
+    /// 发薪日战绩提醒开关
+    #[serde(default = "default_true")]
+    pub remind_payday_enabled: bool,
     /// 全局快捷键开关（Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停）
     #[serde(default = "default_true")]
     pub shortcuts_enabled: bool,
@@ -168,6 +175,10 @@ fn default_bill_style() -> String {
     "receipt".into()
 }
 
+fn default_bill_span() -> String {
+    "week".into()
+}
+
 fn default_remind_sedentary_minutes() -> u32 {
     50
 }
@@ -204,9 +215,11 @@ impl Default for Config {
             tagline_style: "dynamic".into(),
             tagline_custom: String::new(),
             bill_style: "receipt".into(),
+            bill_span: "week".into(),
             remind_sedentary_enabled: true,
             remind_sedentary_minutes: 50,
             remind_offwork_enabled: true,
+            remind_payday_enabled: true,
             shortcuts_enabled: true,
             retention_days: 0,
         }
@@ -324,6 +337,7 @@ pub fn save(cfg: &Config) {
 }
 
 /// 把前端传来的部分字段合并进现有配置。失败时返回 Err，调用方不得假装保存成功。
+/// 新增字段零登记：逐键 insert 后整体反序列化，靠 #[serde(default)] 自动兼容。
 pub fn merge_from_value(existing: &Config, incoming: &serde_json::Value) -> Result<Config, String> {
     let mut base = serde_json::to_value(existing).map_err(|e| format!("配置序列化失败: {e}"))?;
     if let Some(obj) = base.as_object_mut() {
