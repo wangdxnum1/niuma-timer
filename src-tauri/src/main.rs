@@ -554,17 +554,12 @@ fn get_audio_usage_summary(
     audio_usage::summary(&known_icons, date.as_deref())
 }
 
-/// 周账单聚合（week_offset：0=本周，正数往前翻历史周，负数封顶本周）
-///
-/// 锁内只取 config/holiday 快照，DB 查询全部在锁外（ABBA 死锁规避，见 weekbill 模块注释）。
+/// 周账单（B3 临时适配：仍固定周口径，B6 改名 get_bill 并接 span 入参）
 #[tauri::command(async)]
-fn get_week_bill(
-    state: State<'_, AppState>,
-    week_offset: i64,
-) -> Result<weekbill::WeekBill, String> {
+fn get_week_bill(state: State<'_, AppState>, week_offset: i64) -> Result<weekbill::PeriodBill, String> {
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    weekbill::week_bill(&cfg, &hol, week_offset)
+    weekbill::period_bill(&cfg, &hol, weekbill::Span::Week, week_offset)
 }
 
 /// 时段热力图（7×24 键鼠/前台/音频小时代格）。纯 act/app/audio 表聚合，无需快照。

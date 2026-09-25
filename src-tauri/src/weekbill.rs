@@ -1,4 +1,4 @@
-//! 周账单聚合：把一周的加班流水、活动计数、应用分类秒折成一张 WeekBill。
+//! 周期账单聚合：把一周的加班流水、活动计数、应用分类秒折成一张 PeriodBill。
 //! 口径见 docs/plans/2026-09-13-week-bill-design.md（口径 1–9）：
 //! 满勤工资按天取当月分母、摸鱼成本按天折算、total_income 不减摸鱼成本、
 //! 环比同函数聚合上一周、跨年周按天的年份取内置节假日表且不触发网络。
@@ -57,35 +57,27 @@ pub struct SlackiestDay {
     pub rate: f64,
 }
 
-/// 一周账单。字段名 snake_case 直达前端。
+/// 一个周期（周/月/年）的账单。字段名 snake_case 直达前端。
 #[derive(Debug, Serialize)]
-pub struct WeekBill {
-    /// "2026-09-07"
-    pub week_start: String,
-    /// "2026-09-13"
-    pub week_end: String,
-    /// "第 37 周"
-    pub week_no: String,
-    pub is_current_week: bool,
-    /// 总入账 = base_salary + ot_fee（摸鱼成本只展示、不做减法）
+pub struct PeriodBill {
+    pub period_start: String,
+    pub period_end: String,
+    /// "第 37 周" / "2026 年 9 月" / "2026 年"
+    pub period_label: String,
+    pub is_current_period: bool,
     pub total_income: f64,
-    /// 应赚工资（含今天实时 earned）
     pub base_salary: f64,
     pub ot_fee: f64,
-    /// 摸鱼成本 = Σ(当日摸鱼秒/3600 × 当日时薪)，按天折算
     pub slack_cost: f64,
     pub prev_total: f64,
-    /// 百分点 ((cur−prev)/prev×100)；prev≤0 → None（前端不显示箭头）
     pub delta_pct: Option<f64>,
-    /// 有活动或应用记录的工作日数；活动与应用监控都关 → null（前端显示 "—"）
     pub work_days: Option<i64>,
-    /// 排班口径估算 = 出勤工作日 × daily_hours + 加班 valid_hours
     pub work_hours: f64,
+    /// Σ ot_records.valid_hours（发薪日播报「加班 X.Xh」用）
+    pub ot_hours: f64,
     pub keys_total: i64,
     pub clicks_total: i64,
-    /// 周摸鱼率（分子分母均只含工作日）
     pub slack_rate: f64,
-    /// 工作日四类前台总秒；>0 才有金句资格（数据不足不评判）
     pub front_seconds: i64,
     pub hardest: Option<HardestDay>,
     pub slackiest: Option<SlackiestDay>,
@@ -93,10 +85,15 @@ pub struct WeekBill {
 }
 
 /// 汇聚组装所需的全部锁外快照（config/holiday 由调用方取副本，避免锁内做 DB 查询）
-pub struct WeekInput<'a> {
+pub struct PeriodInput<'a> {
     pub cfg: &'a Config,
     pub cur_hol: &'a HolidayCache,
-    pub week_start: NaiveDate,
+    /// 账单跨度（决定 period_label 与 B4 的年桶分桶）
+    pub span: Span,
+    /// 闭区间起点
+    pub start: NaiveDate,
+    /// 闭区间终点
+    pub end: NaiveDate,
     pub today: NaiveDate,
     /// calc::compute().earned，调用方算好传入
     pub today_earned: f64,
@@ -210,10 +207,19 @@ fn monthly_workdays_of(
         .unwrap_or_else(|| holiday::weekday_count(year, month))
 }
 
+/// 周期标签：周 → "第 N 周"；月 → "YYYY 年 M 月"；年 → "YYYY 年"
+fn period_label_of(span: Span, start: NaiveDate) -> String {
+    match span {
+        Span::Week => format!("第 {} 周", start.iso_week().week()),
+        Span::Month => format!("{} 年 {} 月", start.year(), start.month()),
+        Span::Year => format!("{} 年", start.year()),
+    }
+}
+
 /// 一周聚合（conn 由调用方给：正式走 with_db，单测走 in-memory）
-pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBill> {
-    let ws = input.week_start;
-    let we = ws + Duration::days(6);
+pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<PeriodBill> {
+    let ws = input.start;
+    let we = input.end;
     let start_s = ws.format("%Y-%m-%d").to_string();
     let end_excl_s = (we + Duration::days(1)).format("%Y-%m-%d").to_string();
     let daily_h = calc::daily_hours(input.cfg);
@@ -287,7 +293,7 @@ pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBi
     }
 
     // ---- 逐日组装 ----
-    let mut days: Vec<DayBill> = Vec::with_capacity(7);
+    let mut days: Vec<DayBill> = Vec::new();
     let mut base_salary = 0.0;
     let mut ot_fee = 0.0;
     let mut slack_cost = 0.0;
@@ -300,8 +306,8 @@ pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBi
     let mut hardest: Option<HardestDay> = None;
     let mut slackiest: Option<SlackiestDay> = None;
 
-    for i in 0..7 {
-        let d = ws + Duration::days(i);
+    let mut d = input.start;
+    while d <= input.end {
         let key = d.format("%Y-%m-%d").to_string();
         let is_wd = is_workday_of(d, input.cur_hol);
         let mw = monthly_workdays_of(d.year(), d.month(), input.cfg, input.cur_hol);
@@ -386,6 +392,7 @@ pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBi
             slack_rate: rate,
             has_record,
         });
+        d += Duration::days(1);
     }
 
     let weekly_rate = if front_work > 0 {
@@ -394,11 +401,11 @@ pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBi
         0.0
     };
 
-    Ok(WeekBill {
-        week_start: start_s,
-        week_end: we.format("%Y-%m-%d").to_string(),
-        week_no: format!("第 {} 周", ws.iso_week().week()),
-        is_current_week: false, // week_bill 统一覆盖
+    Ok(PeriodBill {
+        period_start: start_s,
+        period_end: we.format("%Y-%m-%d").to_string(),
+        period_label: period_label_of(input.span, ws),
+        is_current_period: false, // period_bill 统一覆盖
         total_income: base_salary + ot_fee,
         base_salary,
         ot_fee,
@@ -417,53 +424,33 @@ pub fn assemble(input: &WeekInput, conn: &Connection) -> rusqlite::Result<WeekBi
         front_seconds: front_work,
         hardest,
         slackiest,
+        ot_hours: ot_hours_total,
         days,
     })
 }
 
-/// 命令入口：off 封顶 0（未来不可看）；环比 = 上一周 total_income。
+/// 命令入口：off 封顶 0（未来不可看）；环比 = 上一周期 total_income。
 /// cfg/hol 由调用方（main.rs）锁内取快照传入，锁外做 DB 查询。
-pub fn week_bill(
-    cfg: &Config,
-    cur_hol: &HolidayCache,
-    week_offset: i64,
-) -> Result<WeekBill, String> {
-    let off = week_offset.max(0);
+pub fn period_bill(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<PeriodBill, String> {
+    let off = offset.max(0);
     let today = Local::now().date_naive();
-    let ws = week_start_of(today - Duration::weeks(off));
+    let (start, end) = period_bounds(span, off, today);
 
     let is_wd = is_workday_of(today, cur_hol);
     let mw = monthly_workdays_of(today.year(), today.month(), cfg, cur_hol);
     let today_earned = calc::compute(cfg, is_wd, mw, Local::now()).earned;
 
     let mut bill = db::with_db(|conn| {
-        assemble(
-            &WeekInput {
-                cfg,
-                cur_hol,
-                week_start: ws,
-                today,
-                today_earned,
-            },
-            conn,
-        )
+        assemble(&PeriodInput { cfg, cur_hol, span, start, end, today, today_earned }, conn)
     })?;
 
-    // 上一周：只为取 total_income 做环比（today 不在上一周内，today_earned 不参与）
+    // 上一周期：只为取 total_income 做环比（严格早于当前周期，today 不在其中，today_earned 不参与）
+    let (prev_start, prev_end) = prev_period_bounds(span, off, today);
     let prev = db::with_db(|conn| {
-        assemble(
-            &WeekInput {
-                cfg,
-                cur_hol,
-                week_start: ws - Duration::days(7),
-                today,
-                today_earned,
-            },
-            conn,
-        )
+        assemble(&PeriodInput { cfg, cur_hol, span, start: prev_start, end: prev_end, today, today_earned }, conn)
     })?;
 
-    bill.is_current_week = off == 0;
+    bill.is_current_period = off == 0;
     bill.prev_total = prev.total_income;
     bill.delta_pct = delta_pct(bill.total_income, prev.total_income);
     Ok(bill)
@@ -491,11 +478,13 @@ mod tests {
     }
 
     /// today = 该周周日（休息日）→ 7 天全部按「过去」口径满勤，today_earned 不参与
-    fn input<'a>(cfg: &'a Config, hol: &'a HolidayCache, ws: NaiveDate) -> WeekInput<'a> {
-        WeekInput {
+    fn input<'a>(cfg: &'a Config, hol: &'a HolidayCache, ws: NaiveDate) -> PeriodInput<'a> {
+        PeriodInput {
             cfg,
             cur_hol: hol,
-            week_start: ws,
+            span: Span::Week,
+            start: ws,
+            end: ws + Duration::days(6),
             today: ws + Duration::days(6),
             today_earned: 0.0,
         }
@@ -503,6 +492,23 @@ mod tests {
 
     fn f(v: f64) -> f64 {
         (v * 100.0).round() / 100.0
+    }
+
+    /// 2026-09 整月播种：22 个工作日各插一条 act_hourly（无加班、无 app 记录）
+    fn seed_2026_09_full_month(conn: &Connection) {
+        let empty_hol = hol();
+        let mut d = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        while d.month() == 9 {
+            if is_workday_of(d, &empty_hol) {
+                conn.execute(
+                    "INSERT INTO act_hourly (date, hour, moves, pixels, `left`, dbl, `right`, wheel, wheel_ticks, mid, xbtn, keys) \
+                     VALUES (?1, 9, 100, 0, 10, 2, 3, 50, 5, 1, 0, 200)",
+                    rusqlite::params![d.to_string()],
+                )
+                .unwrap();
+            }
+            d += Duration::days(1);
+        }
     }
 
     #[test]
@@ -540,9 +546,9 @@ mod tests {
         let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 8, 31).unwrap()), &conn)
             .unwrap();
 
-        assert_eq!(bill.week_start, "2026-08-31");
-        assert_eq!(bill.week_end, "2026-09-06");
-        assert_eq!(bill.week_no, "第 36 周");
+        assert_eq!(bill.period_start, "2026-08-31");
+        assert_eq!(bill.period_end, "2026-09-06");
+        assert_eq!(bill.period_label, "第 36 周");
         // 周一 8/31 用 8 月分母
         assert_eq!(f(bill.days[0].salary), f(22000.0 / 21.0));
         // 周二 9/1 起用 9 月分母
@@ -643,10 +649,12 @@ mod tests {
         };
         let conn = mem_conn();
         let hol = hol();
-        let inp = WeekInput {
+        let inp = PeriodInput {
             cfg: &c,
             cur_hol: &hol,
-            week_start: NaiveDate::from_ymd_opt(2026, 9, 7).unwrap(),
+            span: Span::Week,
+            start: NaiveDate::from_ymd_opt(2026, 9, 7).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 9, 7).unwrap() + Duration::days(6),
             today: NaiveDate::from_ymd_opt(2026, 9, 9).unwrap(), // 周三
             today_earned: 123.0,
         };
@@ -659,6 +667,34 @@ mod tests {
         assert_eq!(f(bill.days[3].salary), 0.0);
         assert_eq!(f(bill.days[4].salary), 0.0);
         assert!(bill.days[3].is_workday);
+    }
+
+    #[test]
+    fn month_assemble_spans_full_month() {
+        // 2026-09 整月；today 放 10-01 避开实时分支（本月第一天，区间全为过去）
+        let conn = mem_conn();
+        seed_2026_09_full_month(&conn); // 沿用测试区播种范式：22000 月薪、9 月 22 个工作日有打卡
+        let c = Config {
+            monthly_salary: 22000.0,
+            ..Default::default()
+        };
+        let h = hol();
+        let pi = PeriodInput {
+            cfg: &c,
+            cur_hol: &h,
+            span: Span::Month,
+            start: NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+            today: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+            today_earned: 0.0,
+        };
+        let bill = assemble(&pi, &conn).unwrap();
+        assert_eq!(bill.period_start, "2026-09-01");
+        assert_eq!(bill.period_end, "2026-09-30");
+        assert_eq!(bill.period_label, "2026 年 9 月");
+        assert_eq!(bill.days.len(), 30);
+        assert_eq!(f(bill.base_salary), 22000.0);
+        assert_eq!(bill.work_days, Some(22)); // 2026 年 9 月工作日 22 天（空表周几兜底口径）
     }
 
     #[test]

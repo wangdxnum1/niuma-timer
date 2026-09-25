@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::db;
 use crate::holiday::HolidayCache;
-use crate::weekbill::{week_bill, week_start_of};
+use crate::weekbill::{period_bill, period_bounds, Span};
 
 const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
@@ -145,8 +145,8 @@ pub struct WeekTrend {
     pub points: Vec<TrendPoint>,
 }
 
-/// 以 week_offset 对应周为最新点的最近 8 周，逐周复用 weekbill::week_bill。
-/// 不再开 with_db：week_bill 自带连接管理，锁纪律由其保证。
+/// 以 week_offset 对应周为最新点的最近 8 周，逐周复用 weekbill::period_bill。
+/// 不再开 with_db：period_bill 自带连接管理，锁纪律由其保证。
 pub fn week_trend(
     cfg: &Config,
     cur_hol: &HolidayCache,
@@ -156,9 +156,9 @@ pub fn week_trend(
     let (earliest, _) = week_bounds(off + 7);
     let mut points = Vec::with_capacity(8);
     for i in 0..8 {
-        let wb = week_bill(cfg, cur_hol, off + i)?;
+        let wb = period_bill(cfg, cur_hol, Span::Week, off + i)?;
         points.push(TrendPoint {
-            week_start: wb.week_start,
+            week_start: wb.period_start,
             income: wb.total_income,
             slack_rate: slack_rate_of(wb.front_seconds, wb.days.iter().map(|d| d.slack_seconds).sum()),
         });
@@ -268,9 +268,7 @@ pub fn body_bill(week_offset: i64) -> Result<BodyBill, String> {
 
 /// 周区间：offset 封顶 0（未来周回本周），ws 对齐周一，we = ws+6
 fn week_bounds(week_offset: i64) -> (NaiveDate, NaiveDate) {
-    let today = Local::now().date_naive();
-    let ws = week_start_of(today - Duration::weeks(week_offset.max(0)));
-    (ws, ws + Duration::days(6))
+    period_bounds(Span::Week, week_offset, Local::now().date_naive())
 }
 
 // ---------- 单测（in-memory，仿 weekbill 基建） ----------

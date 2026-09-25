@@ -45,5 +45,23 @@ has("单测 月年区间含闰年", rsBill, "fn period_bounds_month_year()");
 has("单测 上一周期即偏移加一", rsBill, "fn prev_period_bounds_is_offset_plus_one()");
 has("单测 parse_span 拒绝未知", rsBill, "fn parse_span_rejects_unknown()");
 
+// ---- 区块 3：PeriodBill 泛化（B3）----
+has("weekbill 有 PeriodInput", rsBill, "pub struct PeriodInput<'a> {");
+has("weekbill 有 PeriodBill", rsBill, "pub struct PeriodBill {");
+has("PeriodBill 有 period_label", rsBill, "pub period_label: String,");
+has("PeriodBill 有 is_current_period", rsBill, "pub is_current_period: bool,");
+has("PeriodBill 有 ot_hours", rsBill, "pub ot_hours: f64,");
+has("weekbill 有 period_bill 入口", rsBill, "pub fn period_bill(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<PeriodBill, String>");
+has("weekbill 有 period_label_of", rsBill, "fn period_label_of(");
+has("assemble 用 while 遍历区间", rsBill, "while d <= input.end");
+has("period_bill 复用 period_bounds", rsBill, "period_bounds(span, off, today)");
+has("period_bill 环比取上一周期", rsBill, "prev_period_bounds(span, off, today)");
+has("main 命令返回 PeriodBill", rsMain, "Result<weekbill::PeriodBill, String>");
+has("main 命令体调 period_bill", rsMain, "weekbill::period_bill(&cfg, &hol, weekbill::Span::Week, week_offset)");
+has("insights 复用 period_bill", rsInsights, "period_bill(cfg, cur_hol, Span::Week, off + i)");
+has("insights 取 period_start", rsInsights, "week_start: wb.period_start,");
+lacks("旧 WeekBill 已移除", rsBill, "pub struct WeekBill");
+lacks("旧 WeekInput 已移除", rsBill, "pub struct WeekInput");
+
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

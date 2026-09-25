@@ -1,5 +1,5 @@
 // 本周打工账单回归测试（小票/仪表盘双风格周聚合视图）：
-// 1) weekbill.rs：WeekBill/DayBill 结构体、周一对齐、环比除零、聚合 SQL（ot/act/app）
+// 1) weekbill.rs：PeriodBill/DayBill 结构体、周一对齐、环比除零、聚合 SQL（ot/act/app）
 // 2) main.rs：mod 注册 + get_week_bill 命令与 handler 登记
 // 3) config.rs：bill_style 字段 + serde 默认 receipt
 // 4) index.html：侧栏第四 tab、viewBill 骨架（周导航/空态/两风格容器）、设置风格分段
@@ -33,16 +33,16 @@ function has(label, src, needle) {
 }
 
 // ---------------------------------------------------------------- 1. weekbill.rs 聚合核心
-has("结构体 WeekBill", rsBill, "pub struct WeekBill");
+has("结构体 PeriodBill", rsBill, "pub struct PeriodBill");
 has("结构体 DayBill", rsBill, "pub struct DayBill");
-has("结构体 WeekInput", rsBill, "pub struct WeekInput");
+has("结构体 PeriodInput", rsBill, "pub struct PeriodInput");
 has("周一对齐 week_start_of", rsBill, "pub fn week_start_of");
 has("环比除零返 None", rsBill, "pub fn delta_pct");
 has("跨年周降级 builtin_cache", rsBill, "builtin_cache(");
 has("满勤=月薪÷当月工作日数", rsBill, "fn monthly_workdays_of");
 has("聚合入口 assemble", rsBill, "pub fn assemble");
-has("对外命令入口 week_bill", rsBill, "pub fn week_bill");
-has("未来周封顶 offset.max(0)", rsBill, "week_offset.max(0)");
+has("对外命令入口 period_bill", rsBill, "pub fn period_bill");
+has("未来周封顶 offset.max(0)", rsBill, "offset.max(0)");
 // 三条聚合 SQL
 has("加班费区间求和", rsBill, "FROM ot_records WHERE date >= ?1 AND date < ?2");
 has("键鼠事件聚合", rsBill, "FROM act_hourly WHERE date >= ?1 AND date < ?2");
