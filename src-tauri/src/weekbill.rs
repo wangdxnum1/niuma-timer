@@ -113,6 +113,59 @@ pub fn week_start_of(d: NaiveDate) -> NaiveDate {
     d - Duration::days(d.weekday().num_days_from_monday() as i64)
 }
 
+/// 账单时间跨度（前端以字符串 "week"/"month"/"year" 传入）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Span { Week, Month, Year }
+
+/// 解析前端 span 字符串；未知值显式报错，不静默回退（回退会掩盖前端 bug）
+pub fn parse_span(s: &str) -> Result<Span, String> {
+    match s {
+        "week" => Ok(Span::Week),
+        "month" => Ok(Span::Month),
+        "year" => Ok(Span::Year),
+        other => Err(format!("未知账单跨度: {other}")),
+    }
+}
+
+/// 该月最后一天（下月 1 号 − 1 天，闰年天然正确）
+fn last_day_of(year: i32, month: u32) -> u32 {
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    (NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)).day()
+}
+
+/// 跨度 + 偏移 → 闭区间 [start, end]（偏移 0 = 当前周期；负值不合法按 0 处理，未来封顶）。
+/// Week 分支与原 insights::week_bounds 逐位等价（B5 删除原函数后以此为准）。
+pub fn period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let off = offset.max(0);
+    match span {
+        Span::Week => {
+            let ws = week_start_of(today - Duration::weeks(off));
+            (ws, ws + Duration::days(6))
+        }
+        Span::Month => {
+            let ym = today.year() as i64 * 12 + today.month0() as i64 - off;
+            let y = (ym / 12) as i32;
+            let m = (ym % 12) as u32 + 1;
+            (
+                NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
+                NaiveDate::from_ymd_opt(y, m, last_day_of(y, m)).unwrap(),
+            )
+        }
+        Span::Year => {
+            let y = today.year() - off as i32;
+            (
+                NaiveDate::from_ymd_opt(y, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(y, 12, 31).unwrap(),
+            )
+        }
+    }
+}
+
+/// 上一周期区间（供环比）：偏移 +1 即语义上的「上一个」
+pub fn prev_period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    period_bounds(span, offset + 1, today)
+}
+
 /// 环比百分点；上周无基数（≤0）→ None，前端不显示箭头
 pub fn delta_pct(cur: f64, prev: f64) -> Option<f64> {
     if prev <= 0.0 {
@@ -670,5 +723,63 @@ mod tests {
         assert!(bill.slackiest.is_none());
         assert_eq!(bill.front_seconds, 0);
         assert_eq!(f(bill.slack_cost), 0.0);
+    }
+
+    #[test]
+    fn period_bounds_week_matches_old_week_bounds() {
+        // today = 2026-09-23（周三），偏移 2 → 2026-09-07（周一）..2026-09-13（周日）
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let (s, e) = period_bounds(Span::Week, 2, today);
+        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 9, 7).unwrap());
+        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 9, 13).unwrap());
+        // 负偏移封顶本期（未来不可看）
+        assert_eq!(period_bounds(Span::Week, -5, today), period_bounds(Span::Week, 0, today));
+        // 任何周区间恒为 7 天
+        let (s, e) = period_bounds(Span::Week, 3, today);
+        assert_eq!((e - s).num_days() + 1, 7);
+    }
+
+    #[test]
+    fn period_bounds_month_year() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        // 9 月：1 号到 30 号
+        let (s, e) = period_bounds(Span::Month, 0, today);
+        assert_eq!((s, e), (
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+        ));
+        // 跨年：1 月的上一期是去年 12 月
+        let jan = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
+        assert_eq!(prev_period_bounds(Span::Month, 0, jan), (
+            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+        // 闰年：2024 年 2 月有 29 天
+        let (s, e) = period_bounds(Span::Month, 0, NaiveDate::from_ymd_opt(2024, 2, 10).unwrap());
+        assert_eq!(e.day(), 29);
+        // 年区间
+        let (s, e) = period_bounds(Span::Year, 1, today);
+        assert_eq!((s, e), (
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn prev_period_bounds_is_offset_plus_one() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        for span in [Span::Week, Span::Month, Span::Year] {
+            for off in 0..3 {
+                assert_eq!(prev_period_bounds(span, off, today), period_bounds(span, off + 1, today));
+            }
+        }
+    }
+
+    #[test]
+    fn parse_span_rejects_unknown() {
+        assert_eq!(parse_span("week"), Ok(Span::Week));
+        assert_eq!(parse_span("month"), Ok(Span::Month));
+        assert_eq!(parse_span("year"), Ok(Span::Year));
+        assert!(parse_span("decade").is_err());
     }
 }
