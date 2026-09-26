@@ -29,6 +29,8 @@ const EVENTS_EXPR: &str = "SUM(moves)+SUM(`left`)+SUM(dbl)+SUM(`right`)+SUM(whee
 #[derive(Debug, Serialize)]
 pub struct HourCell {
     pub date: String,
+    /// 跨度坍缩后 date 为空串，行标签改用本字段
+    pub weekday: String,
     pub hour: i64,
     /// 键鼠总事件（口径同周账单 act_events）
     pub events: i64,
@@ -66,9 +68,13 @@ pub fn hour_heatmap_assemble(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for (date, hour, events) in rows {
+        let weekday = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+            .map(weekday_cn)
+            .unwrap_or("")
+            .to_string();
         map.insert(
             (date.clone(), hour),
-            HourCell { date, hour, events, front_secs: 0, audio_secs: 0 },
+            HourCell { date, weekday, hour, events, front_secs: 0, audio_secs: 0 },
         );
     }
 
@@ -121,19 +127,62 @@ pub fn hour_heatmap_assemble(
     })
 }
 
-pub fn hour_heatmap(week_offset: i64) -> Result<HourHeatmap, String> {
-    let (ws, we) = week_bounds(week_offset);
-    db::with_db(|conn| hour_heatmap_assemble(ws, we, conn))
+pub fn hour_heatmap(span: Span, offset: i64) -> Result<HourHeatmap, String> {
+    let today = Local::now().date_naive();
+    let (ws, we) = period_bounds(span, offset, today);
+    let hm = db::with_db(|conn| hour_heatmap_assemble(ws, we, conn))?;
+    // 月/年视图不再有逐日格：坍缩成「星期 × 小时」矩阵，前端渲染路径不变
+    Ok(match span {
+        Span::Week => hm,
+        _ => collapse_to_weekly_cells(hm),
+    })
+}
+
+/// 月/年跨度 → 7×24 坍缩：把逐日格按 (星期几, 小时) 聚合。date 置空串，peak_hour 按聚合后 events 重算。
+fn collapse_to_weekly_cells(hm: HourHeatmap) -> HourHeatmap {
+    let mut agg: BTreeMap<(usize, i64), (i64, i64, i64)> = BTreeMap::new();
+    for c in &hm.cells {
+        let wd = WEEKDAYS_CN.iter().position(|w| *w == c.weekday).unwrap_or(0);
+        let e = agg.entry((wd, c.hour)).or_insert((0, 0, 0));
+        e.0 += c.events;
+        e.1 += c.front_secs;
+        e.2 += c.audio_secs;
+    }
+    let cells: Vec<HourCell> = agg
+        .into_iter()
+        .map(|((wd, hour), (events, front_secs, audio_secs))| HourCell {
+            date: String::new(),
+            weekday: WEEKDAYS_CN[wd].to_string(),
+            hour,
+            events,
+            front_secs,
+            audio_secs,
+        })
+        .collect();
+    let mut by_hour: BTreeMap<i64, i64> = BTreeMap::new();
+    for c in &cells {
+        *by_hour.entry(c.hour).or_insert(0) += c.events;
+    }
+    let peak_hour = by_hour
+        .into_iter()
+        .filter(|(_, ev)| *ev > 0)
+        .max_by_key(|(_, ev)| *ev)
+        .map(|(h, _)| h);
+    HourHeatmap { week_start: hm.week_start, week_end: hm.week_end, cells, peak_hour }
 }
 
 // ---------- 多周趋势 ----------
 
 #[derive(Debug, Serialize)]
 pub struct TrendPoint {
-    pub week_start: String,
-    /// 周总入账（复用周账单口径，与账单页数字严格一致）
+    /// "第 37 周" / "2026 年 9 月" / "2026 年"
+    pub label: String,
+    pub period_start: String,
+    /// 供前端 paintBillNav 与悬停区间直接使用
+    pub period_end: String,
+    /// 周期总入账（复用周期账单口径，与账单页数字严格一致）
     pub income: f64,
-    /// 周摸鱼率 = Σslack_seconds ÷ front_seconds；front=0 → None（前端断线不画）
+    /// 周期摸鱼率 = Σslack_seconds ÷ front_seconds；front=0 → None（前端断线不画）
     pub slack_rate: Option<f64>,
 }
 
@@ -145,28 +194,27 @@ pub struct WeekTrend {
     pub points: Vec<TrendPoint>,
 }
 
-/// 以 week_offset 对应周为最新点的最近 8 周，逐周复用 weekbill::period_bill。
+/// 多周期趋势：以 offset 对应周期为最新点的最近 8 个周期，逐期复用 weekbill::period_bill。
 /// 不再开 with_db：period_bill 自带连接管理，锁纪律由其保证。
-pub fn week_trend(
-    cfg: &Config,
-    cur_hol: &HolidayCache,
-    week_offset: i64,
-) -> Result<WeekTrend, String> {
-    let off = week_offset.max(0);
-    let (earliest, _) = week_bounds(off + 7);
-    let mut points = Vec::with_capacity(8);
+pub fn period_trend(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<WeekTrend, String> {
+    let off = offset.max(0);
+    let today = Local::now().date_naive();
+    let (earliest, _) = period_bounds(span, off + 7, today);
+    let mut points = Vec::new();
     for i in 0..8 {
-        let wb = period_bill(cfg, cur_hol, Span::Week, off + i)?;
+        let pb = period_bill(cfg, cur_hol, span, off + i)?;
         points.push(TrendPoint {
-            week_start: wb.period_start,
-            income: wb.total_income,
+            label: pb.period_label,
+            period_start: pb.period_start,
+            period_end: pb.period_end,
+            income: pb.total_income,
             slack_rate: slack_rate_of(
-                wb.front_seconds,
-                wb.buckets.iter().map(|b| b.slack_seconds).sum(),
+                pb.front_seconds,
+                pb.buckets.iter().map(|b| b.slack_seconds).sum(),
             ),
         });
     }
-    points.reverse(); // 收集顺序是最新→最旧，翻转成旧→新
+    points.reverse();
     Ok(WeekTrend { week_start: earliest.to_string(), points })
 }
 
@@ -233,15 +281,16 @@ pub fn body_bill_assemble(
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
 
-    let mut days = Vec::with_capacity(7);
-    for i in 0..7 {
-        let d = ws + Duration::days(i);
+    let mut days = Vec::new();
+    let mut d = ws;
+    while d <= we {
         let ds = d.to_string();
         days.push(BodyDay {
             events: *by_day.get(&ds).unwrap_or(&0),
             date: ds,
             weekday: weekday_cn(d).to_string(),
         });
+        d += Duration::days(1);
     }
     let busiest = days
         .iter()
@@ -262,16 +311,37 @@ pub fn body_bill_assemble(
     })
 }
 
-pub fn body_bill(week_offset: i64) -> Result<BodyBill, String> {
-    let (ws, we) = week_bounds(week_offset);
-    db::with_db(|conn| body_bill_assemble(ws, we, conn))
+pub fn body_bill(span: Span, offset: i64) -> Result<BodyBill, String> {
+    let today = Local::now().date_naive();
+    let (ws, we) = period_bounds(span, offset, today);
+    let bb = db::with_db(|conn| body_bill_assemble(ws, we, conn))?;
+    Ok(match span {
+        Span::Year => collapse_days_to_months(bb),
+        _ => bb,
+    })
 }
 
-// ---------- 共用 ----------
-
-/// 周区间：offset 封顶 0（未来周回本周），ws 对齐周一，we = ws+6
-fn week_bounds(week_offset: i64) -> (NaiveDate, NaiveDate) {
-    period_bounds(Span::Week, week_offset, Local::now().date_naive())
+/// 年视图坍缩：逐日 BodyDay → 12 个月桶（date = "2026-09"，weekday = "9 月"），busiest 重算
+fn collapse_days_to_months(bb: BodyBill) -> BodyBill {
+    let mut by_month: BTreeMap<String, i64> = BTreeMap::new();
+    for d in &bb.days {
+        if let Some(ym) = d.date.get(..7) {
+            *by_month.entry(ym.to_string()).or_insert(0) += d.events;
+        }
+    }
+    let year = bb.week_start.get(..4).unwrap_or("").to_string();
+    let days: Vec<BodyDay> = (1u32..=12)
+        .map(|m| {
+            let ym = format!("{year}-{m:02}");
+            BodyDay { events: *by_month.get(&ym).unwrap_or(&0), date: ym, weekday: format!("{m} 月") }
+        })
+        .collect();
+    let busiest = days
+        .iter()
+        .filter(|d| d.events > 0)
+        .max_by_key(|d| d.events)
+        .map(|d| BodyDay { date: d.date.clone(), weekday: d.weekday.clone(), events: d.events });
+    BodyBill { days, busiest, ..bb }
 }
 
 // ---------- 单测（in-memory，仿 weekbill 基建） ----------
@@ -398,20 +468,20 @@ mod tests {
     }
 
     #[test]
-    fn trend_window_is_eight_weeks() {
-        // 窗口结构：earliest(off+7) 与最新周相差 49 天；点序旧→新由 reverse 保证，
-        // week_bill 循环本身碰真实库，数值行为交由 build 后冒烟覆盖（weekbill 同纪律）
-        let (newest, _) = week_bounds(0);
-        let (earliest, _) = week_bounds(7);
-        assert_eq!((newest - earliest).num_days(), 49);
+    fn trend_window_is_eight_periods() {
+        // 8 个周点 = 最新周起点往前 7 周：跨度 49 天
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let (a, _) = period_bounds(Span::Week, 0, today);
+        let (b, _) = period_bounds(Span::Week, 7, today);
+        assert_eq!((a - b).num_days(), 49);
     }
 
     #[test]
-    fn week_bounds_caps_future() {
-        let (ws_neg, _) = week_bounds(-5);
-        let (ws_zero, _) = week_bounds(0);
-        assert_eq!(ws_neg, ws_zero); // 未来周封顶本周
-        let we = week_bounds(0).1;
-        assert_eq!((we - ws_zero).num_days(), 6);
+    fn future_week_bounds_are_capped() {
+        // 名字保留：验证周负偏移封顶
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        assert_eq!(period_bounds(Span::Week, -5, today), period_bounds(Span::Week, 0, today));
+        let (s, e) = period_bounds(Span::Week, 0, today);
+        assert_eq!((e - s).num_days(), 6);
     }
 }

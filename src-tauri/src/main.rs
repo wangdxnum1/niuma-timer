@@ -565,7 +565,7 @@ fn get_week_bill(state: State<'_, AppState>, week_offset: i64) -> Result<weekbil
 /// 时段热力图（7×24 键鼠/前台/音频小时代格）。纯 act/app/audio 表聚合，无需快照。
 #[tauri::command(async)]
 fn get_hour_heatmap(week_offset: i64) -> Result<insights::HourHeatmap, String> {
-    insights::hour_heatmap(week_offset)
+    insights::hour_heatmap(weekbill::Span::Week, week_offset)
 }
 
 /// 多周趋势（最近 8 周，入账复用周账单口径）——快照模式同 get_week_bill。
@@ -576,13 +576,13 @@ fn get_week_trend(
 ) -> Result<insights::WeekTrend, String> {
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    insights::week_trend(&cfg, &hol, week_offset)
+    insights::period_trend(&cfg, &hol, weekbill::Span::Week, week_offset)
 }
 
 /// 身体账单（一周键鼠损耗五指标 + 按天分布）。纯 act_hourly 聚合，无需快照。
 #[tauri::command(async)]
 fn get_body_bill(week_offset: i64) -> Result<insights::BodyBill, String> {
-    insights::body_bill(week_offset)
+    insights::body_bill(weekbill::Span::Week, week_offset)
 }
 
 /// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）

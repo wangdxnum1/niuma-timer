@@ -58,8 +58,8 @@ has("period_bill 复用 period_bounds", rsBill, "period_bounds(span, off, today)
 has("period_bill 环比取上一周期", rsBill, "prev_period_bounds(span, off, today)");
 has("main 命令返回 PeriodBill", rsMain, "Result<weekbill::PeriodBill, String>");
 has("main 命令体调 period_bill", rsMain, "weekbill::period_bill(&cfg, &hol, weekbill::Span::Week, week_offset)");
-has("insights 复用 period_bill", rsInsights, "period_bill(cfg, cur_hol, Span::Week, off + i)");
-has("insights 取 period_start", rsInsights, "week_start: wb.period_start,");
+has("insights 复用 period_bill", rsInsights, "period_bill(cfg, cur_hol, span, off + i)");
+has("insights 取 period_start", rsInsights, "period_start: pb.period_start,");
 lacks("旧 WeekBill 已移除", rsBill, "pub struct WeekBill");
 lacks("旧 WeekInput 已移除", rsBill, "pub struct WeekInput");
 
@@ -74,6 +74,19 @@ has("年桶 12 恒项", rsBill, "1u32..=12");
 has("DayBill 有 front_seconds", rsBill, "pub front_seconds: i64,");
 has("PeriodBill 已无 days 字段", rsBill, "pub buckets: Vec<BucketBill>,");
 lacks("旧 days 字段声明已移除", rsBill, "pub days: Vec<DayBill>,");
+
+// ---- 区块 5：insights 泛化（B5）----
+has("HourCell 有 weekday 字段", rsInsights, "pub weekday: String");
+has("insights 有 hour_heatmap 泛化入口", rsInsights, "pub fn hour_heatmap(span: Span, offset: i64) -> Result<HourHeatmap, String>");
+has("insights 有 body_bill 泛化入口", rsInsights, "pub fn body_bill(span: Span, offset: i64) -> Result<BodyBill, String>");
+has("insights 有 period_trend", rsInsights, "pub fn period_trend(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<WeekTrend, String>");
+has("热力月年坍缩函数", rsInsights, "fn collapse_to_weekly_cells(hm: HourHeatmap) -> HourHeatmap");
+has("身体年坍缩函数", rsInsights, "fn collapse_days_to_months(bb: BodyBill) -> BodyBill");
+has("TrendPoint 有 period_end", rsInsights, "pub period_end: String,");
+has("TrendPoint 有 label", rsInsights, "pub label: String,");
+has("趋势复用 Span", rsInsights, "Span::Week => hm");
+lacks("旧 week_bounds 已删除", rsInsights, "fn week_bounds");
+lacks("旧 week_bill import 已移除", rsInsights, "week_bill,");
 
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
