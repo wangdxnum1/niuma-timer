@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vfe228429";
+const FE_VER = "v21525f5d";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -86,9 +86,11 @@ async function load() {
     $("remind_sedentary_enabled").checked = cfg.remind_sedentary_enabled !== false;
     $("remind_sedentary_minutes").value = cfg.remind_sedentary_minutes ?? 50;
     $("remind_offwork_enabled").checked = cfg.remind_offwork_enabled !== false;
+    $("remind_payday_enabled").checked = cfg.remind_payday_enabled !== false;
     $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
     $("retention_days").value = String(cfg.retention_days || 0);
     setBillStyleUI(cfg.bill_style || "receipt");
+    setBillSpanUI(cfg.bill_span || "week");
     loadStorageInfo();
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
@@ -223,6 +225,7 @@ function readCfg() {
       Math.max(1, parseInt($("remind_sedentary_minutes").value, 10) || 50)
     ),
     remind_offwork_enabled: $("remind_offwork_enabled").checked,
+    remind_payday_enabled: $("remind_payday_enabled").checked,
     shortcuts_enabled: $("shortcuts_enabled").checked,
     weekend_overtime: $("weekend_overtime").checked,
     weekend_ot_start: $("weekend_ot_start").value || null,
@@ -232,6 +235,7 @@ function readCfg() {
     app_whitelist: readWhitelist(),
     retention_days: parseInt($("retention_days").value) || 0,
     bill_style: readBillStyle(),
+    bill_span: readBillSpan(),
   };
   // 月薪/发薪日留空：不传该字段，后端合并时保留旧值，避免误存 0/1，也不挡住其它开关保存
   if (salaryRaw !== "") cfg.monthly_salary = parseFloat(salaryRaw) || 0;
@@ -736,11 +740,11 @@ function exportOvertimeCsv() {
 }
 function exportWeekBillCsv() {
   const bill = billData;
-  if (!bill || !bill.days || bill.days.length === 0) return;
-  const rows = [["（周汇总）"]];
-  rows.push(["周次", bill.week_no]);
-  rows.push(["起始日期", bill.week_start]);
-  rows.push(["结束日期", bill.week_end]);
+  if (!bill || !bill.buckets || bill.buckets.length === 0) return;
+  const rows = [["（汇总）"]];
+  rows.push(["周期", bill.period_label]);
+  rows.push(["起始日期", bill.period_start]);
+  rows.push(["结束日期", bill.period_end]);
   rows.push(["总进账(元)", bill.total_income]);
   rows.push(["基本工资(元)", bill.base_salary]);
   rows.push(["加班费(元)", bill.ot_fee]);
@@ -750,20 +754,20 @@ function exportWeekBillCsv() {
   rows.push(["键鼠次数", bill.keys_total]);
   rows.push(["点击次数", bill.clicks_total]);
   rows.push([]);
-  rows.push(["（每日明细）"]);
-  rows.push(["日期", "星期", "是否工作日", "有记录", "当日工资(元)", "摸鱼秒数"]);
-  for (const d of bill.days) {
+  rows.push(["（分期明细）"]);
+  rows.push(["日期", "名称", "是否工作日", "有记录", "当日工资(元)", "摸鱼秒数"]);
+  for (const d of bill.buckets) {
     rows.push([
-      d.date,
-      d.weekday,
-      d.is_workday ? "是" : "否",
+      d.date || "",
+      d.label || "",
+      d.is_workday == null ? "" : d.is_workday ? "是" : "否",
       d.has_record ? "是" : "否",
       d.salary,
       d.slack_seconds,
     ]);
   }
   downloadCsv(
-    "周账单_" + (bill.week_start || "") + ".csv",
+    "账单_" + (bill.period_start || "") + ".csv",
     csvRows(rows)
   );
 }
@@ -1490,6 +1494,7 @@ $("tray_hover_card").addEventListener("change", saveNow);
 // 守护设置（v1.3.0）：开关即存；阈值失焦存
 $("remind_sedentary_enabled").addEventListener("change", saveNow);
 $("remind_offwork_enabled").addEventListener("change", saveNow);
+$("remind_payday_enabled").addEventListener("change", saveNow);
 $("shortcuts_enabled").addEventListener("change", saveNow);
 $("remind_sedentary_minutes").addEventListener("blur", saveIfChanged);
 // 加班设置：输入框失焦保存，开关立即保存
@@ -1782,6 +1787,7 @@ function weekBillQuip(ratePct, withMoney) {
 let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
 let billData = null; // 最近一次 WeekBill 缓存，切风格时免重拉
 let billStyle = "receipt";
+let curBillSpan = "week";
 
 function fmtMoney(n) {
   return "¥" + (Number(n) || 0).toFixed(2);
@@ -1804,10 +1810,22 @@ function setBillStyleUI(style) {
   });
 }
 
+function readBillSpan() {
+  const active = document.querySelector("#billSpanSeg .mon-seg-item.active");
+  return active ? active.dataset.span : "week";
+}
+
+function setBillSpanUI(span) {
+  curBillSpan = span === "month" || span === "year" ? span : "week";
+  document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
+    b.classList.toggle("active", b.dataset.span === curBillSpan);
+  });
+}
+
 async function loadWeekBill() {
   if (curView !== "viewBill") return;
   try {
-    billData = await invoke("get_bill", { span: "week", offset: weekOffset });
+    billData = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
     paintWeekBill();
   } catch (e) {
     flog("get_bill ERR: " + (e && e.message ? e.message : String(e)));
@@ -1825,13 +1843,13 @@ function shiftWeek(delta) {
 function paintWeekBill() {
   const bill = billData;
   if (!bill || curView !== "viewBill") return;
-  const start = String(bill.week_start || "");
-  const end = String(bill.week_end || "");
+  const start = String(bill.period_start || "");
+  const end = String(bill.period_end || "");
   $("billWeekLabel").textContent =
-    bill.week_no + " · " + start.slice(5).replace("-", ".") + "–" + end.slice(5).replace("-", ".");
-  $("billNextWeek").disabled = !!bill.is_current_week;
+    bill.period_label + " · " + start.slice(5).replace("-", ".") + "–" + end.slice(5).replace("-", ".");
+  $("billNextWeek").disabled = !!bill.is_current_period;
   // 整周零记录 → 空态：工资虽是推算的，但没有任何监控证据就不评判，不排一排 ¥0.00
-  const anyRecord = (bill.days || []).some((d) => d.has_record);
+  const anyRecord = (bill.buckets || []).some((d) => d.has_record);
   $("billEmpty").classList.toggle("hidden", anyRecord);
   $("billReceipt").classList.toggle("hidden", !anyRecord || billStyle !== "receipt");
   $("billDash").classList.toggle("hidden", !anyRecord || billStyle !== "dashboard");
@@ -1860,12 +1878,12 @@ function offDay(text) {
 }
 
 function paintReceipt(bill) {
-  $("rcpNo").textContent = "NO." + String(bill.week_start || "").replace(/-/g, "");
+  $("rcpNo").textContent = "NO." + String(bill.period_start || "").replace(/-/g, "");
   $("rcpAmount").textContent = fmtMoney(bill.total_income);
 
   // 金句门槛：front_seconds>0（无任何应用记录不评判）；摸鱼率=摸鱼秒÷四类前台总秒
   const front = bill.front_seconds || 0;
-  const slackSecs = (bill.days || []).reduce((s, d) => s + (d.slack_seconds || 0), 0);
+  const slackSecs = (bill.buckets || []).reduce((s, d) => s + (d.slack_seconds || 0), 0);
   const quote = $("rcpQuote");
   if (front > 0) {
     quote.textContent = weekBillQuip((slackSecs / front) * 100, moneyConfigured());
@@ -1892,13 +1910,13 @@ function paintReceipt(bill) {
   const box = $("rcpDays");
   box.textContent = "";
   const today = todayStr();
-  const maxSalary = Math.max(0.01, ...(bill.days || []).map((d) => d.salary || 0));
-  (bill.days || []).forEach((d) => {
+  const maxSalary = Math.max(0.01, ...(bill.buckets || []).map((d) => d.salary || 0));
+  (bill.buckets || []).forEach((d) => {
     const cell = document.createElement("div");
     cell.className = "rcp-day";
-    if (!d.is_workday) {
+    if (d.is_workday === false) {
       cell.append(offDay("休"));
-    } else if (String(d.date) > today) {
+    } else if (d.date && String(d.date) > today) {
       cell.append(offDay("未到"));
     } else {
       const wrap = document.createElement("div");
@@ -1911,7 +1929,7 @@ function paintReceipt(bill) {
     }
     const wd = document.createElement("div");
     wd.className = "rcp-day-wd";
-    wd.textContent = d.weekday || "";
+    wd.textContent = d.label || "";
     const num = document.createElement("div");
     num.className = "rcp-day-date";
     num.textContent = String(d.date || "").slice(8);
@@ -1932,7 +1950,7 @@ function paintDash(bill) {
     delta.className = "kpi-delta";
   } else {
     const up = bill.delta_pct >= 0;
-    delta.textContent = (up ? "▲ " : "▼ ") + Math.abs(bill.delta_pct).toFixed(1) + "% vs 上周";
+    delta.textContent = (up ? "▲ " : "▼ ") + Math.abs(bill.delta_pct).toFixed(1) + "% vs 上期";
     delta.className = "kpi-delta " + (up ? "up" : "down");
   }
 
@@ -1956,14 +1974,14 @@ function paintDash(bill) {
   const bars = $("dashBars");
   bars.textContent = "";
   const today = todayStr();
-  const maxEarn = Math.max(0.01, ...(bill.days || []).map((d) => (d.salary || 0) + (d.ot_total || 0)));
-  const maxSlack = Math.max(0.01, ...(bill.days || []).map((d) => d.slack_seconds || 0));
-  (bill.days || []).forEach((d) => {
+  const maxEarn = Math.max(0.01, ...(bill.buckets || []).map((d) => (d.salary || 0) + (d.ot_total || 0)));
+  const maxSlack = Math.max(0.01, ...(bill.buckets || []).map((d) => d.slack_seconds || 0));
+  (bill.buckets || []).forEach((d) => {
     const col = document.createElement("div");
     col.className = "bar-col";
     const pair = document.createElement("div");
     pair.className = "bar-pair";
-    if (d.is_workday && String(d.date) <= today) {
+    if (d.is_workday !== false && (!d.date || String(d.date) <= today)) {
       const earn = document.createElement("div");
       earn.className = "bar bar-earn";
       earn.style.height = Math.max(3, (((d.salary || 0) + (d.ot_total || 0)) / maxEarn) * 100) + "%";
@@ -1974,7 +1992,7 @@ function paintDash(bill) {
     }
     const wd = document.createElement("div");
     wd.className = "bar-wd";
-    wd.textContent = d.weekday || "";
+    wd.textContent = d.label || "";
     col.append(pair, wd);
     bars.append(col);
   });
@@ -2037,18 +2055,14 @@ function fmtWan(n) {
 }
 
 // ISO 日期（YYYY-MM-DD）+n 天，本地时区
-function isoAddDays(iso, n) {
-  const d = new Date(iso + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return fmtYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
-}
+
 
 // ---- 时段热力：7 行（周一~周日）× 24 列（0-23 时），sqrt 归一 4 级金色阶 ----
 
 async function loadHourHeat() {
   if (curView !== "viewBill") return;
   try {
-    heatData = await invoke("get_heatmap", { span: "week", offset: weekOffset });
+    heatData = await invoke("get_heatmap", { span: curBillSpan, offset: weekOffset });
     paintHourHeat();
   } catch (e) {
     flog("get_heatmap ERR: " + (e && e.message ? e.message : String(e)));
@@ -2078,7 +2092,7 @@ function paintHourHeat() {
   summary.textContent = "";
   const peak = document.createElement("b");
   peak.textContent = heat.peak_hour == null ? "—" : heat.peak_hour + " 时";
-  summary.append("最忙时段 ", peak, " · 全周键鼠 " + fmtWan(total) + " 次");
+  summary.append("最忙时段 ", peak, " · 键鼠共 " + fmtWan(total) + " 次");
 
   // 列标 0-23 只建一次（静态内容，翻周不重建）
   const hours = $("heatHours");
@@ -2092,24 +2106,24 @@ function paintHourHeat() {
   }
 
   const maxEvents = Math.max(0, ...cells.map((c) => c.events || 0));
-  const byKey = new Map(cells.map((c) => [c.date + " " + c.hour, c]));
+  const byKey = new Map(cells.map((c) => [c.weekday + " " + c.hour, c]));
   const grid = $("heatGrid");
   grid.textContent = "";
   for (let i = 0; i < 7; i++) {
-    const date = isoAddDays(heat.week_start, i);
+    const rowWd = WD_CN[(i + 1) % 7];
     const rowLabel = document.createElement("span");
     rowLabel.className = "heat-axis";
-    rowLabel.textContent = WD_CN[new Date(date + "T00:00:00").getDay()];
+    rowLabel.textContent = rowWd;
     grid.append(rowLabel);
     for (let h = 0; h < 24; h++) {
       const cell = document.createElement("div");
-      const c = byKey.get(date + " " + h);
+      const c = byKey.get(rowWd + " " + h);
       const ev = c ? c.events || 0 : 0;
       const lv = heatLevel(ev, maxEvents);
       cell.className = "heat-cell lv" + lv;
       if (c)
         cell.title =
-          WD_CN[new Date(date + "T00:00:00").getDay()] +
+          rowWd +
           " " +
           h +
           ":00 · 键鼠 " +
@@ -2127,7 +2141,7 @@ function paintHourHeat() {
 async function loadWeekTrend() {
   if (curView !== "viewBill") return;
   try {
-    trendData = await invoke("get_trend", { span: "week", offset: weekOffset });
+    trendData = await invoke("get_trend", { span: curBillSpan, offset: weekOffset });
     paintWeekTrend();
   } catch (e) {
     flog("get_trend ERR: " + (e && e.message ? e.message : String(e)));
@@ -2148,7 +2162,7 @@ function paintWeekTrend() {
   if (!trend || curView !== "viewBill") return;
   const pts = trend.points || [];
   const last = pts[pts.length - 1];
-  if (last) paintBillNav(last.week_start, isoAddDays(last.week_start, 6));
+  if (last) paintBillNav(last.period_start, last.period_end);
   // 空窗口：八周全零收入且无前台记录（slack_rate 全 null）→ 不画一条趴地的 0 线
   const hasData = pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null);
   $("trendSvg").closest("section").classList.toggle("hidden", !hasData);
@@ -2233,7 +2247,7 @@ function paintWeekTrend() {
   xa.textContent = "";
   pts.forEach((p) => {
     const s = document.createElement("span");
-    s.textContent = String(p.week_start || "").slice(5).replace("-", ".");
+    s.textContent = p.label || "";
     xa.append(s);
   });
 
@@ -2252,9 +2266,9 @@ function paintWeekTrend() {
     });
     z.addEventListener("mouseenter", () => {
       const range =
-        String(p.week_start || "").slice(5).replace("-", ".") +
+        String(p.period_start || "").slice(5).replace("-", ".") +
         "–" +
-        isoAddDays(p.week_start, 6).slice(5).replace("-", ".");
+        String(p.period_end || "").slice(5).replace("-", ".");
       const rate = p.slack_rate == null ? "—" : Math.round(p.slack_rate * 100) + "%";
       tip.textContent = range + " · 入账 " + fmtMoney(p.income) + " · 摸鱼率 " + rate;
       const px = Math.max(
@@ -2276,7 +2290,7 @@ function paintWeekTrend() {
 async function loadBodyBill() {
   if (curView !== "viewBill") return;
   try {
-    bodyData = await invoke("get_body_bill", { span: "week", offset: weekOffset });
+    bodyData = await invoke("get_body_bill", { span: curBillSpan, offset: weekOffset });
     paintBodyBill();
   } catch (e) {
     flog("get_body_bill ERR: " + (e && e.message ? e.message : String(e)));
@@ -2332,7 +2346,7 @@ function paintBodyBill() {
     }
     const wd = document.createElement("div");
     wd.className = "bar-wd";
-    wd.textContent = d.weekday || "";
+    wd.textContent = d.label || "";
     col.append(pair, wd);
     bars.append(col);
   });
@@ -2498,7 +2512,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=fe228429 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=21525f5d = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
@@ -2577,3 +2591,12 @@ setInterval(() => { if (winVisible) loadActivity(); }, 2000);
 // 三者错开 700ms 相位：原先同时刻三连发会堆出一个卡顿尖峰，错开后每秒最多一次 IPC
 setTimeout(() => setInterval(() => { if (winVisible) loadAppUsage(); }, 2000), 700);
 setTimeout(() => setInterval(() => { if (winVisible) loadAudioUsage(); }, 2000), 1400);
+
+document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
+  b.addEventListener("click", () => {
+    setBillSpanUI(b.dataset.span);
+    weekOffset = 0; // 切跨度重置偏移：上一期的语义随跨度变化
+    saveIfChanged();
+    loadBillTab();
+  });
+});

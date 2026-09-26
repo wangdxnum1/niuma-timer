@@ -76,6 +76,7 @@ global.$ = (id) => ({
 });
 global.readWhitelist = () => [];
 global.readBillStyle = () => "receipt";
+global.readBillSpan = () => "week";
 
 const api = new Function(
   "return (function(){\n" + code + "\n; return { bucketEvents, readCfg, currentYearMonth };\n})();"

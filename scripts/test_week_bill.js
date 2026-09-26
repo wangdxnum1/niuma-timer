@@ -93,7 +93,7 @@ has("分段：小票", html, 'data-bill="receipt"');
 has("分段：仪表盘", html, 'data-bill="dashboard"');
 
 // ---------------------------------------------------------------- 5. app.js 渲染与守卫
-has("invoke get_bill", appSrc, 'invoke("get_bill", { span: "week", offset: weekOffset })');
+has("invoke get_bill", appSrc, 'invoke("get_bill", { span: curBillSpan, offset: weekOffset })');
 has("懒渲染：进账单页同步翻页器并拉当前页", appSrc, "setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步");
 has("翻周状态 weekOffset", appSrc, "let weekOffset = 0;");
 has("本周封顶", appSrc, "if (next < 0) return;");
@@ -104,7 +104,7 @@ has("金句：10-25%", appSrc, "摸得克制，装得敬业");
 has("金句：25-40%", appSrc, "将近三分之一的班，上给了手机");
 has("金句：≥40%", appSrc, "本周工资建议原路退回");
 has("渲染总入口 paintWeekBill", appSrc, "function paintWeekBill()");
-has("本周禁用下一周按钮", appSrc, '$("billNextWeek").disabled = !!bill.is_current_week;');
+has("本周禁用下一周按钮", appSrc, '$("billNextWeek").disabled = !!bill.is_current_period;');
 has("空态判定按 has_record", appSrc, "anyRecord");
 has("小票渲染 paintReceipt", appSrc, "function paintReceipt(bill)");
 has("仪表盘渲染 paintDash", appSrc, "function paintDash(bill)");

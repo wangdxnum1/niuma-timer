@@ -104,5 +104,48 @@ lacks("capabilities 陈旧 allow-get-week-bill 已删", caps, "allow-get-week-bi
 lacks("capabilities 陈旧 allow-get-hour-heatmap 已删", caps, "allow-get-hour-heatmap");
 lacks("capabilities 陈旧 allow-get-week-trend 已删", caps, "allow-get-week-trend");
 
+// ---- 区块 7：发薪日通知（B7）----
+has("remind 有 PAYDAY_DONE", rsRemind, "static PAYDAY_DONE: AtomicBool");
+has("remind 有 PAYDAY_DATE", rsRemind, "static PAYDAY_DATE: Mutex<Option<chrono::NaiveDate>>");
+has("remind 有 payday_tick", rsRemind, "fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {");
+has("tick 已接线 payday_tick", rsRemind, "payday_tick(app, &cfg);");
+has("播报上月账单", rsRemind, "Span::Month, 1");
+has("remind 有判定纯函数", rsRemind, "pub fn should_notify_payday(enabled: bool, today_day: u32, payday: u32, done: bool) -> bool");
+has("remind 有千分位", rsRemind, "fn thousands(n: i64) -> String {");
+has("remind 有文案函数", rsRemind, "pub(crate) fn payday_texts(");
+has("单测 命中与未命中", rsRemind, "fn payday_hit_and_miss()");
+has("单测 千分位", rsRemind, "fn thousands_format()");
+has("单测 跨年上月", rsRemind, "fn payday_prev_month_crosses_year()");
+has("remind use 已扩 Datelike", rsRemind, "use chrono::{Datelike, Timelike};");
+
+// ---- 区块 8：前端接线（B8）----
+has("html 有跨度切换器", html, 'id="billSpanSeg"');
+has("html 有周按钮", html, 'data-span="week"');
+has("html 有月按钮", html, 'data-span="month"');
+has("html 有年按钮", html, 'data-span="year"');
+has("html 有发薪日开关", html, 'id="remind_payday_enabled"');
+has("文案 上一期", html, "‹ 上一期");
+has("文案 下一期", html, "下一期 ›");
+has("文案 这一期还没有打工记录", html, "这一期还没有打工记录");
+has("文案 本期打工账单", html, "本期打工账单");
+has("文案 本期总入账", html, "本期总入账");
+has("app 有 curBillSpan", appSrc, 'let curBillSpan = "week";');
+has("app 有 readBillSpan", appSrc, "function readBillSpan() {");
+has("app 有 setBillSpanUI", appSrc, "function setBillSpanUI(span) {");
+has("app get_bill 带 span", appSrc, 'invoke("get_bill", { span: curBillSpan, offset: weekOffset })');
+has("app get_heatmap 带 span", appSrc, 'invoke("get_heatmap", { span: curBillSpan, offset: weekOffset })');
+has("app get_trend 带 span", appSrc, 'invoke("get_trend", { span: curBillSpan, offset: weekOffset })');
+has("app get_body_bill 带 span", appSrc, 'invoke("get_body_bill", { span: curBillSpan, offset: weekOffset })');
+has("app 渲染用 buckets", appSrc, "(bill.buckets || [])");
+has("app 用 is_current_period", appSrc, "!!bill.is_current_period");
+has("app 趋势 nav 用 period 字段", appSrc, "paintBillNav(last.period_start, last.period_end)");
+has("app 热力按星期聚合取格", appSrc, 'c.weekday + " " + c.hour');
+has("app 热力行标签 getDay 修正", appSrc, "WD_CN[(i + 1) % 7]");
+has("app CSV 按期导出", appSrc, '"账单_" + (bill.period_start || "") + ".csv"');
+has("app readCfg 记忆 bill_span", appSrc, "bill_span: readBillSpan(),");
+has("app load 恢复 bill_span", appSrc, 'setBillSpanUI(cfg.bill_span || "week");');
+has("app 切跨度重置偏移", appSrc, "weekOffset = 0; // 切跨度重置偏移：上一期的语义随跨度变化");
+lacks("旧 isoAddDays 已删除", appSrc, "function isoAddDays(");
+
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

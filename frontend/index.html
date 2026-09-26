@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=fe228429" />
+    <link rel="stylesheet" href="styles.css?v=21525f5d" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -223,10 +223,17 @@
          切页交互与明细一致（顶部翻页器 + 滚轮翻页，翻页器 DOM 在 detailPager 旁的 billPager）；
          共用周导航翻周；懒渲染契约：切页 / 翻周才拉对应命令，不接 tick 轮询——周级聚合 -->
     <div class="app hidden" id="viewBill">
+      <div class="switch-row">
+        <div class="mon-seg" id="billSpanSeg" aria-label="账单周期">
+          <button class="mon-seg-item active" data-span="week">周</button>
+          <button class="mon-seg-item" data-span="month">月</button>
+          <button class="mon-seg-item" data-span="year">年</button>
+        </div>
+      </div>
       <div class="month-nav">
-        <button id="billPrevWeek" class="mn-btn">‹ 上一周</button>
+        <button id="billPrevWeek" class="mn-btn">‹ 上一期</button>
         <span id="billWeekLabel" class="mn-label">—</span>
-        <button id="billNextWeek" class="mn-btn">下一周 ›</button>
+        <button id="billNextWeek" class="mn-btn">下一期 ›</button>
       </div>
 
       <!-- tab 1：本周账单（原有双风格内容原样保留，导出 CSV 只对本 tab 有意义） -->
@@ -236,16 +243,16 @@
         <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
         <div id="billEmpty" class="bill-empty hidden">
           <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
-          <div class="bill-empty-txt">这一周还没有打工记录</div>
+          <div class="bill-empty-txt">这一期还没有打工记录</div>
         </div>
 
         <!-- 风格一：小票（默认）。纸白票面 + 虚线行 + 7 日金条 + 右下红章 -->
         <div id="billReceipt" class="receipt hidden">
           <div class="rcp-head">
-            <div class="rcp-title">本周打工账单</div>
+            <div class="rcp-title">本期打工账单</div>
             <div class="rcp-no" id="rcpNo">NO.000000</div>
           </div>
-          <div class="rcp-amount-label">本周总入账</div>
+          <div class="rcp-amount-label">本期总入账</div>
           <div class="rcp-amount" id="rcpAmount">¥0.00</div>
           <div class="rcp-quote" id="rcpQuote"></div>
           <div class="rcp-lines" id="rcpLines"></div>
@@ -469,6 +476,7 @@
       <span>下班提醒</span>
       <input id="remind_offwork_enabled" type="checkbox" class="switch" />
     </label>
+    <label class="switch-row"><span>发薪日战绩提醒</span><input id="remind_payday_enabled" type="checkbox" class="switch" /></label>
     <!-- shortcuts_enabled 关闭后 Rust 端 apply_shortcuts 会注销全部全局快捷键 -->
     <label class="switch-row">
       <span>全局快捷键</span>
@@ -758,6 +766,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=fe228429"></script>
+    <script src="app.js?v=21525f5d"></script>
   </body>
 </html>

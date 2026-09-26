@@ -154,10 +154,10 @@ eq("加班 CSV 汇总总时长", oc.includes("总有效时长(小时),10.5"), tr
 
 // 周账单导出
 sandbox._setBillData({
-  week_no: 37,
-  week_start: "2026-09-07",
-  week_end: "2026-09-13",
-  is_current_week: false,
+  period_label: "2026-W37",
+  period_start: "2026-09-07",
+  period_end: "2026-09-13",
+  is_current_period: false,
   total_income: 5200.5,
   base_salary: 4000,
   ot_fee: 1200,
@@ -166,10 +166,10 @@ sandbox._setBillData({
   work_days: 5,
   keys_total: 12345,
   clicks_total: 678,
-  days: [
+  buckets: [
     {
       date: "2026-09-07",
-      weekday: "一",
+      label: "一",
       is_workday: true,
       has_record: true,
       salary: 900,
@@ -177,7 +177,7 @@ sandbox._setBillData({
     },
     {
       date: "2026-09-08",
-      weekday: "二",
+      label: "二",
       is_workday: true,
       has_record: true,
       salary: 850,
@@ -188,15 +188,15 @@ sandbox._setBillData({
 sandbox.captured = null;
 sandbox.exportWeekBillCsv();
 const bc = sandbox.captured.csv;
-eq("周账单 CSV 含周汇总段", bc.includes("（周汇总）"), true);
+eq("周账单 CSV 含周汇总段", bc.includes("（汇总）"), true);
 eq("周账单 CSV 总进账", bc.includes("总进账(元),5200.5"), true);
 eq(
   "周账单 CSV 每日明细表头",
-  bc.includes("日期,星期,是否工作日,有记录,当日工资(元),摸鱼秒数"),
+  bc.includes("日期,名称,是否工作日,有记录,当日工资(元),摸鱼秒数"),
   true
 );
 eq("周账单 CSV 工作日行", bc.includes("2026-09-07,一,是,是,900,120"), true);
-eq("周账单 CSV 文件名", sandbox.captured.filename, "周账单_2026-09-07.csv");
+eq("周账单 CSV 文件名", sandbox.captured.filename, "账单_2026-09-07.csv");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

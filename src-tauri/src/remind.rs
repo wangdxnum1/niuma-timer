@@ -15,7 +15,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::Timelike;
+use chrono::{Datelike, Timelike};
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 
@@ -35,6 +35,8 @@ static LAST_SED_REMIND: Mutex<i64> = Mutex::new(0);
 static OFFWORK_DONE: AtomicBool = AtomicBool::new(false);
 /// OFFWORK_DONE 所属日期（跨天自动重置，自包含、无需调度器配合）
 static OFFWORK_DATE: Mutex<Option<chrono::NaiveDate>> = Mutex::new(None);
+static PAYDAY_DONE: AtomicBool = AtomicBool::new(false);
+static PAYDAY_DATE: Mutex<Option<chrono::NaiveDate>> = Mutex::new(None);
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -83,6 +85,56 @@ pub fn should_remind_offwork(
     !today_done && is_workday && now_min >= pm_end_min && has_record_today
 }
 
+pub fn should_notify_payday(enabled: bool, today_day: u32, payday: u32, done: bool) -> bool {
+    enabled && !done && today_day == payday
+}
+
+fn thousands(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = if n < 0 { String::from("-") } else { String::new() };
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+pub(crate) fn payday_texts(month_label: &str, work_days: i64, ot_hours: f64, slack_pct: i64, income: f64) -> (String, String) {
+    (
+        "发薪日到了，牛马".to_string(),
+        format!("{month_label}战绩：出勤 {work_days} 天 · 加班 {ot_hours:.1}h · 摸鱼率 {slack_pct}% · 折合进账 ¥{}", thousands(income as i64)),
+    )
+}
+
+fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {
+    let today = chrono::Local::now().date_naive();
+    {
+        let mut d = sync::lock(&PAYDAY_DATE, "remind::PAYDAY_DATE");
+        if *d != Some(today) {
+            *d = Some(today);
+            PAYDAY_DONE.store(false, Ordering::SeqCst);
+        }
+    }
+    if !should_notify_payday(cfg.remind_payday_enabled, today.day(), cfg.payday, PAYDAY_DONE.load(Ordering::Relaxed)) {
+        return;
+    }
+    let state = app.state::<crate::AppState>();
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
+    let bill = match crate::weekbill::period_bill(cfg, &hol, crate::weekbill::Span::Month, 1) {
+        Ok(b) => b,
+        Err(e) => {
+            crate::db::debug_log(&format!("[发薪日] 上月账单聚合失败: {e}"));
+            return;
+        }
+    };
+    PAYDAY_DONE.store(true, Ordering::SeqCst);
+    let month = bill.period_end.get(5..7).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let (title, body) = payday_texts(&format!("{month} 月"), bill.work_days.unwrap_or(0), bill.ot_hours, (bill.slack_rate * 100.0) as i64, bill.total_income);
+    notify(app, &title, &body);
+}
+
 /// 60 秒一拍的提醒调度入口（scheduler 调用）
 pub fn tick(app: &tauri::AppHandle) {
     let cfg = {
@@ -92,6 +144,7 @@ pub fn tick(app: &tauri::AppHandle) {
     };
     sedentary_tick(app, &cfg);
     offwork_tick(app, &cfg);
+    payday_tick(app, &cfg);
 }
 
 fn sedentary_tick(app: &tauri::AppHandle, cfg: &Config) {
@@ -205,6 +258,8 @@ pub(crate) fn offwork_texts(earned: f64) -> (String, String) {
 /// 供调试卡「重置提醒状态」调用——下班提醒每天只触发一次，不重置当天就没法
 /// 复测真实触发链路。
 pub(crate) fn reset_state() {
+    PAYDAY_DONE.store(false, Ordering::Relaxed);
+    *sync::lock(&PAYDAY_DATE, "remind::PAYDAY_DATE") = None;
     OFFWORK_DONE.store(false, Ordering::Relaxed);
     *sync::lock(&OFFWORK_DATE, "remind::OFFWORK_DATE") = None;
     *sync::lock(&LAST_SED_REMIND, "remind::LAST_SED_REMIND") = 0;
@@ -226,6 +281,32 @@ pub(crate) fn force_sedentary_since(minutes: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payday_hit_and_miss() {
+        assert!(should_notify_payday(true, 10, 10, false));
+        assert!(!should_notify_payday(true, 10, 10, true));
+        assert!(!should_notify_payday(true, 9, 10, false));
+        assert!(!should_notify_payday(false, 10, 10, false));
+    }
+
+    #[test]
+    fn thousands_format() {
+        for (n, expected) in [(0, "0"), (999, "999"), (11240, "11,240"), (1234567, "1,234,567"), (-11240, "-11,240"), (-123, "-123")] {
+            assert_eq!(thousands(n), expected);
+        }
+    }
+
+    #[test]
+    fn payday_prev_month_crosses_year() {
+        use chrono::NaiveDate;
+        use crate::weekbill::{prev_period_bounds, Span};
+        let jan = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
+        assert_eq!(prev_period_bounds(Span::Month, 0, jan), (
+            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        ));
+    }
 
     const M: i64 = 60_000; // 一分钟（毫秒）
 
