@@ -63,5 +63,17 @@ has("insights 取 period_start", rsInsights, "week_start: wb.period_start,");
 lacks("旧 WeekBill 已移除", rsBill, "pub struct WeekBill");
 lacks("旧 WeekInput 已移除", rsBill, "pub struct WeekInput");
 
+// ---- 区块 4：分桶账单（B4）----
+has("weekbill 有 BucketBill", rsBill, "pub struct BucketBill {");
+has("BucketBill date 可空", rsBill, "pub date: Option<String>,");
+has("BucketBill is_workday 可空", rsBill, "pub is_workday: Option<bool>,");
+has("weekbill 有 bucketize", rsBill, "pub fn bucketize(days: &[DayBill], span: Span) -> Vec<BucketBill>");
+has("weekbill 有 day_to_bucket", rsBill, "fn day_to_bucket(d: &DayBill) -> BucketBill {");
+has("weekbill 有 month_bucket", rsBill, "fn month_bucket(label: String, ds: Vec<&DayBill>) -> BucketBill {");
+has("年桶 12 恒项", rsBill, "1u32..=12");
+has("DayBill 有 front_seconds", rsBill, "pub front_seconds: i64,");
+has("PeriodBill 已无 days 字段", rsBill, "pub buckets: Vec<BucketBill>,");
+lacks("旧 days 字段声明已移除", rsBill, "pub days: Vec<DayBill>,");
+
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

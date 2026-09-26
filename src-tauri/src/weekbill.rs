@@ -3,7 +3,7 @@
 //! 满勤工资按天取当月分母、摸鱼成本按天折算、total_income 不减摸鱼成本、
 //! 环比同函数聚合上一周、跨年周按天的年份取内置节假日表且不触发网络。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use rusqlite::Connection;
@@ -37,6 +37,8 @@ pub struct DayBill {
     pub clicks: i64,
     /// 当日摸鱼率 0–1（摸鱼秒 ÷ 四类前台总秒），无前台秒为 0
     pub slack_rate: f64,
+    /// 当日四类前台总秒（app_usage 全应用求和；年桶 slack_rate 分母用）
+    pub front_seconds: i64,
     /// 有任意监控证据（act_events>0 或应用秒>0）
     pub has_record: bool,
 }
@@ -81,7 +83,7 @@ pub struct PeriodBill {
     pub front_seconds: i64,
     pub hardest: Option<HardestDay>,
     pub slackiest: Option<SlackiestDay>,
-    pub days: Vec<DayBill>,
+    pub buckets: Vec<BucketBill>,
 }
 
 /// 汇聚组装所需的全部锁外快照（config/holiday 由调用方取副本，避免锁内做 DB 查询）
@@ -390,6 +392,7 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
             keys,
             clicks,
             slack_rate: rate,
+            front_seconds: front,
             has_record,
         });
         d += Duration::days(1);
@@ -425,7 +428,7 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
         hardest,
         slackiest,
         ot_hours: ot_hours_total,
-        days,
+        buckets: bucketize(&days, input.span),
     })
 }
 
@@ -454,6 +457,95 @@ pub fn period_bill(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64
     bill.prev_total = prev.total_income;
     bill.delta_pct = delta_pct(bill.total_income, prev.total_income);
     Ok(bill)
+}
+
+/// 分桶账单（前端唯一渲染颗粒）：周/月 → 天桶；年 → 12 个月桶。
+#[derive(Debug, Serialize)]
+pub struct BucketBill {
+    /// 天桶 = 具体日期 "2026-09-07"；月桶 = None（未来日判定与日号切片在前端按空处理）
+    pub date: Option<String>,
+    /// 天桶「周一」；月桶「9 月」
+    pub label: String,
+    /// 天桶 = 法定口径；月桶 = None（不参与「休/未到」判定）
+    pub is_workday: Option<bool>,
+    pub salary: f64,
+    pub ot_total: f64,
+    pub slack_seconds: i64,
+    pub act_events: i64,
+    pub keys: i64,
+    pub clicks: i64,
+    /// 天桶 = 当日比率；月桶 = Σ摸鱼秒 ÷ Σ(工作日且有记录的前台秒)（求和后再相除，非比率平均）
+    pub slack_rate: f64,
+    pub has_record: bool,
+}
+
+/// 天桶透传：周/月视图的渲染颗粒与逐日账单同构
+fn day_to_bucket(d: &DayBill) -> BucketBill {
+    BucketBill {
+        date: Some(d.date.clone()),
+        label: d.weekday.clone(),
+        is_workday: Some(d.is_workday),
+        salary: d.salary,
+        ot_total: d.ot_total,
+        slack_seconds: d.slack_seconds,
+        act_events: d.act_events,
+        keys: d.keys,
+        clicks: d.clicks,
+        slack_rate: d.slack_rate,
+        has_record: d.has_record,
+    }
+}
+
+/// 年桶：同月各天合并。slack_rate 分子分母均按 is_workday && has_record 求和后再相除
+/// （口径与周聚合一致，不是各天比率平均）；front > 0 才算比率，空桶 0.0
+fn month_bucket(label: String, ds: Vec<&DayBill>) -> BucketBill {
+    let mut b = BucketBill {
+        date: None,
+        label,
+        is_workday: None,
+        salary: 0.0,
+        ot_total: 0.0,
+        slack_seconds: 0,
+        act_events: 0,
+        keys: 0,
+        clicks: 0,
+        slack_rate: 0.0,
+        has_record: false,
+    };
+    let mut front = 0i64;
+    for d in ds {
+        b.salary += d.salary;
+        b.ot_total += d.ot_total;
+        b.act_events += d.act_events;
+        b.keys += d.keys;
+        b.clicks += d.clicks;
+        b.has_record |= d.has_record;
+        if d.is_workday && d.has_record {
+            b.slack_seconds += d.slack_seconds;
+            front += d.front_seconds;
+        }
+    }
+    b.slack_rate = if front > 0 { b.slack_seconds as f64 / front as f64 } else { 0.0 };
+    b
+}
+
+/// 把逐日账单按跨度折成分桶：周/月 → 天桶透传；年 → 12 个月桶（后端算好，前端单一路径渲染）
+pub fn bucketize(days: &[DayBill], span: Span) -> Vec<BucketBill> {
+    match span {
+        Span::Year => {
+            // 12 恒项：无记录的月份也要出桶（前端画 12 根柱，缺月 = 空柱）
+            let mut by_month: BTreeMap<u32, Vec<&DayBill>> = BTreeMap::new();
+            for d in days {
+                if let Some(m) = d.date.get(5..7).and_then(|s| s.parse::<u32>().ok()) {
+                    by_month.entry(m).or_default().push(d);
+                }
+            }
+            (1u32..=12)
+                .map(|m| month_bucket(format!("{m} 月"), by_month.remove(&m).unwrap_or_default()))
+                .collect()
+        }
+        _ => days.iter().map(day_to_bucket).collect(),
+    }
 }
 
 #[cfg(test)]
@@ -550,12 +642,12 @@ mod tests {
         assert_eq!(bill.period_end, "2026-09-06");
         assert_eq!(bill.period_label, "第 36 周");
         // 周一 8/31 用 8 月分母
-        assert_eq!(f(bill.days[0].salary), f(22000.0 / 21.0));
+        assert_eq!(f(bill.buckets[0].salary), f(22000.0 / 21.0));
         // 周二 9/1 起用 9 月分母
-        assert_eq!(f(bill.days[1].salary), f(22000.0 / 22.0));
+        assert_eq!(f(bill.buckets[1].salary), f(22000.0 / 22.0));
         // 周末 0
-        assert_eq!(f(bill.days[5].salary), 0.0);
-        assert!(!bill.days[5].is_workday);
+        assert_eq!(f(bill.buckets[5].salary), 0.0);
+        assert_eq!(bill.buckets[5].is_workday, Some(false));
         // base = 1×(22000/21) + 4×(22000/22)
         assert_eq!(f(bill.base_salary), f(22000.0 / 21.0 + 4.0 * 22000.0 / 22.0));
         // 总入账 = base + ot（无加班）
@@ -575,9 +667,9 @@ mod tests {
         let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
             .unwrap();
         // 周六 9/5：休息日无工资，加班费照记
-        assert_eq!(f(bill.days[5].salary), 0.0);
-        assert!(!bill.days[5].is_workday);
-        assert_eq!(f(bill.days[5].ot_total), 205.0);
+        assert_eq!(f(bill.buckets[5].salary), 0.0);
+        assert_eq!(bill.buckets[5].is_workday, Some(false));
+        assert_eq!(f(bill.buckets[5].ot_total), 205.0);
         assert_eq!(f(bill.ot_fee), 205.0);
         // 休息日不入出勤
         assert_eq!(bill.work_days, Some(0));
@@ -595,7 +687,7 @@ mod tests {
         .unwrap();
         let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
             .unwrap();
-        let d = &bill.days[1]; // 周二
+        let d = &bill.buckets[1]; // 周二
         // total_events = 100+10+2+3+50+1+0+200 = 366
         assert_eq!(d.act_events, 366);
         assert_eq!(d.keys, 200);
@@ -627,7 +719,7 @@ mod tests {
         .unwrap();
         let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
             .unwrap();
-        let d = &bill.days[1];
+        let d = &bill.buckets[1];
         assert_eq!(d.slack_seconds, 1200);
         assert_eq!(f(d.slack_rate), 0.25);
         assert_eq!(f(bill.slack_rate), 0.25);
@@ -660,13 +752,13 @@ mod tests {
         };
         let bill = assemble(&inp, &conn).unwrap();
         // 周一周二满勤
-        assert_eq!(f(bill.days[0].salary), f(22000.0 / 22.0));
+        assert_eq!(f(bill.buckets[0].salary), f(22000.0 / 22.0));
         // 周三实时
-        assert_eq!(f(bill.days[2].salary), 123.0);
+        assert_eq!(f(bill.buckets[2].salary), 123.0);
         // 周四周五未来 0，且标「未到」由前端按日期判断
-        assert_eq!(f(bill.days[3].salary), 0.0);
-        assert_eq!(f(bill.days[4].salary), 0.0);
-        assert!(bill.days[3].is_workday);
+        assert_eq!(f(bill.buckets[3].salary), 0.0);
+        assert_eq!(f(bill.buckets[4].salary), 0.0);
+        assert_eq!(bill.buckets[3].is_workday, Some(true));
     }
 
     #[test]
@@ -692,7 +784,7 @@ mod tests {
         assert_eq!(bill.period_start, "2026-09-01");
         assert_eq!(bill.period_end, "2026-09-30");
         assert_eq!(bill.period_label, "2026 年 9 月");
-        assert_eq!(bill.days.len(), 30);
+        assert_eq!(bill.buckets.len(), 30);
         assert_eq!(f(bill.base_salary), 22000.0);
         assert_eq!(bill.work_days, Some(22)); // 2026 年 9 月工作日 22 天（空表周几兜底口径）
     }
@@ -754,7 +846,7 @@ mod tests {
         let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
             .unwrap();
         assert_eq!(f(bill.total_income), 0.0);
-        assert!(bill.days.iter().all(|d| !d.has_record));
+        assert!(bill.buckets.iter().all(|d| !d.has_record));
         assert!(bill.hardest.is_none());
         assert!(bill.slackiest.is_none());
         assert_eq!(bill.front_seconds, 0);
@@ -817,5 +909,70 @@ mod tests {
         assert_eq!(parse_span("month"), Ok(Span::Month));
         assert_eq!(parse_span("year"), Ok(Span::Year));
         assert!(parse_span("decade").is_err());
+    }
+
+    /// 手构 DayBill（B4 测试专用；全字段显式，slack_rate 由 slack/front 求出）
+    fn dbill(date: &str, weekday: &str, is_workday: bool, has_record: bool, salary: f64, slack: i64, front: i64) -> DayBill {
+        DayBill {
+            date: date.to_string(),
+            weekday: weekday.to_string(),
+            is_workday,
+            salary,
+            ot_total: 0.0,
+            slack_seconds: slack,
+            act_events: 0,
+            keys: 0,
+            clicks: 0,
+            slack_rate: if front > 0 { slack as f64 / front as f64 } else { 0.0 },
+            front_seconds: front,
+            has_record,
+        }
+    }
+
+    #[test]
+    fn year_buckets_aggregate_with_summed_front_rate() {
+        // 2026 年：1 月两天（200/1000 与 1800/3000），2 月一天（0/2000），其余月无记录
+        let days = vec![
+            dbill("2026-01-05", "周一", true, true, 1000.0, 200, 1000),
+            dbill("2026-01-06", "周二", true, true, 1000.0, 1800, 3000),
+            dbill("2026-02-09", "周一", true, true, 1000.0, 0, 2000),
+        ];
+        let b = bucketize(&days, Span::Year);
+        assert_eq!(b.len(), 12); // 12 恒项：缺月 = 空桶
+        // 年桶摸鱼率 = Σ摸鱼秒 ÷ Σ前台秒（200+1800)/(1000+3000) = 0.5，不是各天比率平均 (0.2+0.6)/2 = 0.4
+        assert_eq!(f(b[0].slack_rate), 0.5);
+        assert_eq!(b[0].salary, 2000.0);
+        assert_eq!(b[1].slack_rate, 0.0); // 0/2000
+        assert_eq!(b[1].has_record, true);
+        assert_eq!(b[2].label, "3 月");
+        assert_eq!(b[2].has_record, false); // 空桶
+        assert_eq!(b[11].label, "12 月");
+        assert_eq!(b[0].date, None);
+        assert_eq!(b[0].is_workday, None);
+    }
+
+    #[test]
+    fn week_buckets_passthrough_with_weekday_labels() {
+        let days = vec![
+            dbill("2026-09-07", "周一", true, true, 1000.0, 100, 1000),
+            dbill("2026-09-13", "周日", false, false, 0.0, 0, 0),
+        ];
+        let b = bucketize(&days, Span::Week);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0].date.as_deref(), Some("2026-09-07"));
+        assert_eq!(b[0].label, "周一");
+        assert_eq!(b[0].is_workday, Some(true));
+        assert_eq!(b[1].is_workday, Some(false));
+        assert_eq!(f(b[0].slack_rate), 0.1);
+    }
+
+    #[test]
+    fn month_buckets_keep_daily_grain() {
+        let days: Vec<DayBill> = (1..=30)
+            .map(|i| dbill(&format!("2026-09-{:02}", i), "周几", i % 7 != 6 && i % 7 != 0, i < 23, 1000.0, 10, 100))
+            .collect();
+        let b = bucketize(&days, Span::Month);
+        assert_eq!(b.len(), 30); // 月视图保持天颗粒
+        assert_eq!(b[0].date.as_deref(), Some("2026-09-01"));
     }
 }

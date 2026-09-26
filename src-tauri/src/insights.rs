@@ -160,7 +160,10 @@ pub fn week_trend(
         points.push(TrendPoint {
             week_start: wb.period_start,
             income: wb.total_income,
-            slack_rate: slack_rate_of(wb.front_seconds, wb.days.iter().map(|d| d.slack_seconds).sum()),
+            slack_rate: slack_rate_of(
+                wb.front_seconds,
+                wb.buckets.iter().map(|b| b.slack_seconds).sum(),
+            ),
         });
     }
     points.reverse(); // 收集顺序是最新→最旧，翻转成旧→新
