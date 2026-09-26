@@ -62,7 +62,7 @@ async function main() {
   ok("注册表含 test_sedentary_trigger", /^\s*test_sedentary_trigger,$/m.test(mainSrc));
   ok("注册表含 reset_remind_state", /^\s*reset_remind_state,$/m.test(mainSrc));
   ok("注册表含 run_remind_tick", /^\s*run_remind_tick,$/m.test(mainSrc));
-  ok("注册表仍含 pause_monitor（手动暂停入口）", /^\s*pause_monitor,$/m.test(mainSrc));
+  ok("注册表已不含 pause_monitor（死命令下线，暂停走 toggle_pause）", !/^\s*pause_monitor,$/m.test(mainSrc));
 
   console.log("== 文案共用（真实触发与调试按钮同源） ==");
   ok("remind.rs 抽出 offwork_texts", /pub\(crate\) fn offwork_texts\(earned: f64\) -> \(String, String\)/.test(remindSrc));

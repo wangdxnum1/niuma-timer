@@ -141,8 +141,8 @@ ok(
 console.log("== DOM / 后端契约 ==");
 ok("守护设置卡存在", /<h2>守护<\/h2>/.test(htmlSrc));
 ok("阈值输入 1–120", /id="remind_sedentary_minutes" type="number" min="1" max="120"/.test(htmlSrc));
-ok("capabilities: allow-pause-monitor", /"allow-pause-monitor"/.test(capSrc));
-ok("pause_monitor 命令保留", /fn pause_monitor\(app: tauri::AppHandle\)/.test(mainSrc));
+ok("capabilities 已无 allow-pause-monitor", !/"allow-pause-monitor"/.test(capSrc));
+ok("pause_monitor 死命令已删", !/fn pause_monitor\(/.test(mainSrc));
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

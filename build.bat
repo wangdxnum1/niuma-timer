@@ -78,6 +78,8 @@ echo Done: %BIN%\%F%\niuma-timer.exe
 goto :eof
 
 :do_package
+rem CLI expects PRIVATE_KEY (a key path or contents); accept the newer PATH alias too.
+if not defined TAURI_SIGNING_PRIVATE_KEY if defined TAURI_SIGNING_PRIVATE_KEY_PATH set "TAURI_SIGNING_PRIVATE_KEY=%TAURI_SIGNING_PRIVATE_KEY_PATH%"
 echo.
 echo =========================================
 echo   Packaging (NSIS + MSI) ...
@@ -103,6 +105,15 @@ copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\"
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
+rem 更新器的签名文件（.sig）与安装包同名：必须同批进 package，否则
+rem publish_release.py 生成不出 latest.json，自动更新整条链直接失效。
+if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\"
+if exist "%BUNDLE%\msi\*%APPVER%*.msi.sig" copy /Y "%BUNDLE%\msi\*%APPVER%*.msi.sig" "%BIN%\package\"
+rem 绿色版是手动复制的裸 exe：tauri 若为它产出签名，改名成与便携版同名后
+rem 一并入包（改名是为了让签名文件带上版本号，便于发布校验识别）
+set "RAWSIG=%SRC%\target\%TRIPLE%\release\niuma-timer.exe.sig"
+if not exist "%RAWSIG%" set "RAWSIG=%SRC%\target\release\niuma-timer.exe.sig"
+if exist "%RAWSIG%" copy /Y "%RAWSIG%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe.sig"
 echo Done: %BIN%\package\
 goto :eof
 

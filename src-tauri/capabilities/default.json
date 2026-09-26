@@ -34,12 +34,18 @@
     "allow-get-body-bill",
     "allow-get-heatmap",
     "allow-get-trend",
-    "allow-pause-monitor",
     "allow-test-offwork-notify",
     "allow-test-sedentary-notify",
     "allow-reset-remind-state",
     "allow-run-remind-tick",
     "notification:default",
-    "allow-test-sedentary-trigger"
+    "allow-test-sedentary-trigger",
+    "allow-check-update",
+    "allow-skip-update-version",
+    "allow-start-update",
+    "allow-take-update-announcement",
+    "allow-backup-now",
+    "allow-list-backups",
+    "allow-restore-backup"
   ]
 }

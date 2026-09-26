@@ -89,6 +89,11 @@ pub fn should_notify_payday(enabled: bool, today_day: u32, payday: u32, done: bo
     enabled && !done && today_day == payday
 }
 
+fn payday_due(cfg: &Config, today: chrono::NaiveDate, done: bool) -> bool {
+    should_notify_payday(cfg.remind_payday_enabled, today.day(), cfg.payday, done)
+        && cfg.remind_payday_last_date.as_deref() != Some(today.to_string().as_str())
+}
+
 fn thousands(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = if n < 0 { String::from("-") } else { String::new() };
@@ -117,7 +122,7 @@ fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {
             PAYDAY_DONE.store(false, Ordering::SeqCst);
         }
     }
-    if !should_notify_payday(cfg.remind_payday_enabled, today.day(), cfg.payday, PAYDAY_DONE.load(Ordering::Relaxed)) {
+    if !payday_due(cfg, today, PAYDAY_DONE.load(Ordering::Relaxed)) {
         return;
     }
     let state = app.state::<crate::AppState>();
@@ -129,7 +134,13 @@ fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {
             return;
         }
     };
-    PAYDAY_DONE.store(true, Ordering::SeqCst);
+    {
+        let mut current = sync::lock(&state.config, "state.config");
+        if !payday_due(&current, today, PAYDAY_DONE.load(Ordering::Relaxed)) { return; }
+        current.remind_payday_last_date = Some(today.to_string());
+        crate::config::save(&current);
+        PAYDAY_DONE.store(true, Ordering::SeqCst);
+    }
     let month = bill.period_end.get(5..7).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
     let (title, body) = payday_texts(&format!("{month} 月"), bill.work_days.unwrap_or(0), bill.ot_hours, (bill.slack_rate * 100.0) as i64, bill.total_income);
     notify(app, &title, &body);
@@ -281,6 +292,16 @@ pub(crate) fn force_sedentary_since(minutes: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payday_persisted_date_survives_restart() {
+        let mut cfg = Config::default();
+        cfg.remind_payday_last_date = Some("2026-09-10".to_string());
+        let reloaded: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+        assert!(!payday_due(&reloaded, today, false));
+        assert!(payday_due(&reloaded, chrono::NaiveDate::from_ymd_opt(2026, 10, 10).unwrap(), false));
+    }
 
     #[test]
     fn payday_hit_and_miss() {

@@ -27,6 +27,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 DEFAULT_REPO = "wangdxnum1/niuma-timer"
 API = "https://api.github.com"
@@ -186,6 +187,101 @@ def changelog_section(root, version):
     return ""
 
 
+def platform_key_for(sig_name):
+    """Map a .sig file name to the Tauri updater platform key.
+
+    Tauri keys Windows entries as "<target>-<arch>" and appends the installer
+    kind ("-nsis" / "-msi") when the artifact came out of an installer bundle.
+    The key is read off the real .sig name instead of guessed; anything that
+    does not match returns "" so the caller warns instead of inventing a key
+    that no client would ever look up.
+    """
+    low = sig_name.lower()
+    if not low.endswith(".sig"):
+        return ""
+    base = low[:-4]
+    if base.endswith(".msi"):
+        return "windows-x86_64-msi"
+    if base.endswith(".exe"):
+        if "portable" in base:
+            # 裸 exe 的签名没有安装器种类，客户端按裸 target 键查
+            return "windows-x86_64-portable"
+        return "windows-x86_64-nsis"
+    return ""
+
+
+def build_latest_json(root, version, package_dir, repo):
+    """Write latest.json (the Tauri updater manifest) next to the artifacts.
+
+    Fail closed when artifacts or signatures are missing.
+    """
+    if not os.path.isdir(package_dir):
+        raise ValueError("Package directory does not exist")
+
+    base = "https://github.com/%s/releases/download/v%s" % (repo, version)
+    platforms = {}
+    for name in sorted(os.listdir(package_dir)):
+        p = os.path.join(package_dir, name)
+        if not (os.path.isfile(p) and name.lower().endswith(".sig")):
+            continue
+        artifact = name[:-4]
+        if not os.path.isfile(os.path.join(package_dir, artifact)):
+            raise ValueError("Signature has no artifact: " + name)
+        if version not in artifact:
+            log("  [skip] %s: not version %s, kept out of latest.json"
+                % (name, version))
+            continue
+        key = platform_key_for(name)
+        if not key:
+            log("  [WARN] %s: unrecognised signature name, kept out of latest.json"
+                % name)
+            continue
+        if key in platforms:
+            log("  [WARN] %s: platform %s already taken, keeping the first"
+                % (name, key))
+            continue
+        with open(p, encoding="utf-8") as f:
+            signature = f.read().strip()
+        if not signature:
+            raise ValueError("Empty signature: " + name)
+        platforms[key] = {
+            "signature": signature,
+            "url": "%s/%s" % (base, urllib.parse.quote(artifact)),
+        }
+
+    portable_name = "niuma-timer-%s-portable.exe" % version
+    if os.path.isfile(os.path.join(package_dir, portable_name)):
+        platforms["windows-x86_64-portable"] = {
+            "signature": "",
+            "url": "%s/%s" % (base, urllib.parse.quote(portable_name)),
+        }
+    if "windows-x86_64-nsis" in platforms:
+        platforms["windows-x86_64"] = platforms["windows-x86_64-nsis"]
+    elif "windows-x86_64-msi" in platforms:
+        platforms["windows-x86_64"] = platforms["windows-x86_64-msi"]
+
+    if not platforms:
+        raise ValueError("No updater artifacts found")
+    for name in os.listdir(package_dir):
+        if version in name and name.lower().endswith((".exe", ".msi")) and "portable" not in name.lower():
+            if not os.path.isfile(os.path.join(package_dir, name + ".sig")):
+                raise ValueError("Installer signature missing: " + name)
+
+    manifest = {
+        "version": version,
+        "notes": changelog_section(root, version),
+        "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "platforms": platforms,
+    }
+    path = os.path.join(package_dir, "latest.json")
+    os.makedirs(package_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    log("  latest.json: %s [%s]" % (path, ", ".join(sorted(platforms))))
+    return manifest
+
+
 def build_notes(root, version, package_dir):
     files = []
     if os.path.isdir(package_dir):
@@ -256,7 +352,7 @@ def main():
         package_dir = os.path.join(root, package_dir)
 
     notes_path = os.path.join(package_dir, "RELEASE_NOTES.md")
-    if os.path.isfile(notes_path):
+    if os.path.isfile(notes_path) and not args.generate_notes_only:
         log("  notes: reusing %s" % notes_path)
     else:
         notes = build_notes(root, args.version, package_dir)
@@ -265,7 +361,15 @@ def main():
             f.write(notes)
         log("  notes: generated %s" % notes_path)
 
+    manifest = build_latest_json(root, args.version, package_dir, args.repo)
+
     if args.generate_notes_only:
+        if os.path.isdir(package_dir):
+            bins = [n for n in sorted(os.listdir(package_dir))
+                    if args.version in n and n.lower().endswith((".exe", ".msi"))]
+            with open(os.path.join(package_dir, "SHA256SUMS.txt"), "w", encoding="utf-8", newline="\n") as f:
+                for name in bins:
+                    f.write("%s  %s\n" % (sha256_file(os.path.join(package_dir, name)), name))
         return 0
 
     token = github_token()
@@ -278,6 +382,9 @@ def main():
 
     st, rel = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
     if st == 200:
+        if not rel.get("draft"):
+            log("  [ERROR] refusing to mutate an already published release")
+            return 1
         log("  release: already exists, reusing id=%s" % rel.get("id"))
     else:
         body = open(notes_path, encoding="utf-8").read().splitlines()
@@ -289,7 +396,7 @@ def main():
             "tag_name": args.tag,
             "name": args.title or ("Niuma Timer %s" % args.version),
             "body": "\n".join(body).strip(),
-            "draft": False,
+            "draft": True,
             "prerelease": False,
             "target_commitish": DEFAULT_BRANCH,
         }
@@ -307,25 +414,37 @@ def main():
         return 1
 
     existing = {a["name"] for a in rel.get("assets", [])}
-    assets = []
+    bins = []
+    sigs = []
     if os.path.isdir(package_dir):
         for name in sorted(os.listdir(package_dir)):
             p = os.path.join(package_dir, name)
-            if not (os.path.isfile(p) and name.lower().endswith((".exe", ".msi"))):
+            if not os.path.isfile(p):
                 continue
-            if args.version not in name:
-                # stale bundle from an older release: never upload or checksum it
-                log("  [skip] %s: not version %s" % (name, args.version))
-                continue
-            assets.append(p)
+            low = name.lower()
+            if low.endswith((".exe", ".msi")):
+                if args.version not in name:
+                    # stale bundle from an older release: never upload or checksum it
+                    log("  [skip] %s: not version %s" % (name, args.version))
+                    continue
+                bins.append(p)
+            elif low.endswith(".sig"):
+                # 签名与安装包必须同批上传：latest.json 引用的就是这些文件，
+                # 少一个就等价于给客户端一个 404 的更新源
+                if args.version in name:
+                    sigs.append(p)
 
-    if not assets:
+    assets = bins + sigs
+    if manifest:
+        assets.append(os.path.join(package_dir, "latest.json"))
+
+    if not bins:
         log("  [WARN] no .exe/.msi found in %s" % package_dir)
     else:
-        # Digest sheet shipped as an asset; the notes table links to it.
+        # Digest sheet covers the installers only (it ships as an asset itself).
         sums_path = os.path.join(package_dir, "SHA256SUMS.txt")
         with open(sums_path, "w", encoding="utf-8", newline="\n") as f:
-            for path in assets:
+            for path in bins:
                 f.write("%s  %s\n" % (sha256_file(path), os.path.basename(path)))
         assets.append(sums_path)
 
@@ -354,10 +473,31 @@ def main():
 
     st, final = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
     if st == 200:
+        uploaded = {a["name"] for a in final.get("assets", [])}
+        if not {os.path.basename(p) for p in assets}.issubset(uploaded):
+            log("  [FAIL] draft release is missing required assets")
+            failed = True
+        # latest.json 的 url 指向的就是这一版 Release；引用一个不存在的文件
+        # 会让客户端下载 404，比不发更新更糟，所以在这里兜底核对。
+        for key, info in (manifest or {}).get("platforms", {}).items():
+            ref = urllib.parse.unquote(info["url"].rsplit("/", 1)[-1])
+            if ref not in uploaded:
+                log("  [FAIL] latest.json[%s] references %s which is not in the release"
+                    % (key, ref))
+                failed = True
         log("")
         log("RELEASE_URL=%s" % final.get("html_url"))
         for a in final.get("assets", []):
             log("  - %s  %.1f MB" % (a["name"], a["size"] / 1024.0 / 1024.0))
+    else:
+        failed = True
+    if not failed:
+        st, result = gh.call("PATCH", "%s/releases/%s" % (api, rel["id"]),
+                            json.dumps({"draft": False, "make_latest": "true"}).encode("utf-8"),
+                            "application/json; charset=utf-8")
+        if st != 200:
+            log("  [FAIL] draft could not be published: %s" % result)
+            failed = True
     return 1 if failed else 0
 
 

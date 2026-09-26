@@ -255,6 +255,30 @@ fn git_rev() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// 从 `../CHANGELOG.md` 抽出与 `version` 匹配的 `## [x.y.z]` 段落，供 A2 更新公告使用。
+///
+/// 编译期把本版本更新说明写进 exe：离线可用、不受 GitHub API 限流。
+/// 抽不到时降级空串（不 panic，只是界面显示「暂无更新说明」）。
+/// `cargo:rustc-env` 的值不适合携带真实换行，故统一转义为字面 `\n`，运行时再由 update.rs 还原。
+fn changelog_notes(version: &str) -> String {
+    let Ok(text) = std::fs::read_to_string("../CHANGELOG.md") else {
+        println!("cargo:warning=更新说明跳过：读不到 ../CHANGELOG.md");
+        return String::new();
+    };
+    let header = format!("## [{version}]");
+    let Some(start) = text.find(&header) else {
+        println!("cargo:warning=更新说明跳过：CHANGELOG 里没有 {header} 段落");
+        return String::new();
+    };
+    let body = &text[start..];
+    // 段落终点 = 下一个 `## [` 标题之前；找不到则到文末
+    let end = match body[header.len()..].find("\n## [") {
+        Some(off) => header.len() + off,
+        None => body.len(),
+    };
+    body[..end].trim().replace('\n', "\\n")
+}
+
 fn main() {
     // 前端资源目录变化时强制重跑 tauri-build（把 HTML/CSS/JS 重新嵌入 exe）。
     // tauri-build 默认不监控 frontend/，不写这条会导致改前端文件后 exe 里仍是旧资源。
@@ -285,6 +309,9 @@ fn main() {
     println!("cargo:rustc-env=BUILD_TIME={}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
     println!("cargo:rustc-env=BUILD_GIT={}", git_rev());
     println!("cargo:rustc-env=BUILD_FE_VER={ver}");
+    println!("cargo:rerun-if-changed=../CHANGELOG.md");
+    let pkg_ver = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    println!("cargo:rustc-env=UPDATE_NOTES={}", changelog_notes(&pkg_ver));
 
     // 命令名单从 src/main.rs 解析，capabilities 缺的 allow-* 也自动补上。
     // 解析为空宁可让编译失败——静默变成「没有任何命令可用」更难排查。

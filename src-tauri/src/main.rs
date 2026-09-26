@@ -17,9 +17,11 @@ mod remind;
 mod scheduler;
 mod sync;
 mod tray;
+mod update;
 mod weekbill;
 mod win;
 mod remote;
+mod backup;
 
 use std::io::Write;
 use std::panic;
@@ -208,10 +210,13 @@ fn load_config(state: State<AppState>) -> config::Config {
 fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) -> Result<(), String> {
     // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
     // （如未来新增的后端字段），避免整份替换把未传字段重置成默认值。
-    let existing = sync::lock(&state.config, "state.config").clone();
-    let merged = config::merge_from_value(&existing, &cfg)?;
-    *sync::lock(&state.config, "state.config") = merged.clone();
-    config::save(&merged);
+    let merged = {
+        let mut existing = sync::lock(&state.config, "state.config");
+        let merged = config::merge_from_value(&existing, &cfg)?;
+        config::save(&merged);
+        *existing = merged.clone();
+        merged
+    };
     // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
     apply_monitor_switches(&merged);
     // 全局快捷键即时生效（开关关闭 → 解注册；开启 → 重新注册）
@@ -410,12 +415,6 @@ pub fn toggle_pause(app: &tauri::AppHandle) -> bool {
     let st = get_status(state.inner());
     tray::update_tray(app, &st);
     pause::is_paused()
-}
-
-#[tauri::command]
-fn pause_monitor(app: tauri::AppHandle) -> pause::PauseView {
-    toggle_pause(&app);
-    pause::view()
 }
 
 /// 调试卡「下班提醒」：直发一条真实文案的系统通知，点一下即可验证通知通道
@@ -711,8 +710,142 @@ if (!window.__TAURI__) {
 /// tauri-codegen 生成默认窗口图标时只解码 icon.ico 的**第一个图层**（本项目为 16×16），
 
 
+/// 检查更新（手动入口）。网络 IO 交给 spawn_blocking，不占主线程；
+/// 返回原始真相、不受「跳过此版本」影响（手动检查不该被 skip 掩盖）。
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<update::UpdateInfo, String> {
+    let info = tauri::async_runtime::spawn_blocking(update::check_now)
+        .await
+        .map_err(|e| e.to_string())?;
+    if info.error.is_none() {
+        let state = app.state::<AppState>();
+        let mut cfg = sync::lock(&state.config, "state.config");
+        cfg.update_last_check = Some(chrono::Local::now().to_rfc3339());
+        config::save(&cfg);
+    }
+    Ok(info)
+}
+
+/// 立即更新。安装版走官方 updater 静默升级；绿色版起内置助手进程替换自身后退出。
+#[tauri::command]
+async fn start_update(app: tauri::AppHandle) -> Result<(), String> {
+    let _operation = update::UpdateOperation::begin()?;
+    use tauri_plugin_updater::UpdaterExt;
+    if let Some(target) = update::installed_kind() {
+        let updater = app.updater_builder().target(target).build().map_err(|e| e.to_string())?;
+        let Some(pending) = updater.check().await.map_err(|e| e.to_string())? else {
+            return Err("已是最新版本".to_string());
+        };
+        pending
+            .download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    // 绿色版：拉清单 → 取 portable 资产 → 取 SHA256SUMS.txt → 起助手（拦截在 Tauri 之前）
+    let rel = tauri::async_runtime::spawn_blocking(update::fetch_remote)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let url = rel
+        .platform_url(update::PORTABLE_KEY)
+        .ok_or_else(|| "远端清单里没有便携包条目".to_string())?
+        .to_string();
+    if update::compare_versions(&rel.version, env!("CARGO_PKG_VERSION")) != std::cmp::Ordering::Greater {
+        return Err("已是最新版本".to_string());
+    }
+    let sums_url = update::sums_url_for(&url);
+    let sums = tauri::async_runtime::spawn_blocking(move || update::fetch_text(&sums_url))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let args = update::build_helper_args(
+        &exe.to_string_lossy(),
+        std::process::id(),
+        &url,
+        &sums,
+    )?;
+    let mut argv = vec![
+        "--apply-update".to_string(),
+        "--target".to_string(),
+        args.target.clone(),
+    ];
+    if let Some(pid) = args.wait_pid {
+        argv.push("--wait-pid".to_string());
+        argv.push(pid.to_string());
+    }
+    argv.push("--url".to_string());
+    argv.push(args.url.clone());
+    argv.push("--sha256".to_string());
+    argv.push(args.sha256.clone());
+    std::process::Command::new(&exe)
+        .args(&argv)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    app.exit(0);
+    Ok(())
+}
+
+/// 跳过某版本：之后不再提示该版本，直到远端出现更高的版本。
+/// 只写配置不清托盘（重启后托盘项自然消失）—— spec §11.3 的验收口径。
+#[tauri::command(async)]
+fn skip_update_version(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut cfg = sync::lock(&state.config, "state.config");
+    cfg.update_skipped_version = Some(version);
+    config::save(&cfg);
+    Ok(())
+}
+
+/// 取本次更新公告：仅「升级后的首次启动」返回 CHANGELOG 段落，其余返回 None。
+#[tauri::command(async)]
+fn take_update_announcement(app: tauri::AppHandle) -> Option<String> {
+    update::take_announcement(&app)
+}
+
+#[tauri::command(async)]
+fn backup_now(app: tauri::AppHandle) -> Result<backup::BackupEntry, String> {
+    let state = app.state::<AppState>();
+    let _cfg = sync::lock(&state.config, "state.config");
+    backup::create_backup(env!("CARGO_PKG_VERSION"))
+}
+
+#[tauri::command(async)]
+fn list_backups() -> Vec<backup::BackupEntry> {
+    backup::list_backups()
+}
+
+#[tauri::command(async)]
+fn restore_backup(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    let summary = {
+        let state = app.state::<AppState>();
+        let _cfg = sync::lock(&state.config, "state.config");
+        backup::stage_restore(&name, env!("CARGO_PKG_VERSION"))?
+    };
+    let handle = app.clone();
+    std::thread::Builder::new().name("niuma-restore-restart".to_string())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            handle.restart();
+        }).map_err(|e| format!("还原已准备好，请手动重启（自动重启失败：{e}）"))?;
+    Ok(summary)
+}
+
 fn main() {
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(args) = update::parse_helper_args(&argv) {
+        std::process::exit(update::run_helper(args));
+    }
+    if argv.iter().any(|arg| arg == "--apply-update") {
+        std::process::exit(2);
+    }
     install_crash_log();
+    match update::resume_after_helper() {
+        Ok(true) => return,
+        Err(e) => { db::debug_log(&e); return; }
+        Ok(false) => {}
+    }
     // 两条日志都在 .setup 之前：webview 起不来时也能留下「装的是哪一版」的痕迹
     db::debug_log(&format!("build: {}", build_info()));
     trace_startup(&format!("build: {}", build_info()));
@@ -724,6 +857,9 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         // 全局快捷键（v1.3.0 守护）：Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // 自动更新（v1.4.0 阶段 A）：前端不直接调插件命令，
+        // 一律走 check_update / start_update 包装，故 capabilities 无需 updater:default
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -731,9 +867,13 @@ fn main() {
             }
         }))
         .append_invoke_initialization_script(INVOKE_SHIM)
-        .manage(AppState::default())
         .setup(|app| {
             trace_startup("setup: enter");
+            // 单实例插件已取得进程所有权，数据库尚未打开；避免第二个实例误交换运行中的库。
+            if let Some(msg) = backup::apply_pending_on_startup() {
+                db::debug_log(&msg);
+            }
+            app.manage(AppState::default());
             // SQLite 首次调用 conn() 时建目录 + 开库 + 建表（WAL）。
             // 程序未发布、无旧库旧 JSON，不做任何迁移；schema 变更直接改 DDL 重建库。
             db::conn();
@@ -843,6 +983,11 @@ fn main() {
             // 必须在 activity::start() / app_usage::start() 之后：采集线程先就位。
             scheduler::start(apph);
             trace_startup("setup: scheduler started");
+
+            // 延迟 30 秒自动检查一次更新，之后每 6 小时一次（设置页可关）
+            update::spawn_update_checker(app.handle().clone());
+            trace_startup("setup: update checker started");
+
             trace_startup("setup: done");
             Ok(())
         })
@@ -851,7 +996,6 @@ fn main() {
             save_config,
             refresh_holidays,
             get_status_cmd,
-            pause_monitor,
             test_offwork_notify,
             test_sedentary_notify,
             test_sedentary_trigger,
@@ -875,7 +1019,14 @@ fn main() {
             set_autostart,
             get_storage_info,
             run_maintenance,
-            export_csv
+            export_csv,
+            check_update,
+            start_update,
+            skip_update_version,
+            take_update_announcement,
+            backup_now,
+            list_backups,
+            restore_backup
         ])
         .build(tauri::generate_context!())
     ;

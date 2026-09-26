@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v21525f5d";
+const FE_VER = "v5680ba48";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -88,10 +88,23 @@ async function load() {
     $("remind_offwork_enabled").checked = cfg.remind_offwork_enabled !== false;
     $("remind_payday_enabled").checked = cfg.remind_payday_enabled !== false;
     $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
+    // 自动更新（v1.4.0）：缺省 true，与后端 serde default 对齐
+    $("update_auto_check").checked = cfg.update_auto_check !== false;
     $("retention_days").value = String(cfg.retention_days || 0);
     setBillStyleUI(cfg.bill_style || "receipt");
     setBillSpanUI(cfg.bill_span || "week");
     loadStorageInfo();
+    loadBackups();
+    // 升级后公告（v1.4.0）：后端只在下发一次后清空，非空即直接进更新页
+    try {
+      const ann = await invoke("take_update_announcement");
+      if (ann) {
+        updateAnnounce = ann;
+        showView("viewUpdate");
+      }
+    } catch (e) {
+      flog("take_update_announcement ERR: " + (e && e.message ? e.message : String(e)));
+    }
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
   } catch (e) {
@@ -227,6 +240,8 @@ function readCfg() {
     remind_offwork_enabled: $("remind_offwork_enabled").checked,
     remind_payday_enabled: $("remind_payday_enabled").checked,
     shortcuts_enabled: $("shortcuts_enabled").checked,
+    // 自动更新（v1.4.0）：必须带回去，否则 merge 时一直保留旧值
+    update_auto_check: $("update_auto_check").checked,
     weekend_overtime: $("weekend_overtime").checked,
     weekend_ot_start: $("weekend_ot_start").value || null,
     overtime_rate_weekend: numOrNull($("overtime_rate_weekend").value),
@@ -1496,6 +1511,7 @@ $("remind_sedentary_enabled").addEventListener("change", saveNow);
 $("remind_offwork_enabled").addEventListener("change", saveNow);
 $("remind_payday_enabled").addEventListener("change", saveNow);
 $("shortcuts_enabled").addEventListener("change", saveNow);
+$("update_auto_check").addEventListener("change", saveNow);
 $("remind_sedentary_minutes").addEventListener("blur", saveIfChanged);
 // 加班设置：输入框失焦保存，开关立即保存
 ["overtime_start", "overtime_rate", "overtime_meal"].forEach((id) =>
@@ -1667,6 +1683,98 @@ async function runCleanup() {
 
 $("retention_days").addEventListener("change", saveNow);
 $("cleanupBtn").addEventListener("click", runCleanup);
+// ---- 数据备份与还原 ----
+// 低频重操作：与存储占用同模式，load() 时拉一次列表、操作后就地刷新，绝不进 tick 轮询。
+async function loadBackups() {
+  try {
+    const list = await invoke("list_backups");
+    renderBackups(list);
+    const hint = $("backupDirHint");
+    if (hint && list.length > 0 && list[0].path) {
+      // 用第一条的目录回显实际备份落点（文档目录可能被 OneDrive 重定向）
+      hint.textContent = "备份目录：" + list[0].path.slice(0, list[0].path.lastIndexOf("\\") + 1);
+    }
+  } catch (e) {
+    flog("list_backups ERR: " + (e && e.message ? e.message : String(e)));
+    const el = $("backupList");
+    if (el) el.innerHTML = '<span class="hint">备份列表读取失败</span>';
+  }
+}
+
+function renderBackups(list) {
+  const box = $("backupList");
+  box.textContent = "";
+  if (!list || list.length === 0) {
+    box.textContent = "还没有备份";
+    return;
+  }
+  list.forEach((b) => {
+    const row = document.createElement("div");
+    row.className = b.broken ? "backup-row broken" : "backup-row";
+    const button = document.createElement("button");
+    button.disabled = !!b.broken;
+    button.textContent = "还原";
+    button.dataset.backup = b.name;
+    const label = document.createElement("span");
+    label.textContent = b.broken ? b.name + " · 不可用" :
+      b.created_at + " · v" + b.app_version + " · " + fmtBytes(b.bytes);
+    row.append(label, button);
+    box.append(row);
+  });
+}
+
+async function doBackupNow() {
+  const btn = $("backupNowBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "备份中…";
+  }
+  try {
+    const entry = await invoke("backup_now");
+    showToast("备份完成：" + entry.name, "ok");
+    const st = $("backupStatus");
+    if (st) {
+      st.textContent = "最近备份：" + entry.path + "（" + fmtBytes(entry.bytes) + "）";
+    }
+    await loadBackups();
+  } catch (e) {
+    const detail = e && e.message ? e.message : String(e);
+    flog("backup_now ERR: " + detail);
+    showToast("备份失败：" + detail, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "立即备份";
+    }
+  }
+}
+
+let restoreBusy = false;
+async function doRestore(name) {
+  if (restoreBusy) return;
+  restoreBusy = true;
+  // 二次确认必须说清后果与可逆性：覆盖什么 + 当前数据会被自动保护
+  const yes = await showConfirm(
+    "将用这份备份覆盖当前全部数据（加班 / 活动 / 应用 / 媒体 / 设置）。当前数据会先自动备份一份。确定继续？"
+  );
+  if (!yes) { restoreBusy = false; return; }
+  try {
+    await invoke("restore_backup", { name });
+    // 成功即盖不可取消遮罩：后端 800ms 后 restart，窗口内禁止任何继续操作
+    $("restoreMask").classList.remove("hidden");
+  } catch (e) {
+    // 失败不重启、当前数据完好，红字给原因
+    const detail = e && e.message ? e.message : String(e);
+    flog("restore_backup ERR: " + detail);
+    showToast("还原失败：" + detail, "err");
+    restoreBusy = false;
+  }
+}
+$("backupNowBtn").addEventListener("click", doBackupNow);
+$("backupList").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-backup]");
+  if (btn) doRestore(btn.dataset.backup);
+});
 // 加班记录增删改
 $("otAddBtn").addEventListener("click", openOtForm);
 $("otExportBtn").addEventListener("click", exportOvertimeCsv);
@@ -1695,8 +1803,10 @@ function showView(id) {
   const isDetail = DETAIL_VIEWS.includes(id);
   if (isDetail) lastDetailView = id;
   const navKey = isDetail ? "detail" : id;
+  // 更新页不在侧栏里（由设置页/托盘/公告进入），高亮挂到「设置」，免得整排都不亮
+  const railKey = id === "viewUpdate" ? "viewSettings" : navKey;
   document.querySelectorAll(".rail-item").forEach((b) => {
-    b.classList.toggle("active", b.dataset.nav === navKey);
+    b.classList.toggle("active", b.dataset.nav === railKey);
   });
   $("detailPager").classList.toggle("hidden", !isDetail);
   $("billPager").classList.toggle("hidden", id !== "viewBill");
@@ -1716,6 +1826,11 @@ function showView(id) {
   if (id === "viewBill") {
     setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步
     loadBillTab(); // 懒渲染：进账单页才拉当前页（周级聚合不进 tick）
+  }
+  // 更新页没有轮询：进页时先出已有内容/公告，没有公告才联网查一次
+  if (id === "viewUpdate") {
+    if (updateAnnounce) paintUpdate();
+    else loadUpdateInfo();
   }
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
@@ -1788,6 +1903,7 @@ let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
 let billData = null; // 最近一次 WeekBill 缓存，切风格时免重拉
 let billStyle = "receipt";
 let curBillSpan = "week";
+let billRequestGeneration = 0;
 
 function fmtMoney(n) {
   return "¥" + (Number(n) || 0).toFixed(2);
@@ -1824,10 +1940,16 @@ function setBillSpanUI(span) {
 
 async function loadWeekBill() {
   if (curView !== "viewBill") return;
+  const generation = ++billRequestGeneration;
+  const span = curBillSpan, offset = weekOffset, tab = curBillTab;
+  const isCurrent = () => generation === billRequestGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill";
   try {
-    billData = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
+    const result = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
+    if (!isCurrent()) return;
+    billData = result;
     paintWeekBill();
   } catch (e) {
+    if (!isCurrent()) return;
     flog("get_bill ERR: " + (e && e.message ? e.message : String(e)));
     $("billWeekLabel").textContent = "账单加载失败";
   }
@@ -2061,10 +2183,16 @@ function fmtWan(n) {
 
 async function loadHourHeat() {
   if (curView !== "viewBill") return;
+  const generation = ++billRequestGeneration;
+  const span = curBillSpan, offset = weekOffset, tab = curBillTab;
+  const isCurrent = () => generation === billRequestGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill";
   try {
-    heatData = await invoke("get_heatmap", { span: curBillSpan, offset: weekOffset });
+    const result = await invoke("get_heatmap", { span: curBillSpan, offset: weekOffset });
+    if (!isCurrent()) return;
+    heatData = result;
     paintHourHeat();
   } catch (e) {
+    if (!isCurrent()) return;
     flog("get_heatmap ERR: " + (e && e.message ? e.message : String(e)));
     $("heatSummary").textContent = "热力图加载失败";
   }
@@ -2140,10 +2268,16 @@ function paintHourHeat() {
 
 async function loadWeekTrend() {
   if (curView !== "viewBill") return;
+  const generation = ++billRequestGeneration;
+  const span = curBillSpan, offset = weekOffset, tab = curBillTab;
+  const isCurrent = () => generation === billRequestGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill";
   try {
-    trendData = await invoke("get_trend", { span: curBillSpan, offset: weekOffset });
+    const result = await invoke("get_trend", { span: curBillSpan, offset: weekOffset });
+    if (!isCurrent()) return;
+    trendData = result;
     paintWeekTrend();
   } catch (e) {
+    if (!isCurrent()) return;
     flog("get_trend ERR: " + (e && e.message ? e.message : String(e)));
     $("billWeekLabel").textContent = "趋势加载失败";
   }
@@ -2289,10 +2423,16 @@ function paintWeekTrend() {
 
 async function loadBodyBill() {
   if (curView !== "viewBill") return;
+  const generation = ++billRequestGeneration;
+  const span = curBillSpan, offset = weekOffset, tab = curBillTab;
+  const isCurrent = () => generation === billRequestGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill";
   try {
-    bodyData = await invoke("get_body_bill", { span: curBillSpan, offset: weekOffset });
+    const result = await invoke("get_body_bill", { span: curBillSpan, offset: weekOffset });
+    if (!isCurrent()) return;
+    bodyData = result;
     paintBodyBill();
   } catch (e) {
+    if (!isCurrent()) return;
     flog("get_body_bill ERR: " + (e && e.message ? e.message : String(e)));
     $("billWeekLabel").textContent = "身体账单加载失败";
   }
@@ -2314,7 +2454,7 @@ function paintBodyBill() {
   $("bodyBusiest").closest("section").classList.toggle("hidden", !hasData);
   if (!hasData) return;
 
-  const recDays = Math.max(1, days.filter((d) => (d.events || 0) > 0).length);
+  const recDays = Math.max(1, body.record_days || 0);
   $("bodyClicks").textContent = fmtWan(body.clicks) + " 次";
   $("bodyClicksAvg").textContent = "日均 " + fmtWan(Math.round(body.clicks / recDays)) + " 次";
   $("bodyKeys").textContent = fmtWan(body.keys) + " 次";
@@ -2346,7 +2486,7 @@ function paintBodyBill() {
     }
     const wd = document.createElement("div");
     wd.className = "bar-wd";
-    wd.textContent = d.label || "";
+    wd.textContent = d.weekday || "";
     col.append(pair, wd);
     bars.append(col);
   });
@@ -2512,7 +2652,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=21525f5d = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=5680ba48 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
@@ -2577,8 +2717,103 @@ bindDebugBtn("testTickBtn", "run_remind_tick", "立即调度", "已调度：满�
 // 「模拟久坐」：只伪造连续活跃起点，随后走真实 tick——不用等阈值分钟数
 bindDebugBtn("testSedentaryTriggerBtn", "test_sedentary_trigger", "模拟久坐", "已模拟并调度：满足条件才会弹");
 
+// ====== 自动更新（v1.4.0）======
+// updateInfo：最近一次 check_update 的原始结果；updateAnnounce：升级后公告（一次性）
+let updateInfo = null;
+let updateAnnounce = null;
+
+// 画更新页：公告优先且只显示一次，其余按检查结果显示
+function paintUpdate() {
+  const info = updateInfo;
+  $("updCurrent").textContent = info && info.current ? "v" + info.current : "—";
+  $("updLatest").textContent =
+    info && (info.latest || info.current) ? "v" + (info.latest || info.current) : "—";
+  if (info && info.error) {
+    $("updStatus").textContent = "检查失败：" + info.error;
+  } else if (info && info.has_update) {
+    $("updStatus").textContent = info.installed
+      ? "有新版本，可一键更新"
+      : "有新版本，可自动替换便携版并重启";
+  } else if (info) {
+    $("updStatus").textContent = "已是最新版本 v" + info.current;
+  } else {
+    $("updStatus").textContent = "点右上角「检查更新」开始";
+  }
+  $("updNotes").textContent = info && info.notes ? info.notes : "暂无更新说明";
+  $("updSkipBtn").disabled = !(info && info.has_update && !info.error);
+  // 公告覆盖在检查结果之上，展示过即清空（后端也只会下发一次）
+  if (updateAnnounce) {
+    $("updStatus").textContent = "已更新到当前版本";
+    $("updNotes").textContent = updateAnnounce;
+    updateAnnounce = null;
+  }
+  // 便携版/出错时不给「立即更新」，避免点了必然失败
+  $("updUpdateBtn").classList.toggle(
+    "hidden",
+    !(info && info.has_update && !info.error)
+  );
+}
+
+async function loadUpdateInfo() {
+  $("updStatus").textContent = "检查中…";
+  try {
+    updateInfo = await invoke("check_update");
+  } catch (e) {
+    updateInfo = {
+      has_update: false,
+      installed: false,
+      error: e && e.message ? e.message : String(e),
+    };
+  }
+  paintUpdate();
+}
+
+// 托盘菜单「检查更新」→ 主窗打开更新页（事件由 tray.rs 广播）
+async function watchUpdateView() {
+  try {
+    await TAURI.event.listen("update-view-requested", () => showView("viewUpdate"));
+  } catch (err) {
+    flog("update view listen failed: " + (err && err.message ? err.message : String(err)));
+  }
+}
+
+$("updCheckBtn").addEventListener("click", loadUpdateInfo);
+// 设置页「检查更新」= 进更新页；取数由 showView 收尾统一触发，这里不重复发一次请求
+$("settingsCheckUpdateBtn").addEventListener("click", () => {
+  updateAnnounce = null; // 手动检查时不再展示上次的升级公告
+  showView("viewUpdate");
+});
+$("updLaterBtn").addEventListener("click", () => showView("viewMain"));
+$("updSkipBtn").addEventListener("click", async () => {
+  if (!updateInfo || !updateInfo.latest) return;
+  try {
+    await invoke("skip_update_version", { version: updateInfo.latest });
+    showToast("已跳过 v" + updateInfo.latest, "ok");
+    showView("viewMain");
+  } catch (e) {
+    showToast("跳过失败：" + (e && e.message ? e.message : String(e)), "err");
+  }
+});
+// 立即更新：命令内部完成下载+安装并让进程退出/重启，这里只负责把状态显示出来
+$("updUpdateBtn").addEventListener("click", async () => {
+  const button = $("updUpdateBtn");
+  if (button.disabled) return;
+  button.disabled = true;
+  const p = $("updProgress");
+  p.classList.remove("hidden");
+  p.textContent = "正在准备下载…";
+  try {
+    await invoke("start_update");
+    p.textContent = "正在下载并安装，完成后程序会自动重启…";
+  } catch (e) {
+    p.textContent = "更新失败：" + (e && e.message ? e.message : String(e));
+    button.disabled = false;
+  }
+});
+
 boot();
 watchVisibility();
+watchUpdateView();
 // 以下轮询全部受 winVisible 约束：窗口 hide 到托盘时直接跳过，
 // 不再空跑「每 2 秒三次 IPC + SQLite 聚合查询 + 图标 base64 回传」。
 setInterval(() => { if (winVisible) tick(); }, 1000);

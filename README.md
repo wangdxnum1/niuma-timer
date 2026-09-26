@@ -1,8 +1,8 @@
 # NiuMa Timer
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
-> [中文文档](./README.zh-CN.md)
-> Current version **1.1.0** (2026-09-18) · [Changelog](./CHANGELOG.md)
+> [Chinese docs](./README.zh-CN.md)
+> Current version **1.4.0** (2026-09-26) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
@@ -42,6 +42,15 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Storage breakdown & cleanup** — a nine-way storage breakdown in Settings (exact `dbstat` figures), with a retention period and one-click cleanup that shrinks the write-ahead log
 - **Remote session detection** — auto overtime recording is skipped while this PC is remotely controlled via RDP / Sunlogin / ToDesk / UU (configurable; manual entry unaffected)
 
+- **Month & year bills** — the Bill tab spans week / month / year; the year view aggregates by month, and payday pushes a notification recapping last month's earnings (can be disabled)
+- **Data insights** — three extra views on the Bill tab: weekday × hour activity heatmap, earnings and slack-rate trends across eight periods, and a period "body bill" of keyboard/mouse wear
+- **Guard reminders** — sedentary reminders and off-work reminders via native Windows notifications, plus global hotkeys (Alt+Shift+N toggle window, Alt+Shift+P pause monitoring); configurable thresholds, all off-work aware
+- **Manual pause** — pause all monitoring from the tray menu or Alt+Shift+P; money freezes until resumed
+- **Six-card settings** — salary & schedule, overtime, guard, data monitoring, appearance, and system & data, each with collapsible detail notes
+- **Automatic updates** — checks GitHub Releases every 6 hours (and 30s after launch), one-click update with "skip this version", and a post-update announcement pulled from the changelog; the portable build self-replaces with checksum-verified rollback
+- **Backup & restore** — one-click full backup (SQLite snapshot + config + manifest) into a single zip under `Documents\niuma-timer-backup`, list all backups, and one-click restore with integrity validation, automatic safety backup, and auto-restart
+- **Build info in startup log** — version, build time, git commit and frontend fingerprint are compiled into the exe and written to `debug.log` / `panic.log` at startup
+
 ## How it works
 
 ```
@@ -53,11 +62,15 @@ earned today = worked hours × hourly rate
 money rate   = hourly rate ÷ 60
 ```
 
-Lunch break is excluded automatically (morning + afternoon segments configured separately). Earnings cap at the end of the workday; rest days show "今天休息" (day off).
+Lunch break is excluded automatically (morning + afternoon segments configured separately). Earnings cap at the end of the workday; rest days show "day off".
 
 Overtime is detected via the Windows lock-screen event: leaving (locking) the machine after the configured overtime start time records a daily overtime record (`raw_hours` → valid hours floored to 0.5h, fee = valid × rate, plus optional meal allowance).
 
-The overtime day is derived from the **lock timestamp itself**: a leave time before 06:00 counts as past-midnight, so it is attributed to the **previous day** with +24h added to the end time — locking at 01:30 on 9/12 after working through the night is recorded as 7.5h on 9/11, shown as "次日 01:30" (next day 01:30) in the detail view.
+The overtime day is derived from the **lock timestamp itself**: a leave time before 06:00 counts as past-midnight, so it is attributed to the **previous day** with +24h added to the end time — locking at 01:30 on 9/12 after working through the night is recorded as 7.5h on 9/11, shown as "next day 01:30" in the detail view.
+
+### Backup and restore
+
+Settings → System & Data writes a full backup (database + config + manifest) as a single zip under `Documents\niuma-timer-backup\`. The database snapshot is produced with SQLite's `VACUUM INTO`, which merges the WAL and yields a page-consistent database file — copying the live file would silently drop recent writes. Restore validates the archive (manifest identity, `PRAGMA integrity_check`, all seven business tables), first creates a safety backup of current data, stages `.pending` files, and restarts: the file swap runs after single-instance ownership is acquired and before the database opens, because the app holds one database connection for its whole lifetime and swapping the file under a live connection would mix old and new pages. The previous database is kept as `niuma.db.pre-restore.bak`; a failed swap never blocks startup.
 
 ## Requirements
 
@@ -143,8 +156,8 @@ GitHub Release and upload the artifacts.
 ## Usage
 
 1. Run `niuma-timer.exe` — a tray icon appears showing `¥0`.
-2. **Right-click the tray → Settings** (设置): enter your monthly salary, morning/afternoon start-end times, and payday. Click **Save** (保存).
-3. Click **Refresh workdays** (刷新工作日数据) to fetch this year's holidays; the app auto-calculates the actual workday count for the current month (you can also override it manually).
+2. **Right-click the tray → Settings**: enter your monthly salary, morning/afternoon start-end times, and payday. Click **Save**.
+3. Click **Refresh workdays** to fetch this year's holidays; the app auto-calculates the actual workday count for the current month (you can also override it manually).
 4. The tray icon now refreshes every second with `¥XX`. Hover to see the breakdown; **double-click** the tray icon to open the main window, which shows live wage stats plus overtime / activity / app-usage / media-playback summaries, each with a detail view.
 
 ### Config fields
@@ -230,4 +243,4 @@ niuma-timer/
 
 ---
 
-Made with 🦀 by a fellow 牛马.
+Made with 🦀 by a fellow wage worker.

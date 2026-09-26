@@ -33,7 +33,7 @@ const DETAIL_VIEWS = ["viewOt", "viewAct", "viewApp", "viewAudio"];
 const railNavs = [...html.matchAll(/class="rail-item[^"]*"\s+data-nav="(\w+)"/g)].map((m) => m[1]);
 const dotNavs = [...html.matchAll(/class="pg-dot[^"]*"\s+data-nav="(view\w+)"/g)].map((m) => m[1]);
 
-eq("视图数量（.app）", viewIds.length, 7);
+eq("视图数量（.app）", viewIds.length, 8);
 eq(
   "侧栏四项 = 主页/账单/明细/设置",
   JSON.stringify(railNavs),
@@ -97,7 +97,7 @@ for (const [name, src] of [
 
 // ---------------------------------------------------------------- 3. 侧栏与翻页器绑定
 eq("app.js 绑定 .rail-item 点击", appSrc.includes('querySelectorAll(".rail-item")'), true);
-eq("app.js 侧栏按 navKey 同步高亮", appSrc.includes("b.dataset.nav === navKey"), true);
+eq("app.js 侧栏按 railKey 同步高亮", appSrc.includes("b.dataset.nav === railKey"), true);
 eq("app.js 绑定明细 .pg-dot 直达", appSrc.includes('querySelectorAll("#detailPager .pg-dot")'), true);
 eq("app.js 绑定 pgPrev", appSrc.includes('$("pgPrev").addEventListener'), true);
 eq("app.js 绑定 pgNext", appSrc.includes('$("pgNext").addEventListener'), true);

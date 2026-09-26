@@ -133,6 +133,19 @@ pub struct Config {
     /// 发薪日战绩提醒开关
     #[serde(default = "default_true")]
     pub remind_payday_enabled: bool,
+    #[serde(default)]
+    pub remind_payday_last_date: Option<String>,
+
+    // ---- 自动更新（v1.4.0 阶段 A）----
+    /// 是否自动检查更新
+    #[serde(default = "default_true")]
+    pub update_auto_check: bool,
+    #[serde(default)]
+    pub update_last_check: Option<String>,
+    #[serde(default)]
+    pub update_skipped_version: Option<String>,
+    #[serde(default)]
+    pub update_last_run_version: Option<String>,
     /// 全局快捷键开关（Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停）
     #[serde(default = "default_true")]
     pub shortcuts_enabled: bool,
@@ -220,6 +233,11 @@ impl Default for Config {
             remind_sedentary_minutes: 50,
             remind_offwork_enabled: true,
             remind_payday_enabled: true,
+            remind_payday_last_date: None,
+            update_auto_check: true,
+            update_last_check: None,
+            update_skipped_version: None,
+            update_last_run_version: None,
             shortcuts_enabled: true,
             retention_days: 0,
         }

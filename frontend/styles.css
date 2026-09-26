@@ -850,6 +850,19 @@ button:active {
   min-height: 15px;
 }
 
+/* 更新说明：远端 Markdown 已由后端截断，按原样换行展示即可（本项目此前无 pre 样式） */
+.upd-notes {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #b9b9c0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 /* ====== 设置卡内部层级：时间 2×2 网格 / 虚线分节 / 折叠长说明 ====== */
 .time-grid {
   display: grid;
@@ -2019,4 +2032,28 @@ button:active {
   font-size: 11px;
   color: #6b7280;
   text-align: center;
+}
+/* ====== 数据备份与还原（v1.4.0 包 D） ====== */
+.backup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+.backup-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #f2f2f4;
+}
+.backup-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.backup-row.broken {
+  opacity: 0.6;
+}
+.backup-row.broken button[disabled] {
+  cursor: not-allowed;
 }

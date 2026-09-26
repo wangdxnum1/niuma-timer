@@ -63,6 +63,16 @@ const RETRY_DELAYS: &[u64] = &[200, 500, 1000, 1800];
 /// （"暂停监控" ↔ "恢复监控"）。create_tray 时写入，之后只读使用。
 static PAUSE_ITEM: Mutex<Option<MenuItem<tauri::Wry>>> = Mutex::new(None);
 
+/// 托盘菜单句柄（阶段 A）：发现新版本时向其中追加动态项「更新到 vX.Y.Z」。
+/// create_tray 时写入，之后只读。
+static TRAY_MENU: Mutex<Option<Menu<tauri::Wry>>> = Mutex::new(None);
+
+/// 动态项「更新到 vX.Y.Z」句柄；远端版本抬高时先摘旧的再挂新的。
+static UPDATE_ITEM: Mutex<Option<MenuItem<tauri::Wry>>> = Mutex::new(None);
+
+/// 当前已挂到托盘菜单上的远端版本号：同版本重复调用直接返回（去重）。
+static UPDATE_VERSION: Mutex<Option<String>> = Mutex::new(None);
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -604,13 +614,52 @@ fn spawn_hover_worker(app: AppHandle, rx: mpsc::Receiver<HoverMsg>) {
 }
 
 /// 创建托盘图标、菜单；悬停卡片窗口首次悬停时懒创建（启动路径不创建额外窗口）。
+/// 发现新版本时挂上托盘动态项「更新到 vX.Y.Z」；同版本重复调用无副作用。
+///
+/// 托盘尚未创建（菜单句柄为空）时只记下版本，由 [`create_tray`] 收尾补挂。
+pub fn set_update_available(app: &AppHandle, version: &str) {
+    if sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION").as_deref() == Some(version) {
+        return;
+    }
+    let guard = sync::lock(&TRAY_MENU, "tray::TRAY_MENU");
+    let Some(menu) = guard.as_ref() else {
+        *sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION") = Some(version.to_string());
+        return;
+    };
+    let Ok(item) = MenuItem::with_id(
+        app,
+        "update-now",
+        format!("更新到 v{version}"),
+        true,
+        None::<&str>,
+    ) else {
+        return;
+    };
+    // 版本抬高时先摘掉旧项，避免菜单里堆一串「更新到 v…」
+    if let Some(old) = sync::lock(&UPDATE_ITEM, "tray::UPDATE_ITEM").take() {
+        let _ = menu.remove(&old);
+    }
+    if menu.append(&item).is_ok() {
+        *sync::lock(&UPDATE_ITEM, "tray::UPDATE_ITEM") = Some(item);
+        *sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION") = Some(version.to_string());
+    }
+}
+
+
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "主界面", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新工作日", true, None::<&str>)?;
     let pause_item = MenuItem::with_id(app, "pause", "暂停监控", true, None::<&str>)?;
+    // 阶段 A：手动检查更新入口（结果落到 viewUpdate；不受 update_auto_check 限制）
+    let check_update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     *sync::lock(&PAUSE_ITEM, "tray::PAUSE_ITEM") = Some(pause_item.clone());
-    let menu = Menu::with_items(app, &[&settings, &refresh, &pause_item, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&settings, &refresh, &check_update, &pause_item, &quit],
+    )?;
+    // 动态「更新到 vX.Y.Z」要往这个菜单里追加，故留下句柄
+    *sync::lock(&TRAY_MENU, "tray::TRAY_MENU") = Some(menu.clone());
 
     let (tx, rx) = mpsc::channel::<HoverMsg>();
 
@@ -652,6 +701,17 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
                 crate::spawn_holiday_refresh(app.clone());
             } else if event.id == MenuId::new("pause") {
                 crate::toggle_pause(app);
+            } else if event.id == MenuId::new("check-update")
+                || event.id == MenuId::new("update-now")
+            {
+                // 两个入口都只是「把主窗拉出来 + 通知前端切到更新视图」，
+                // 真正的检查/更新逻辑在前端点按钮后走 A7 的命令。
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                let _ = app.emit("update-view-requested", ());
             } else if event.id == MenuId::new("quit") {
                 app.exit(0);
             }
@@ -683,6 +743,14 @@ pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
             _ => {}
         })
         .build(app)?;
+
+    // 竞态补挂：检查线程可能在本函数之前就发现了新版本（那时还没有菜单可挂），
+    // 它只把版本记进了 UPDATE_VERSION。这里必须先取走再重挂——否则
+    // set_update_available 的去重分支会直接 return，动态项永远不会出现。
+    let early = sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION").take();
+    if let Some(early) = early {
+        set_update_available(app.handle(), &early);
+    }
     Ok(tray)
 }
 
@@ -695,7 +763,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html?v=21525f5d".into()),
+        WebviewUrl::App("hover_card.html?v=5680ba48".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)
@@ -731,7 +799,12 @@ pub fn update_tray(app: &AppHandle, status: &DayStatus) {
         if cfg.tray_hover_card {
             let _ = tray.set_tooltip::<&str>(None);
         } else {
-            let _ = tray.set_tooltip(Some(&status.tooltip));
+            // 阶段 A：有可用更新时在 tooltip 追加提示（无更新则后缀为空，行为不变）
+            let suffix = sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION")
+                .as_deref()
+                .map(|v| format!("（有新版本 v{v}）"))
+                .unwrap_or_default();
+            let _ = tray.set_tooltip(Some(&format!("{}{suffix}", status.tooltip)));
         }
     }
     // 暂停菜单项文案跟随全局状态；先比对现文案，避免每秒对原生菜单做无谓的 set_text

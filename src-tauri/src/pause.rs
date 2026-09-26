@@ -9,8 +9,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Serialize;
-
 /// 手动暂停开关（托盘 / 快捷键切换）
 static MANUAL: AtomicBool = AtomicBool::new(false);
 
@@ -22,18 +20,6 @@ pub fn set_manual(v: bool) {
 /// 当前是否处于暂停（手动）
 pub fn is_paused() -> bool {
     MANUAL.load(Ordering::Relaxed)
-}
-
-/// 暂停状态视图（pause_monitor 命令返回体）
-#[derive(Debug, Clone, Serialize)]
-pub struct PauseView {
-    pub paused: bool,
-}
-
-pub fn view() -> PauseView {
-    PauseView {
-        paused: is_paused(),
-    }
 }
 
 #[cfg(test)]

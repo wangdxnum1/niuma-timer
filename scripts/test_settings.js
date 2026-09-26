@@ -139,5 +139,33 @@ ok(
 );
 
 console.log("");
+const htmlSrc = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
+console.log("== 设置页六卡与备份区结构（v1.4.0 补强） ==");
+["薪资与作息", "加班", "守护", "数据监控", "外观", "系统与数据"].forEach((t) => {
+  ok("设置卡标题存在：" + t, htmlSrc.indexOf("<h2>" + t + "</h2>") >= 0);
+});
+ok(
+  "备份区四 id + 还原重启遮罩齐全",
+  ["backupNowBtn", "backupStatus", "backupList", "backupDirHint", "restoreMask"].every(
+    (id) => htmlSrc.indexOf('id="' + id + '"') >= 0
+  )
+);
+ok("renderBackups 空态文案为「还没有备份」", appSrc.indexOf("还没有备份") >= 0);
+ok(
+  "broken 条目标不可用且还原按钮禁用",
+  appSrc.indexOf("不可用") >= 0 && /b\.broken[\s\S]{0,260}disabled/.test(appSrc)
+);
+ok(
+  "还原二次确认同时说清「覆盖」与「自动备份」",
+  appSrc.indexOf("覆盖当前全部数据") >= 0 && appSrc.indexOf("自动备份") >= 0
+);
+ok(
+  "还原成功后盖不可取消遮罩（不等 tick）",
+  /invoke\("restore_backup"[\s\S]{0,200}restoreMask[\s\S]{0,80}remove\("hidden"\)/.test(appSrc)
+);
+ok(
+  "备份列表只在启动拉一次、不进 tick（无 setInterval 备份轮询）",
+  !/setInterval\([^)]*loadBackups/.test(appSrc)
+);
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

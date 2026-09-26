@@ -20,6 +20,7 @@ set "AUTO=no"
 set "WANTVER=%~1"
 if /i "%~1"=="/y" ( set "AUTO=yes" & set "WANTVER=" )
 if /i "%~2"=="/y" set "AUTO=yes"
+if "%AUTO%"=="yes" set "CI=true"
 
 rem --- Prefer system Git: WorkBuddy's bundled PortableGit has a broken
 rem     credential manager (segfaults). System Git + wincred works. ---
@@ -119,6 +120,16 @@ if errorlevel 1 (
   if errorlevel 1 ( echo [ERROR] tauri-cli still unavailable after install & exit /b 1 )
 )
 
+rem 更新包签名：tauri 用私钥给安装包产出 .sig，客户端靠它校验下载到的包。
+rem 缺了不会报错、只会静默产出一个没签名的包，到用户侧才发现更新被拒 —— 提前拦住。
+if not defined TAURI_SIGNING_PRIVATE_KEY if defined TAURI_SIGNING_PRIVATE_KEY_PATH set "TAURI_SIGNING_PRIVATE_KEY=%TAURI_SIGNING_PRIVATE_KEY_PATH%"
+if not defined TAURI_SIGNING_PRIVATE_KEY (
+  echo [ERROR] TAURI_SIGNING_PRIVATE_KEY is not set - updater artifacts would be unsigned.
+  echo         PowerShell: $env:TAURI_SIGNING_PRIVATE_KEY = "$HOME\.tauri\niuma-timer.key"
+  exit /b 1
+)
+rem TAURI_SIGNING_PRIVATE_KEY_PASSWORD is optional for an unencrypted local key.
+
 rem ---------------- 3. confirm ----------------
 echo.
 echo   Steps:
@@ -197,6 +208,34 @@ if defined BADART (
   echo         Clean bin\package and src-tauri\target\...\bundle, then rerun.
   exit /b 1
 )
+rem 没有 .sig 就生成不出 latest.json，发出去的版本永远收不到更新
+if not exist "%BIN%\package\*.exe.sig" (
+  echo [ERROR] no .exe.sig in bin\package - updater artifacts were not signed.
+  echo         Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, then repackage.
+  exit /b 1
+)
+
+rem  Pick a Python interpreter for the gh-less publish path
+set "PYEXE="
+where py >nul 2>&1
+if not errorlevel 1 set "PYEXE=py -3"
+if not defined PYEXE (
+  where python >nul 2>&1
+  if not errorlevel 1 set "PYEXE=python"
+)
+
+rem Metadata is mandatory before git or network side effects.
+if not defined PYEXE (
+  echo [ERROR] Python 3 is required to validate release metadata.
+  exit /b 1
+)
+(
+  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --generate-notes-only
+  if errorlevel 1 exit /b 1
+)
+call :verify_latest
+if errorlevel 1 exit /b 1
+
 
 rem ---------------- 8. commit ----------------
 echo.
@@ -274,20 +313,12 @@ echo   [5/5] Creating GitHub Release ...
 echo =========================================
 set "ASSETS="
 for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do set "ASSETS=!ASSETS! "%%f""
-
-rem  Pick a Python interpreter for the gh-less publish path
-set "PYEXE="
-where py >nul 2>&1
-if not errorlevel 1 set "PYEXE=py -3"
-if not defined PYEXE (
-  where python >nul 2>&1
-  if not errorlevel 1 set "PYEXE=python"
-)
-
-rem  Generate release notes up front so both publish paths can use them
-if defined PYEXE (
-  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --generate-notes-only
-)
+rem 签名与 updater 清单同样是 Release 资产：客户端按 latest.json 找安装包，
+rem 少一个都会让自动更新 404
+for %%f in ("%BIN%\package\*.exe.sig" "%BIN%\package\*.msi.sig") do set "ASSETS=!ASSETS! "%%f""
+rem Manifest and checksums are generated above, so collect them after generation.
+if exist "%BIN%\package\latest.json" set "ASSETS=!ASSETS! "%BIN%\package\latest.json""
+if exist "%BIN%\package\SHA256SUMS.txt" set "ASSETS=!ASSETS! "%BIN%\package\SHA256SUMS.txt""
 
 where gh >nul 2>&1
 if not errorlevel 1 (
@@ -301,15 +332,19 @@ goto :publish_browser
 :publish_gh
 echo   publishing with gh CLI ...
 if exist "%BIN%\package\RELEASE_NOTES.md" (
-  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --notes-file "%BIN%\package\RELEASE_NOTES.md" --latest !ASSETS!
+  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --notes-file "%BIN%\package\RELEASE_NOTES.md" --draft !ASSETS!
 ) else (
-  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --generate-notes --latest !ASSETS!
+  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --generate-notes --draft !ASSETS!
 )
 if errorlevel 1 (
   echo [ERROR] gh release create failed; falling back to browser.
   goto :publish_browser
 )
+gh release edit "v%VER%" --repo "%REPO%" --draft=false --latest
+if errorlevel 1 goto :release_fail
 echo     release v%VER% published
+call :verify_latest
+if errorlevel 1 goto :release_fail
 popd
 goto :summary
 
@@ -321,15 +356,38 @@ if errorlevel 1 (
   goto :publish_browser
 )
 echo     release v%VER% published
+call :verify_latest
+if errorlevel 1 goto :release_fail
 popd
 goto :summary
 
 :publish_browser
 echo   Create the release manually and drag these files in:
 for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%f
+if exist "%BIN%\package\latest.json" echo     %BIN%\package\latest.json
 start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
 popd
 goto :summary
+
+:verify_latest
+echo   verifying latest.json ...
+if not exist "%BIN%\package\latest.json" (
+  echo [ERROR] latest.json missing in bin\package - automatic update would break.
+  exit /b 1
+)
+powershell -NoProfile -Command "$j = Get-Content -Raw -Encoding UTF8 '%BIN%\package\latest.json' | ConvertFrom-Json; if (@($j.platforms.PSObject.Properties).Count -lt 1) { exit 1 }"
+if errorlevel 1 (
+  echo [ERROR] latest.json has an empty platforms map - no client could update.
+  exit /b 1
+)
+echo     latest.json ok
+exit /b 0
+
+:release_fail
+echo [ERROR] release v%VER% was published but latest.json verification failed.
+echo         Fix bin\package and rerun scripts\publish_release.py for this tag.
+endlocal
+exit /b 1
 
 :summary
 echo.

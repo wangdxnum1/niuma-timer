@@ -236,6 +236,8 @@ pub struct BodyDay {
 pub struct BodyBill {
     pub week_start: String,
     pub week_end: String,
+    /// 有活动的真实天数；年视图按月分桶后仍用于日均。
+    pub record_days: usize,
     /// 点击 = left − dbl + right + mid + xbtn（双击折算 1 次，同周账单口径）
     pub clicks: i64,
     pub keys: i64,
@@ -301,6 +303,7 @@ pub fn body_bill_assemble(
     Ok(BodyBill {
         week_start: a,
         week_end: b,
+        record_days: days.iter().filter(|d| d.events > 0).count(),
         clicks,
         keys,
         moves,
@@ -349,6 +352,18 @@ fn collapse_days_to_months(bb: BodyBill) -> BodyBill {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annual_body_preserves_recorded_day_count() {
+        let conn = mem_conn();
+        for day in 1..=20 {
+            insert_act(&conn, &format!("2026-01-{day:02}"), 10, [1, 0, 10, 0, 0, 0, 0, 0, 0]);
+        }
+        let bb = body_bill_assemble(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(), &conn).unwrap();
+        let year = collapse_days_to_months(bb);
+        assert_eq!(year.record_days, 20);
+        assert_eq!(year.days[0].weekday, "1 月");
+    }
     use rusqlite::Connection;
 
     use crate::db::{CREATE_ACT_HOURLY, CREATE_APP_USAGE_HOURLY, CREATE_AUDIO_USAGE_HOURLY};
