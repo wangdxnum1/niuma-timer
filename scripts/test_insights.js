@@ -1,6 +1,6 @@
 // 数据洞察回归测试（v1.2.0：时段热力 / 多周趋势 / 身体账单 + 远程排除开关）：
 // 1) insights.rs：三组结构体、assemble 纯函数 + with_db 入口、口径 SQL（events/clicks/周封顶）
-// 2) main.rs：mod 注册 + 三命令与 handler 登记 + get_week_trend 配置快照
+// 2) main.rs：mod 注册 + 三命令与 handler 登记 + get_trend 配置快照
 // 3) index.html：账单页 4-tab 分段与三视图骨架、设置页远程排除开关
 // 4) app.js：4-tab 状态机与懒加载分发、翻周联动、热力 sqrt 归一、手写 SVG 折线、
 //    身体账单 96dpi 换算、远程开关三处接线（readCfg/load 回填/change 保存）
@@ -67,11 +67,11 @@ eq("只测纯函数不碰真实文件库（无 with_db 调用进测试）", /mod
 
 // ---------------------------------------------------------------- 2. main.rs 接线
 has("mod 注册 insights", rsMain, "mod insights;");
-has("命令 get_hour_heatmap", rsMain, "fn get_hour_heatmap");
-has("命令 get_week_trend", rsMain, "fn get_week_trend");
-has("命令 get_body_bill", rsMain, "fn get_body_bill");
-has("handler 登记 get_hour_heatmap", rsMain, "get_hour_heatmap,");
-has("handler 登记 get_week_trend", rsMain, "get_week_trend,");
+has("命令 get_heatmap", rsMain, "fn get_heatmap");
+has("命令 get_trend", rsMain, "fn get_trend");
+has("命令 get_body_bill", rsMain, "fn get_body_bill(span");
+has("handler 登记 get_heatmap", rsMain, "get_heatmap,");
+has("handler 登记 get_trend", rsMain, "get_trend,");
 has("handler 登记 get_body_bill", rsMain, "get_body_bill,");
 has("趋势命令锁内取配置快照", rsMain, 'sync::lock(&state.config, "state.config").clone()');
 
@@ -118,9 +118,9 @@ has("tab 状态切换 setBillTabUI", appSrc, "function setBillTabUI(tab)");
 has("懒加载分发 loadBillTab", appSrc, "async function loadBillTab()");
 has("进账单页同步翻页器并拉当前页", appSrc, "setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步");
 has("翻周联动当前 tab", appSrc, "loadBillTab(); // 翻周联动当前 tab");
-has("invoke get_hour_heatmap", appSrc, 'invoke("get_hour_heatmap", { weekOffset })');
-has("invoke get_week_trend", appSrc, 'invoke("get_week_trend", { weekOffset })');
-has("invoke get_body_bill", appSrc, 'invoke("get_body_bill", { weekOffset })');
+has("invoke get_heatmap", appSrc, 'invoke("get_heatmap", { span: "week", offset: weekOffset })');
+has("invoke get_trend", appSrc, 'invoke("get_trend", { span: "week", offset: weekOffset })');
+has("invoke get_body_bill", appSrc, 'invoke("get_body_bill", { span: "week", offset: weekOffset })');
 has("热力 sqrt 归一 heatLevel", appSrc, "function heatLevel(v, max)");
 has("热力渲染 paintHourHeat", appSrc, "function paintHourHeat()");
 has("趋势渲染 paintWeekTrend", appSrc, "function paintWeekTrend()");

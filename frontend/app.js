@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vfec22d0e";
+const FE_VER = "vfe228429";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -1807,10 +1807,10 @@ function setBillStyleUI(style) {
 async function loadWeekBill() {
   if (curView !== "viewBill") return;
   try {
-    billData = await invoke("get_week_bill", { weekOffset });
+    billData = await invoke("get_bill", { span: "week", offset: weekOffset });
     paintWeekBill();
   } catch (e) {
-    flog("get_week_bill ERR: " + (e && e.message ? e.message : String(e)));
+    flog("get_bill ERR: " + (e && e.message ? e.message : String(e)));
     $("billWeekLabel").textContent = "账单加载失败";
   }
 }
@@ -2048,10 +2048,10 @@ function isoAddDays(iso, n) {
 async function loadHourHeat() {
   if (curView !== "viewBill") return;
   try {
-    heatData = await invoke("get_hour_heatmap", { weekOffset });
+    heatData = await invoke("get_heatmap", { span: "week", offset: weekOffset });
     paintHourHeat();
   } catch (e) {
-    flog("get_hour_heatmap ERR: " + (e && e.message ? e.message : String(e)));
+    flog("get_heatmap ERR: " + (e && e.message ? e.message : String(e)));
     $("heatSummary").textContent = "热力图加载失败";
   }
 }
@@ -2127,10 +2127,10 @@ function paintHourHeat() {
 async function loadWeekTrend() {
   if (curView !== "viewBill") return;
   try {
-    trendData = await invoke("get_week_trend", { weekOffset });
+    trendData = await invoke("get_trend", { span: "week", offset: weekOffset });
     paintWeekTrend();
   } catch (e) {
-    flog("get_week_trend ERR: " + (e && e.message ? e.message : String(e)));
+    flog("get_trend ERR: " + (e && e.message ? e.message : String(e)));
     $("billWeekLabel").textContent = "趋势加载失败";
   }
 }
@@ -2276,7 +2276,7 @@ function paintWeekTrend() {
 async function loadBodyBill() {
   if (curView !== "viewBill") return;
   try {
-    bodyData = await invoke("get_body_bill", { weekOffset });
+    bodyData = await invoke("get_body_bill", { span: "week", offset: weekOffset });
     paintBodyBill();
   } catch (e) {
     flog("get_body_bill ERR: " + (e && e.message ? e.message : String(e)));
@@ -2498,7 +2498,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=fec22d0e = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=fe228429 = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();

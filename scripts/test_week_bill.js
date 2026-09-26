@@ -1,9 +1,9 @@
 // 本周打工账单回归测试（小票/仪表盘双风格周聚合视图）：
 // 1) weekbill.rs：PeriodBill/DayBill 结构体、周一对齐、环比除零、聚合 SQL（ot/act/app）
-// 2) main.rs：mod 注册 + get_week_bill 命令与 handler 登记
+// 2) main.rs：mod 注册 + get_bill 命令与 handler 登记
 // 3) config.rs：bill_style 字段 + serde 默认 receipt
 // 4) index.html：侧栏第四 tab、viewBill 骨架（周导航/空态/两风格容器）、设置风格分段
-// 5) app.js：invoke get_week_bill、本周封顶、四档金句、双风格渲染、监控关闭守卫、
+// 5) app.js：invoke get_bill、本周封顶、四档金句、双风格渲染、监控关闭守卫、
 //    设置绑定、mon-seg 类名冲突守卫
 // 运行：node scripts/test_week_bill.js
 const fs = require("fs");
@@ -59,8 +59,8 @@ has("单测：空周全零", rsBill, "fn empty_week_all_zero");
 
 // ---------------------------------------------------------------- 2. main.rs 接线
 has("mod 注册 weekbill", rsMain, "mod weekbill;");
-has("命令 get_week_bill", rsMain, "fn get_week_bill");
-has("handler 登记 get_week_bill", rsMain, "get_week_bill,");
+has("命令 get_bill", rsMain, "fn get_bill");
+has("handler 登记 get_bill", rsMain, "get_bill,");
 has("命令锁外查询：clone 配置快照", rsMain, "sync::lock(&state.config, \"state.config\").clone()");
 
 // ---------------------------------------------------------------- 3. config.rs bill_style
@@ -93,7 +93,7 @@ has("分段：小票", html, 'data-bill="receipt"');
 has("分段：仪表盘", html, 'data-bill="dashboard"');
 
 // ---------------------------------------------------------------- 5. app.js 渲染与守卫
-has("invoke get_week_bill", appSrc, 'invoke("get_week_bill", { weekOffset })');
+has("invoke get_bill", appSrc, 'invoke("get_bill", { span: "week", offset: weekOffset })');
 has("懒渲染：进账单页同步翻页器并拉当前页", appSrc, "setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步");
 has("翻周状态 weekOffset", appSrc, "let weekOffset = 0;");
 has("本周封顶", appSrc, "if (next < 0) return;");

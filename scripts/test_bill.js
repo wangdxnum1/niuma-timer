@@ -57,7 +57,7 @@ has("assemble 用 while 遍历区间", rsBill, "while d <= input.end");
 has("period_bill 复用 period_bounds", rsBill, "period_bounds(span, off, today)");
 has("period_bill 环比取上一周期", rsBill, "prev_period_bounds(span, off, today)");
 has("main 命令返回 PeriodBill", rsMain, "Result<weekbill::PeriodBill, String>");
-has("main 命令体调 period_bill", rsMain, "weekbill::period_bill(&cfg, &hol, weekbill::Span::Week, week_offset)");
+has("main 命令体调 period_bill", rsMain, "weekbill::period_bill(&cfg, &hol, s, offset)");
 has("insights 复用 period_bill", rsInsights, "period_bill(cfg, cur_hol, span, off + i)");
 has("insights 取 period_start", rsInsights, "period_start: pb.period_start,");
 lacks("旧 WeekBill 已移除", rsBill, "pub struct WeekBill");
@@ -87,6 +87,22 @@ has("TrendPoint 有 label", rsInsights, "pub label: String,");
 has("趋势复用 Span", rsInsights, "Span::Week => hm");
 lacks("旧 week_bounds 已删除", rsInsights, "fn week_bounds");
 lacks("旧 week_bill import 已移除", rsInsights, "week_bill,");
+
+// ---- 区块 6：命令改名与 span 入参（B6）----
+has("main 有 get_bill 命令", rsMain, "fn get_bill(state: State<'_, AppState>, span: String, offset: i64)");
+has("main 有 get_heatmap 命令", rsMain, "fn get_heatmap(span: String, offset: i64)");
+has("main 有 get_trend 命令", rsMain, "fn get_trend(state: State<'_, AppState>, span: String, offset: i64)");
+has("main 有 get_body_bill 命令", rsMain, "fn get_body_bill(span: String, offset: i64)");
+has("get_bill 先解析 span 再取锁", rsMain, "let s = weekbill::parse_span(&span)?;");
+has("注册表有 get_bill", rsMain, "get_bill,");
+has("注册表有 get_heatmap", rsMain, "get_heatmap,");
+has("注册表有 get_trend", rsMain, "get_trend,");
+lacks("旧 get_week_bill 已移除", rsMain, "get_week_bill");
+lacks("旧 get_hour_heatmap 已移除", rsMain, "get_hour_heatmap");
+lacks("旧 get_week_trend 已移除", rsMain, "get_week_trend");
+lacks("capabilities 陈旧 allow-get-week-bill 已删", caps, "allow-get-week-bill");
+lacks("capabilities 陈旧 allow-get-hour-heatmap 已删", caps, "allow-get-hour-heatmap");
+lacks("capabilities 陈旧 allow-get-week-trend 已删", caps, "allow-get-week-trend");
 
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

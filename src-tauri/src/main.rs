@@ -554,35 +554,38 @@ fn get_audio_usage_summary(
     audio_usage::summary(&known_icons, date.as_deref())
 }
 
-/// 周账单（B3 临时适配：仍固定周口径，B6 改名 get_bill 并接 span 入参）
+/// 账单聚合（span = week/month/year；offset：0=本期，正数往前翻历史期，负数封顶本期）
+///
+/// 锁内只取 config/holiday 快照，DB 查询全部在锁外（ABBA 死锁规避，见 weekbill 模块注释）。
 #[tauri::command(async)]
-fn get_week_bill(state: State<'_, AppState>, week_offset: i64) -> Result<weekbill::PeriodBill, String> {
+fn get_bill(state: State<'_, AppState>, span: String, offset: i64) -> Result<weekbill::PeriodBill, String> {
+    let s = weekbill::parse_span(&span)?;
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    weekbill::period_bill(&cfg, &hol, weekbill::Span::Week, week_offset)
+    weekbill::period_bill(&cfg, &hol, s, offset)
 }
 
-/// 时段热力图（7×24 键鼠/前台/音频小时代格）。纯 act/app/audio 表聚合，无需快照。
+/// 时段热力图（7×24 键鼠/前台/音频小时代格；月/年坍缩为星期×小时矩阵）。纯 act/app/audio 表聚合，无需快照。
 #[tauri::command(async)]
-fn get_hour_heatmap(week_offset: i64) -> Result<insights::HourHeatmap, String> {
-    insights::hour_heatmap(weekbill::Span::Week, week_offset)
+fn get_heatmap(span: String, offset: i64) -> Result<insights::HourHeatmap, String> {
+    let s = weekbill::parse_span(&span)?;
+    insights::hour_heatmap(s, offset)
 }
 
-/// 多周趋势（最近 8 周，入账复用周账单口径）——快照模式同 get_week_bill。
+/// 多周期趋势（最近 8 个周期，入账复用账单口径）——快照模式同 get_bill。
 #[tauri::command(async)]
-fn get_week_trend(
-    state: State<'_, AppState>,
-    week_offset: i64,
-) -> Result<insights::WeekTrend, String> {
+fn get_trend(state: State<'_, AppState>, span: String, offset: i64) -> Result<insights::WeekTrend, String> {
+    let s = weekbill::parse_span(&span)?;
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    insights::period_trend(&cfg, &hol, weekbill::Span::Week, week_offset)
+    insights::period_trend(&cfg, &hol, s, offset)
 }
 
-/// 身体账单（一周键鼠损耗五指标 + 按天分布）。纯 act_hourly 聚合，无需快照。
+/// 身体账单（键鼠损耗五指标 + 按期分布）。纯 act_hourly 聚合，无需快照。
 #[tauri::command(async)]
-fn get_body_bill(week_offset: i64) -> Result<insights::BodyBill, String> {
-    insights::body_bill(weekbill::Span::Week, week_offset)
+fn get_body_bill(span: String, offset: i64) -> Result<insights::BodyBill, String> {
+    let s = weekbill::parse_span(&span)?;
+    insights::body_bill(s, offset)
 }
 
 /// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
@@ -863,9 +866,9 @@ fn main() {
             get_activity_summary,
             get_app_usage_summary,
             get_audio_usage_summary,
-            get_week_bill,
-            get_hour_heatmap,
-            get_week_trend,
+            get_bill,
+            get_heatmap,
+            get_trend,
             get_body_bill,
             write_debug_log,
             get_autostart,
