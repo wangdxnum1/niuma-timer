@@ -1,4 +1,4 @@
-//! 周期账单聚合：把一周的加班流水、活动计数、应用分类秒折成一张 PeriodBill。
+//! 周期账单聚合：把一个周期的加班流水、活动计数、应用分类秒折成一张 PeriodBill。
 //! 口径见 docs/plans/2026-09-13-week-bill-design.md（口径 1–9）：
 //! 满勤工资按天取当月分母、摸鱼成本按天折算、total_income 不减摸鱼成本、
 //! 环比同函数聚合上一周期、跨年周按天的年份取内置节假日表且不触发网络。
@@ -165,7 +165,7 @@ pub fn prev_period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDa
     period_bounds(span, offset + 1, today)
 }
 
-/// 环比百分点；上周无基数（≤0）→ None，前端不显示箭头
+/// 环比百分点；上一周期无基数（≤0）→ None，前端不显示箭头
 pub fn delta_pct(cur: f64, prev: f64) -> Option<f64> {
     if prev <= 0.0 {
         None
