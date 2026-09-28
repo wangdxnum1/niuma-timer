@@ -518,6 +518,8 @@ def main():
             if st != 200 or pub.get("draft"):
                 log("  [FAIL] post-publish verify: HTTP %s, draft=%s"
                     % (st, pub.get("draft")))
+                log("  [HINT] release 可能已公开（PATCH 已 200）：检查 releases 页"
+                    "或直接重跑本脚本确认，勿按发布失败新建 release")
                 failed = True
     return 1 if failed else 0
 
