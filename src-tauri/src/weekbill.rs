@@ -1,7 +1,7 @@
 //! 周期账单聚合：把一周的加班流水、活动计数、应用分类秒折成一张 PeriodBill。
 //! 口径见 docs/plans/2026-09-13-week-bill-design.md（口径 1–9）：
 //! 满勤工资按天取当月分母、摸鱼成本按天折算、total_income 不减摸鱼成本、
-//! 环比同函数聚合上一周、跨年周按天的年份取内置节假日表且不触发网络。
+//! 环比同函数聚合上一周期、跨年周按天的年份取内置节假日表且不触发网络。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -218,7 +218,7 @@ fn period_label_of(span: Span, start: NaiveDate) -> String {
     }
 }
 
-/// 一周聚合（conn 由调用方给：正式走 with_db，单测走 in-memory）
+/// 周期聚合（conn 由调用方给：正式走 with_db，单测走 in-memory；跨度为周/月/年）
 pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<PeriodBill> {
     let ws = input.start;
     let we = input.end;
