@@ -110,9 +110,17 @@ if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
 rem 便携版 exe 的调试符号随包发布：只认同批构建的 PDB，故直接从刚拷贝的
 rem exe 所在目录取，改名带上版本号便于 Release 资产识别。
+rem PDB 原始体积上百 MB，经本地代理上传 GitHub 时会被远端重置（Errno 10054），
+rem 所以压成 .zip 再入包；tar 是 Windows 10/11 自带，不引入额外依赖。
 set "PDBDIR=%PORTABLE%"
 for %%p in ("%PORTABLE%") do set "PDBDIR=%%~dpp"
-if exist "%PDBDIR%niuma_timer.pdb" copy /Y "%PDBDIR%niuma_timer.pdb" "%BIN%\package\niuma-timer-%APPVER%-portable.pdb"
+if exist "%PDBDIR%niuma_timer.pdb" (
+  tar -a -c -f "%BIN%\package\niuma-timer-%APPVER%-portable.pdb.zip" -C "%PDBDIR%" niuma_timer.pdb
+  if errorlevel 1 (
+    echo [ERROR] failed to compress niuma_timer.pdb for the release
+    exit /b 1
+  )
+)
 rem 更新器的签名文件（.sig）与安装包同名：必须同批进 package，否则
 rem publish_release.py 生成不出 latest.json，自动更新整条链直接失效。
 if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\"

@@ -24,6 +24,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -445,9 +446,11 @@ def main():
                 # 少一个就等价于给客户端一个 404 的更新源
                 if args.version in name:
                     sigs.append(p)
-            elif low.endswith(".pdb"):
+            elif low.endswith((".pdb", ".pdb.zip")):
                 # 调试符号与安装包同批上传：崩溃 dump 只有配上这一版 exe 的
                 # PDB（GUID+Age 匹配）才能精确符号化，漏发即该版本不可查。
+                # 打包产出的是压缩包（PDB 原样上百 MB，经代理上传会被重置），
+                # 原始 .pdb 也接受，便于手工补传。
                 if args.version in name:
                     pdbs.append(p)
 
@@ -476,12 +479,19 @@ def main():
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
         st, res = None, None
-        for attempt in (1, 2):  # one retry: uploads through the proxy hiccup
-            st, res = gh.call("POST", url, data, ctype)
+        # 大文件（PDB 上百 MB）经本地代理上传时偶发连接被远端重置，
+        # 属瞬时网络错误，多试几次再判失败；网络异常必须在这里接住，
+        # 否则未捕获的 URLError 会让整个脚本崩掉，连 fail-closed 都走不到。
+        for attempt in (1, 2, 3):
+            try:
+                st, res = gh.call("POST", url, data, ctype)
+            except (urllib.error.URLError, ssl.SSLError, OSError) as e:
+                st, res = None, e
             if st in (200, 201):
                 break
-            if attempt == 1:
-                log("  [retry] %s failed HTTP %s, retrying once ..." % (name, st))
+            if attempt < 3:
+                log("  [retry] %s failed (%s), retrying %d/3 ..." % (name, st, attempt))
+                time.sleep(2 * attempt)
         if st in (200, 201):
             log("  [ok] %s  %.1f MB" % (name, len(data) / 1024.0 / 1024.0))
         else:
