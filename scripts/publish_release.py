@@ -510,6 +510,15 @@ def main():
         if st != 200:
             log("  [FAIL] draft could not be published: %s" % result)
             failed = True
+        else:
+            # 发布后验证：此时 release 已公开、tag 引用才存在（草稿期 tags 端点
+            # 404 的语义不变，上面的草稿查找仍走列表）。非 200 或仍是 draft
+            # 都算发布失败——重跑幂等（草稿复用已实现）。
+            st, pub = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
+            if st != 200 or pub.get("draft"):
+                log("  [FAIL] post-publish verify: HTTP %s, draft=%s"
+                    % (st, pub.get("draft")))
+                failed = True
     return 1 if failed else 0
 
 

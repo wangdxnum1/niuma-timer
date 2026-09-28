@@ -26,6 +26,7 @@ class ManifestTests(unittest.TestCase):
                 root = pathlib.Path(d)
                 (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
                 calls, assets = [], []
+                published = [False]  # PATCH draft:false 后，tags 端点才可见该 release
                 def call(method, url, data=None, content_type=None):
                     calls.append((method, url, data))
                     if method == "POST" and url.endswith("/releases"):
@@ -41,10 +42,14 @@ class ManifestTests(unittest.TestCase):
                         self.assertEqual({a["name"] for a in assets},
                                          {"niuma-timer-1.4.0-portable.exe", "latest.json", "SHA256SUMS.txt"})
                         self.assertFalse(json.loads(data)["draft"])
+                        published[0] = True
                         return 200, {}
                     if method == "GET":
                         if "/releases/tags/" in url:
-                            return 404, {}  # 草稿没有 tag 引用，按 tag 查必 404
+                            # 草稿没有 tag 引用 → 404；PATCH 公开后 → 200 且非 draft
+                            if published[0]:
+                                return 200, {"draft": False}
+                            return 404, {}
                         if url.endswith("/releases?per_page=100"):
                             return 200, []  # 无可复用草稿 → 走新建
                         if url.endswith("/releases/7"):
@@ -57,6 +62,12 @@ class ManifestTests(unittest.TestCase):
                      mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
                     self.assertEqual(release.main(), 1 if fail_upload else 0)
                 self.assertEqual(any(c[0] == "PATCH" for c in calls), not fail_upload)
+                if not fail_upload:
+                    patch_idx = next(i for i, c in enumerate(calls) if c[0] == "PATCH")
+                    self.assertTrue(
+                        any(c[0] == "GET" and "/releases/tags/" in c[1]
+                            for c in calls[patch_idx + 1:]),
+                        "PATCH 公开成功后必须做一次 tags 端点验证")
 
     def test_existing_draft_is_reused_not_duplicated(self):
         # 重跑发布时的真实场景：草稿已存在且部分资产已上传，
@@ -65,6 +76,7 @@ class ManifestTests(unittest.TestCase):
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
             calls, uploads = [], []
+            published = [False]  # PATCH draft:false 后，tags 端点才可见该 release
             draft = {"id": 7, "draft": True, "tag_name": "v1.4.0",
                      "upload_url": "https://upload.test/assets",
                      "assets": [{"name": "niuma-timer-1.4.0-portable.exe", "size": 8}]}
@@ -72,6 +84,8 @@ class ManifestTests(unittest.TestCase):
                 calls.append((method, url))
                 if method == "GET":
                     if "/releases/tags/" in url:
+                        if published[0]:
+                            return 200, {"draft": False}
                         return 404, {}
                     if url.endswith("/releases?per_page=100"):
                         return 200, [draft]
@@ -84,6 +98,7 @@ class ManifestTests(unittest.TestCase):
                     return 201, {}
                 if method == "PATCH":
                     self.assertFalse(json.loads(data)["draft"])
+                    published[0] = True
                     return 200, {}
                 raise AssertionError("unexpected call: %s %s" % (method, url))
             gh = mock.Mock()
@@ -95,6 +110,47 @@ class ManifestTests(unittest.TestCase):
             self.assertFalse(any(c[0] == "POST" and c[1].endswith("/releases") for c in calls),
                              "must reuse the existing draft instead of creating a duplicate")
             self.assertEqual({u["name"] for u in uploads}, {"latest.json", "SHA256SUMS.txt"})
+
+    def test_post_publish_verify_rejects_still_draft(self):
+        # PATCH 返回 200 但公开后的 release 仍是 draft（tags 可查但 draft=true）
+        # → 必须退出码 1：v1.4.0 发布正是这类静默失败靠人眼兜底才发现的。
+        # 注意 PATCH 前 tags 端点必须 404：主脚本第一步就按 tag 查既有 release，
+        # 若提前返回 200 会被当成「已存在的草稿」走复用路径，测的就不是本缺陷。
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
+            uploads = []
+            published = [False]
+
+            def call(method, url, data=None, content_type=None):
+                if method == "POST" and url.endswith("/releases"):
+                    return 201, {"id": 7, "upload_url": "https://upload.test/assets", "assets": []}
+                if method == "POST":
+                    name = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["name"][0]
+                    uploads.append({"name": name, "size": len(data)})
+                    return 201, {}
+                if method == "PATCH":
+                    published[0] = True
+                    return 200, {}
+                if method == "GET":
+                    if "/releases/tags/" in url:
+                        # PATCH 前 404（草稿无 tag 引用，正常新建路径）；
+                        # PATCH 后 200 但 draft=true → 发布后验证必须拦下
+                        if published[0]:
+                            return 200, {"draft": True}
+                        return 404, {}
+                    if url.endswith("/releases?per_page=100"):
+                        return 200, []
+                    if url.endswith("/releases/7"):
+                        return 200, {"assets": uploads, "html_url": "https://example.test/release"}
+                return 404, {}
+
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
+                 mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 1)
 
     def test_empty_or_unsigned_installer_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
