@@ -84,9 +84,7 @@ mod concurrency_tests {
 /// 远端 latest.json 中单个平台的条目
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlatformEntry {
-    /// minisign 签名内容（安装版由 updater 强制校验）
-    #[serde(default)]
-    pub signature: String,
+    // 安装版签名由官方 updater 解析并校验，本结构只用于版本展示与便携版地址查询。
     /// 安装包 / 绿色版下载地址
     pub url: String,
 }
@@ -99,9 +97,6 @@ pub struct RemoteRelease {
     /// 更新说明（复用 CHANGELOG 段落）
     #[serde(default)]
     pub notes: Option<String>,
-    /// 发布时间（RFC3339）
-    #[serde(default)]
-    pub pub_date: Option<String>,
     /// 平台键 → 条目
     #[serde(default)]
     pub platforms: HashMap<String, PlatformEntry>,
@@ -427,9 +422,6 @@ pub const DEFAULT_ENDPOINT: &str =
 
 /// 绿色版导出的平台键（A9 生成 latest.json 时使用同名键）。
 pub const PORTABLE_KEY: &str = "windows-x86_64-portable";
-
-/// 安装版（NSIS）的平台键。
-pub const NSIS_KEY: &str = "windows-x86_64";
 
 /// `check_update` 的返回体（前端「更新」页直接渲染）。
 #[derive(Serialize, Clone, Debug)]
@@ -875,7 +867,6 @@ mod tests {
         RemoteRelease {
             version: v.to_string(),
             notes: None,
-            pub_date: None,
             platforms: HashMap::new(),
         }
     }
@@ -887,7 +878,7 @@ mod tests {
             None => String::new(),
         };
         format!(
-            r#"{{"version":"{v}",{notes_field}"platforms":{{"windows-x86_64":{{"signature":"sig","url":"https://example.com/a.exe"}}}}}}"#
+            r#"{{"version":"{v}",{notes_field}"pub_date":"2026-09-26T00:00:00Z","platforms":{{"windows-x86_64":{{"signature":"sig","url":"https://example.com/a.exe"}}}}}}"#
         )
     }
 

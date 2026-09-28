@@ -115,6 +115,14 @@ has(
 // body 的 height 紧邻 padding: 8px 出现，借此唯一定位（html,body 那条规则无 height）。
 const mBodyH = html.match(/height:\s*(\d+)px;\s*\n\s*padding:\s*8px;/);
 const mRustH = traySrc.match(/const HOVER_CARD_H: f64 = ([\d.]+);/);
+const mBodyW = html.match(/\n\s*body\s*\{[^}]*\bwidth:\s*(\d+)px;/);
+const mRustW = traySrc.match(/const HOVER_CARD_W: f64 = ([\d.]+);/);
+eq("能解析到 CSS body 宽度", mBodyW !== null, true);
+eq("能解析到 tray.rs HOVER_CARD_W", mRustW !== null, true);
+if (mBodyW && mRustW) {
+  eq("body 宽度 = HOVER_CARD_W", Number(mBodyW[1]), Number(mRustW[1]));
+  eq("卡片使用加宽后的 380 逻辑像素", Number(mRustW[1]), 380);
+}
 eq("能解析到 CSS body 高度", mBodyH !== null, true);
 eq("能解析到 tray.rs HOVER_CARD_H", mRustH !== null, true);
 if (mBodyH && mRustH) {
@@ -136,6 +144,21 @@ lacks("日期不再引用 nc_firstDay 计数器", html, "nc_firstDay");
 lacks("日期不再计算 dayN", html, "dayN");
 lacks("日期文本不再拼接 第N天", html, " · 第");
 has("日期仍拼接星期（周几）", html, '"日 周" + wd');
+
+// --------------------------------- 8. 高 DPI / 显示器切换的定位接线
+// 几何边界由 Rust placement_tests 验证；这里防止窗口入口绕过计算结果。
+has("使用锚点所在显示器", traySrc, "app.monitor_from_point(anchor.x, anchor.y)");
+has("使用排除任务栏的工作区", traySrc, "monitor.work_area()");
+has("定位计算使用目标屏幕缩放", traySrc, "hover_card_rect(anchor, monitor.scale_factor(), work)");
+has("同步更新物理窗口尺寸", traySrc, "w.set_size(tauri::PhysicalSize::new(width as u32, height as u32))");
+has("鼠标命中区域使用物理托盘矩形", traySrc, "hover_state::in_tray((pos.x, pos.y), rect)");
+lacks("不再假设托盘位于主屏", traySrc, "app.primary_monitor()");
+lacks("不复用断开显示器的旧锚点缓存", traySrc, "tray_center");
+has("提示窗口不抢键盘焦点", traySrc, ".focusable(false)");
+has("只有已显示状态才启用卡片保持区", traySrc, "let on_card = self.state.is_shown()");
+has("保持区确认卡片窗口确实可见", traySrc, 'app.get_webview_window("hover_card").is_some_and(|w| w.is_visible().unwrap_or(false))');
+has("卡片保持区随 DPI 换算透明边距", traySrc, "hover_state::in_card((pos.x, pos.y), rect, rect.2 / HOVER_CARD_W)");
+has("托盘触发区和卡片保持区分别传入状态机", traySrc, "self.state.observe(Instant::now(), inside, on_card, blocked)");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

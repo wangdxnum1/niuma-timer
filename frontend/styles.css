@@ -851,10 +851,80 @@ button:active {
 }
 
 /* 更新说明：远端 Markdown 已由后端截断，按原样换行展示即可（本项目此前无 pre 样式） */
+.settings-update-row, .upd-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-update-row { padding: 12px 0 4px; }
+.settings-update-title { font-size: 13px; font-weight: 600; }
+.settings-update-row .hint, .upd-page-head .hint { margin-top: 4px; }
+.upd-check-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 214, 80, 0.28);
+  background: rgba(255, 214, 80, 0.09);
+  color: #ffd650;
+  font-size: 13px;
+  font-weight: 600;
+}
+.upd-check-btn:hover { background: rgba(255, 214, 80, 0.16); }
+.upd-check-btn:disabled { cursor: wait; opacity: 0.65; filter: none; }
+.upd-refresh { font-size: 19px; line-height: 1; }
+.upd-back-btn {
+  align-self: flex-start;
+  background: transparent;
+  color: #b8b8be;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.upd-back-btn:hover { color: #ffd650; }
+.upd-back-btn:focus-visible, .upd-check-btn:focus-visible {
+  outline: 2px solid #ffd650;
+  outline-offset: 3px;
+}
+.page-head.upd-page-head h2 { font-size: 21px; }
+.upd-version-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.upd-version-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 18px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: #242427;
+}
+.upd-version-label { font-size: 12px; color: #b8b8be; }
+.upd-version-number {
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.upd-version-caption { font-size: 11px; color: #85858b; }
+.upd-version-card.has-update { border-color: rgba(255, 214, 80, 0.4); background: rgba(255, 214, 80, 0.07); }
+.upd-version-card.has-update .upd-version-number { color: #ffd650; }
+.upd-status { font-size: 13px; line-height: 1.65; color: #b8b8be; overflow-wrap: anywhere; }
+.upd-status[data-state="available"] { color: #ffd650; }
+.upd-status[data-state="current"] { color: #83c9a4; }
+.upd-status[data-state="error"] { color: #eea0a0; }
+.upd-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.upd-actions button { min-height: 36px; padding: 8px 16px; }
+.upd-notes-card { flex-shrink: 0; }
 .upd-notes {
   margin: 0;
-  font-family: Consolas, "Cascadia Mono", monospace;
-  font-size: 12px;
+  font-family: inherit;
+  font-size: 13px;
   line-height: 1.65;
   color: #b9b9c0;
   white-space: pre-wrap;

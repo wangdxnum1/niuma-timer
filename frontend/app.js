@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v5680ba48";
+const FE_VER = "v0425a80f";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -274,9 +274,9 @@ function numOrNull(v) {
 }
 
 // 控件失焦时调用：配置无变化则不写盘（去重）
-function saveIfChanged() {
+function saveIfChanged(options = {}) {
   if (JSON.stringify(readCfg()) === lastSaved) return;
-  doSave();
+  return doSave(options);
 }
 
 // 开关等明确变更：直接保存
@@ -284,12 +284,12 @@ function saveNow() {
   doSave();
 }
 
-async function doSave() {
+async function doSave({ silent = false } = {}) {
   const cfg = readCfg();
   try {
     await invoke("save_config", { cfg });
     lastSaved = JSON.stringify(cfg);
-    showToast("已自动保存", "ok");
+    if (!silent) showToast("已自动保存", "ok");
     // 仅当上班天数被修改时才静默刷新工作日数据（避免每次保存都发网络请求）
     if (cfg.workdays_override !== lastOverride) {
       lastOverride = cfg.workdays_override;
@@ -1792,6 +1792,7 @@ function showView(id) {
   const target = $(id);
   if (!target) return; // 目标视图不存在则不操作，避免误隐藏所有视图
   if (curView === "viewSettings" && id !== "viewSettings") {
+    if (id === "viewUpdate") updateSettingsScroll = $("viewSettings").scrollTop;
     saveIfChanged(); // 自定义副标题等可能还没失焦
   }
   document.querySelectorAll(".app").forEach((v) => v.classList.add("hidden"));
@@ -2652,7 +2653,7 @@ async function showWindow() {
 }
 
 async function boot() {
-  // 关键证据：记录 WebView2 实际加载的 URL（?v=5680ba48 = 新前端；旧值 = 缓存没刷新）
+  // 关键证据：记录 WebView2 实际加载的 URL（?v=0425a80f = 新前端；旧值 = 缓存没刷新）
   flog("boot: url=" + location.href + " ua=" + navigator.userAgent.slice(0, 60));
   // 尽早显示窗口（此刻 splash 已渲染成深色，show 无白闪）
   await showWindow();
@@ -2721,14 +2722,30 @@ bindDebugBtn("testSedentaryTriggerBtn", "test_sedentary_trigger", "模拟久坐"
 // updateInfo：最近一次 check_update 的原始结果；updateAnnounce：升级后公告（一次性）
 let updateInfo = null;
 let updateAnnounce = null;
+let updateChecking = false;
+let updateSettingsScroll = 0;
+
+function returnFromUpdate() {
+  showView("viewSettings");
+  $("viewSettings").scrollTop = updateSettingsScroll;
+  $("settingsCheckUpdateBtn").focus({ preventScroll: true });
+}
 
 // 画更新页：公告优先且只显示一次，其余按检查结果显示
 function paintUpdate() {
   const info = updateInfo;
   $("updCurrent").textContent = info && info.current ? "v" + info.current : "—";
   $("updLatest").textContent =
-    info && (info.latest || info.current) ? "v" + (info.latest || info.current) : "—";
-  if (info && info.error) {
+    !updateChecking && info && !info.error && info.latest ? "v" + info.latest : "—";
+  const hasUpdate = !!(!updateChecking && info && info.has_update && !info.error);
+  $("updLatestCard").classList.toggle("has-update", hasUpdate);
+  $("updCheckBtn").disabled = updateChecking;
+  $("updCheckBtn").setAttribute("aria-busy", String(updateChecking));
+  $("updCheckLabel").textContent = updateChecking ? "检查中…" : info && info.error ? "重新检查" : "检查更新";
+  $("updStatus").dataset.state = updateChecking ? "checking" : info && info.error ? "error" : hasUpdate ? "available" : info ? "current" : "idle";
+  if (updateChecking) {
+    $("updStatus").textContent = "正在获取最新版本信息…";
+  } else if (info && info.error) {
     $("updStatus").textContent = "检查失败：" + info.error;
   } else if (info && info.has_update) {
     $("updStatus").textContent = info.installed
@@ -2737,35 +2754,41 @@ function paintUpdate() {
   } else if (info) {
     $("updStatus").textContent = "已是最新版本 v" + info.current;
   } else {
-    $("updStatus").textContent = "点右上角「检查更新」开始";
+    $("updStatus").textContent = "点击「检查更新」获取最新版本";
   }
   $("updNotes").textContent = info && info.notes ? info.notes : "暂无更新说明";
-  $("updSkipBtn").disabled = !(info && info.has_update && !info.error);
+  $("updSkipBtn").disabled = !hasUpdate;
+  $("updSkipBtn").classList.toggle("hidden", !hasUpdate);
   // 公告覆盖在检查结果之上，展示过即清空（后端也只会下发一次）
-  if (updateAnnounce) {
+  if (updateAnnounce && !updateChecking) {
     $("updStatus").textContent = "已更新到当前版本";
     $("updNotes").textContent = updateAnnounce;
     updateAnnounce = null;
   }
-  // 便携版/出错时不给「立即更新」，避免点了必然失败
+  // 仅在检查完成且有新版本时提供更新操作。
   $("updUpdateBtn").classList.toggle(
     "hidden",
-    !(info && info.has_update && !info.error)
+    !hasUpdate
   );
 }
 
 async function loadUpdateInfo() {
-  $("updStatus").textContent = "检查中…";
+  if (updateChecking) return;
+  updateChecking = true;
+  paintUpdate();
   try {
     updateInfo = await invoke("check_update");
   } catch (e) {
     updateInfo = {
+      current: updateInfo && updateInfo.current,
       has_update: false,
       installed: false,
       error: e && e.message ? e.message : String(e),
     };
+  } finally {
+    updateChecking = false;
+    paintUpdate();
   }
-  paintUpdate();
 }
 
 // 托盘菜单「检查更新」→ 主窗打开更新页（事件由 tray.rs 广播）
@@ -2783,7 +2806,7 @@ $("settingsCheckUpdateBtn").addEventListener("click", () => {
   updateAnnounce = null; // 手动检查时不再展示上次的升级公告
   showView("viewUpdate");
 });
-$("updLaterBtn").addEventListener("click", () => showView("viewMain"));
+$("updBackBtn").addEventListener("click", returnFromUpdate);
 $("updSkipBtn").addEventListener("click", async () => {
   if (!updateInfo || !updateInfo.latest) return;
   try {
@@ -2831,7 +2854,7 @@ document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
   b.addEventListener("click", () => {
     setBillSpanUI(b.dataset.span);
     weekOffset = 0; // 切跨度重置偏移：上一期的语义随跨度变化
-    saveIfChanged();
+    saveIfChanged({ silent: true }); // 记住浏览偏好，不打断浏览；失败仍提示
     loadBillTab();
   });
 });

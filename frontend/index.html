@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=5680ba48" />
+    <link rel="stylesheet" href="styles.css?v=0425a80f" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
@@ -611,9 +611,9 @@
           <span>自动检查更新</span>
           <input id="update_auto_check" type="checkbox" class="switch" />
         </label>
-        <div class="switch-row">
-          <span>手动检查</span>
-          <button id="settingsCheckUpdateBtn" class="ghost">检查更新</button>
+        <div class="settings-update-row">
+          <div><span class="settings-update-title">软件更新</span><p class="hint">查看版本与更新说明</p></div>
+          <button id="settingsCheckUpdateBtn" class="upd-check-btn"><span class="upd-refresh" aria-hidden="true">↻</span>检查更新</button>
         </div>
         <p class="hint">启动 30 秒后自动检查一次，之后每 6 小时一次；只获取版本信息，不会自动安装</p>
       </section>
@@ -756,24 +756,23 @@
 
     <!-- 更新视图（v1.4.0）：不占侧栏位，由设置页按钮 / 托盘菜单项 / 升级后公告三处进入 -->
     <div class="app hidden" id="viewUpdate">
-      <div class="page-head">
-        <h2>检查更新</h2>
-        <button id="updCheckBtn" class="ghost" style="margin-left:auto">检查更新</button>
+      <button id="updBackBtn" class="upd-back-btn"><span aria-hidden="true">←</span> 返回设置</button>
+      <div class="page-head upd-page-head">
+        <div><h2>软件更新</h2><p class="hint">保持最新，安心使用</p></div>
+        <button id="updCheckBtn" class="upd-check-btn"><span class="upd-refresh" aria-hidden="true">↻</span><span id="updCheckLabel">检查更新</span></button>
       </div>
-      <section class="card">
-        <h2>版本</h2>
-        <div class="switch-row"><span>当前版本</span><span id="updCurrent" class="hint">—</span></div>
-        <div class="switch-row"><span>最新版本</span><span id="updLatest" class="hint">—</span></div>
-        <p id="updStatus" class="hint">点右上角「检查更新」开始</p>
+      <section class="upd-version-grid" aria-label="版本信息">
+        <div class="upd-version-card"><span class="upd-version-label">当前版本</span><strong id="updCurrent" class="upd-version-number">—</strong><span class="upd-version-caption">本机正在使用</span></div>
+        <div id="updLatestCard" class="upd-version-card"><span class="upd-version-label">最新版本</span><strong id="updLatest" class="upd-version-number">—</strong><span class="upd-version-caption">官方发布版本</span></div>
       </section>
-      <section class="card">
+      <p id="updStatus" class="upd-status" role="status" aria-live="polite" data-state="idle">点击「检查更新」获取最新版本</p>
+      <section class="card upd-notes-card">
         <h2>更新说明</h2>
         <pre id="updNotes" class="upd-notes">暂无</pre>
       </section>
-      <div style="display:flex;gap:8px;margin-top:10px">
+      <div class="upd-actions">
         <button id="updUpdateBtn" class="primary hidden">立即更新</button>
         <button id="updSkipBtn" class="ghost">跳过此版本</button>
-        <button id="updLaterBtn" class="ghost">稍后</button>
       </div>
       <p id="updProgress" class="hint hidden"></p>
     </div>
@@ -812,7 +811,7 @@
       </div>
     </div>
 
-    <script src="app.js?v=5680ba48"></script>
+    <script src="app.js?v=0425a80f"></script>
       <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

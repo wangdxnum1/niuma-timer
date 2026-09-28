@@ -360,6 +360,42 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
     unsafe { GetCursorPos(&mut pt) }.ok().map(|()| (pt.x, pt.y))
 }
 
+/// 原生菜单或鼠标按键仍占用交互时，不显示自定义 tooltip。
+/// 查询失败保守返回 None，由调用方暂停弹卡，避免盖住系统菜单。
+pub fn tooltip_input_blocked() -> Option<bool> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetGUIThreadInfo, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON, VK_MBUTTON,
+    };
+    let mut info = GUITHREADINFO { cbSize: size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+    // SAFETY: writable, correctly sized structure; thread 0 queries the foreground GUI thread.
+    unsafe { GetGUIThreadInfo(0, &mut info) }.ok()?;
+    let menu_flags = GUI_INMENUMODE.0 | GUI_POPUPMENUMODE.0 | GUI_SYSTEMMENUMODE.0;
+    let pressed = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter()
+        .any(|key| unsafe { GetAsyncKeyState(key.0 as i32) } < 0);
+    Some(info.flags.0 & menu_flags != 0 || pressed)
+}
+
+/// Polling must not mistake coordinates behind an app window / hidden taskbar for a tray hover.
+pub fn cursor_over_taskbar(x: i32, y: i32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WindowFromPoint, GetAncestor, GetClassNameW, GA_ROOT,
+    };
+    let mut class = [0u16; 128];
+    // SAFETY: borrowed HWNDs are used only for read-only queries; class is a valid output buffer.
+    let len = unsafe {
+        let window = WindowFromPoint(POINT { x, y });
+        let root = GetAncestor(window, GA_ROOT);
+        GetClassNameW(root, &mut class)
+    };
+    if len <= 0 { return false; }
+    matches!(String::from_utf16_lossy(&class[..len as usize]).as_str(),
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow"
+        | "TopLevelWindowForOverflowXamlIsland")
+}
+
 /// 当前消息的时间戳（`GetMessageTime`），与 `GetTickCount` 同域的毫秒计数。
 pub fn message_time() -> u32 {
     // 负值（出错）按 u32 解释，与旧实现一致

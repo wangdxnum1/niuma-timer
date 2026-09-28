@@ -17,7 +17,8 @@
         font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
           "Microsoft YaHei", system-ui, sans-serif;
         color: #f2f2f4;
-        width: 320px;
+        /* 宽度与 HOVER_CARD_W 同步，保持高 DPI 下的宽高比例。 */
+        width: 380px;
         /* 必须与 src-tauri/src/tray.rs 的 HOVER_CARD_H 保持一致：
            body height == HOVER_CARD_H（body 自带上下各 8px padding，box-sizing:border-box，
            故卡片实际高 = 352 - 16 = 336）。两侧任改其一而不同步，大字金额就会被裁没。 */
@@ -734,7 +735,7 @@
         sh.classList.add("run");
       }
 
-      // 淡出：动画结束后由 transitionend 隐藏窗口；
+      // 清理卡片展示状态；窗口隐藏统一由 Rust 控制，避免旧动画关闭新一轮提示。
       // 同时把当前已赚存档——下次悬停时做「回归补账」动画
       function hideCard() {
         if (!shown) return;
@@ -747,59 +748,34 @@
         card.classList.remove("visible");
       }
 
-      // ===== 前端自治淡入（主机制，不依赖事件时序）=====
-      // 懒创建场景下 WebView2 页面加载耗时不定（几百 ms~1s+），Rust 端事件
-      // 可能先于页面就绪到达而丢失。因此让窗口可见性直接驱动淡入：
-      //  - 窗口 show() 晚于页面加载 → visibilitychange 触发淡入
-      //  - 窗口 show() 先于页面加载 → 页面加载完时检查可见状态兜底淡入
-      document.addEventListener("visibilitychange", function () {
-        if (document.visibilityState === "visible") {
-          showCard();
-        } else {
-          hideCard();
-        }
-      });
-      if (document.visibilityState === "visible") {
-        showCard();
-      }
-
-      // 淡出动画结束 → 隐藏窗口（需要 hover_card 窗口的 allow-hide 权限）
-      card.addEventListener("transitionend", function (e) {
-        if (e.propertyName === "opacity" && !card.classList.contains("visible")) {
-          window.__TAURI_INTERNALS__.invoke("plugin:window|hide", {});
-        }
-      });
-
       function listen(name, fn) {
-        window.__TAURI_INTERNALS__.invoke("plugin:event|listen", {
+        return window.__TAURI_INTERNALS__.invoke("plugin:event|listen", {
           event: name,
           target: { kind: "Any" },
           handler: window.__TAURI_INTERNALS__.transformCallback(fn),
-        }).catch(function (err) {
-          reportErr("listen(" + name + ") failed: " + err);
         });
       }
-      // 鼠标悬停托盘 → 淡入（Rust 端重试发送，页面未就绪时由 hover_ready 握手兜底）；
-      // 每次进入顺带刷新配置与月度加班（低频，见上方说明）
-      listen("hover_show", function () {
-        showCard();
-        loadCfg();
-        refreshOt();
-      });
-      // 鼠标离开托盘 → 淡出
-      listen("hover_hide", hideCard);
-      // 实时数据推送
-      listen("hover_data", function (e) {
-        render(e.payload);
-      });
+      async function connectHoverEvents() {
+        // 注册完成后才报告 ready；仅仅发起 listen 不代表回调已经能收到事件。
+        await Promise.all([
+          listen("hover_show", function () {
+            showCard();
+            loadCfg();
+            refreshOt();
+          }),
+          listen("hover_hide", hideCard),
+          listen("hover_data", function (e) { render(e.payload); }),
+        ]);
+        await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+          event: "hover_ready",
+          payload: null,
+        });
+      }
 
-      // 页面加载完成 → 通知 Rust：若鼠标仍悬停在托盘上，补一次定位 + 淡入。
-      // 这是"首次悬停事件丢失"的最终兜底，不依赖任何窗口可见性猜测。
       loadCfg();
       refreshOt();
-      window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
-        event: "hover_ready",
-        payload: null,
+      connectHoverEvents().catch(function (err) {
+        reportErr("hover event setup failed: " + err);
       });
     </script>
   </body>

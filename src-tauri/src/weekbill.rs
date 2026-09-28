@@ -884,6 +884,7 @@ mod tests {
         ));
         // 闰年：2024 年 2 月有 29 天
         let (s, e) = period_bounds(Span::Month, 0, NaiveDate::from_ymd_opt(2024, 2, 10).unwrap());
+        assert_eq!(s, NaiveDate::from_ymd_opt(2024, 2, 1).unwrap());
         assert_eq!(e.day(), 29);
         // 年区间
         let (s, e) = period_bounds(Span::Year, 1, today);
