@@ -3,8 +3,10 @@ node_modules/
 src-tauri/target/
 bin/
 *.user
-build_*.log
-# 运行期调试日志（debug_log 落在 %APPDATA%，从仓库根启动时会落到这里）
+# 本地构建/测试重定向日志（统一放 logs/，不要散落在仓库根）
+logs/
+# 搜狗输入法等第三方进程从仓库根启动时落在 CWD 的运行日志
+#（项目自身的 debug_log 写 %APPDATA%\niuma-timer\debug.log，不会落在这里）
 debug.log
 # Trae 编辑器本地文件（不该入库）
 .trae/
