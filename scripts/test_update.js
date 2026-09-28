@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf-8");
+const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf-8").replace(/\r\n/g, "\n");
 
 let pass = 0, fail = 0;
 const eq = (name, a, b) => {
