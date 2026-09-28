@@ -89,6 +89,32 @@ const KNOWN_MAP: &[(&str, &str)] = &[
     ("7zfm.exe", "7-Zip"),
 ];
 
+/// 图标捐赠者：显示名已归一、但 exe 自身图标不代表主程序的「马甲进程」。
+/// 从马甲进程完整路径向上层目录找主程序 exe 借图标（同安装树内检索）。
+const ICON_DONORS: &[(&str, &[&str])] =
+    &[("wechatappex.exe", &["weixin.exe", "wechat.exe"])];
+
+/// 马甲进程 → 捐赠者主程序 exe 路径。非马甲或树内未命中返回 None，
+/// 调用方回退自身图标（= 旧行为，无回归）。检索自浅而深：目录层
+/// 优先于捐赠者顺序，同层按表内顺序；Windows 文件系统大小写不敏感，
+/// 小写文件名 join 后 `exists()` 即可命中 `Weixin.exe`。
+fn donor_exe_path(exe_path: &str) -> Option<String> {
+    let path = std::path::Path::new(exe_path);
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    let donors = ICON_DONORS.iter().find(|(k, _)| *k == name)?.1;
+    let mut dir = path.parent()?.to_path_buf();
+    for _ in 0..3 {
+        for donor in donors {
+            let cand = dir.join(donor);
+            if cand.exists() {
+                return Some(cand.to_string_lossy().into_owned());
+            }
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
+}
+
 /// 自身进程名：前台窗口是自己时不统计
 pub(crate) const SELF_EXE: &str = "niuma-timer.exe";
 
@@ -352,7 +378,9 @@ fn icon_dir() -> PathBuf {
 fn icon_path(display: &str) -> PathBuf {
     let mut h = DefaultHasher::new();
     display.hash(&mut h);
-    icon_dir().join(format!("{:016x}.png", h.finish()))
+    // v2-：v1.4.1 起马甲进程改借捐赠者图标，旧缓存按显示名哈希命名、
+    // 改逻辑不会重算，加前缀让已缓存的错误图标整体自然失效（孤儿不清理）。
+    icon_dir().join(format!("v2-{:016x}.png", h.finish()))
 }
 
 fn png_data_url(png: &[u8]) -> String {
@@ -369,7 +397,8 @@ pub(crate) fn ensure_icon(display: &str, exe_path: &str) {
     if cache.contains_key(display) {
         return;
     }
-    let val = match extract_icon_png(exe_path) {
+    let src = donor_exe_path(exe_path).unwrap_or_else(|| exe_path.to_string());
+    let val = match extract_icon_png(&src) {
         Some(png) => {
             let _ = std::fs::create_dir_all(icon_dir());
             let _ = std::fs::write(icon_path(display), &png);
@@ -1068,5 +1097,60 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM app_usage", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0, "事务回滚后日表应为空");
+    }
+
+    // ---- 图标捐赠者：马甲进程向上层目录找主程序 exe 借图标 ----
+
+    /// tempdir 手搓（项目不引 tempfile）：唯一目录名 + 用完即删，清理失败无妨。
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "niuma-icon-donor-{}-{}-{}",
+            tag,
+            std::process::id(),
+            mono_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 微信安装形态：...\Tencent\Weixin\WeChatAppEx\[ver]\WeChatAppEx.exe，
+    /// 主程序捐赠者在其上层的 Weixin.exe——从马甲进程父目录起向上最多 3 层
+    /// 必须命中，返回捐赠者完整路径。
+    #[test]
+    fn donor_found_in_parent_tree() {
+        let root = temp_dir("found");
+        let appex = root.join("Tencent").join("Weixin").join("WeChatAppEx").join("14153");
+        std::fs::create_dir_all(&appex).unwrap();
+        std::fs::write(appex.join("WeChatAppEx.exe"), b"stub").unwrap();
+        std::fs::write(root.join("Tencent").join("Weixin").join("Weixin.exe"), b"stub").unwrap();
+        let exe = appex.join("WeChatAppEx.exe").to_string_lossy().into_owned();
+        let donor = donor_exe_path(&exe).unwrap();
+        let expected = root.join("Tencent").join("Weixin").join("Weixin.exe");
+        assert!(
+            donor.eq_ignore_ascii_case(expected.to_string_lossy().as_ref()),
+            "捐赠者路径 {donor} 应为 {}（Windows 大小写不敏感）",
+            expected.display()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 马甲进程但安装树里没有捐赠者 → None（调用方回退自身图标 = 旧行为）。
+    #[test]
+    fn donor_absent_returns_none() {
+        let root = temp_dir("absent");
+        let appex = root.join("Tencent").join("Weixin").join("WeChatAppEx").join("14153");
+        std::fs::create_dir_all(&appex).unwrap();
+        std::fs::write(appex.join("WeChatAppEx.exe"), b"stub").unwrap();
+        let exe = appex.join("WeChatAppEx.exe").to_string_lossy().into_owned();
+        assert!(donor_exe_path(&exe).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 非马甲 exe：表未命中直接短路返回 None，不碰文件系统。
+    #[test]
+    fn donor_table_miss_short_circuits() {
+        assert!(donor_exe_path(r"C:\Tools\code.exe").is_none());
+        assert!(donor_exe_path("").is_none());
     }
 }
