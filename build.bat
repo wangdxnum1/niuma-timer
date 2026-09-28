@@ -74,6 +74,9 @@ if errorlevel 1 (
   echo [ERROR] copy failed, exe not found at %SRCDIR%
   exit /b 1
 )
+rem PDB 与 exe 成对归档：崩溃 dump 只认与自身同批构建的 PDB（PE 里的
+rem GUID+Age），exe 发出去而 PDB 丢了，那一版的崩溃就永远无法符号化。
+if exist "%SRCDIR%\niuma_timer.pdb" copy /Y "%SRCDIR%\niuma_timer.pdb" "%BIN%\%F%\" >nul
 echo Done: %BIN%\%F%\niuma-timer.exe
 goto :eof
 
@@ -105,6 +108,11 @@ copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\"
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
+rem 便携版 exe 的调试符号随包发布：只认同批构建的 PDB，故直接从刚拷贝的
+rem exe 所在目录取，改名带上版本号便于 Release 资产识别。
+set "PDBDIR=%PORTABLE%"
+for %%p in ("%PORTABLE%") do set "PDBDIR=%%~dpp"
+if exist "%PDBDIR%niuma_timer.pdb" copy /Y "%PDBDIR%niuma_timer.pdb" "%BIN%\package\niuma-timer-%APPVER%-portable.pdb"
 rem 更新器的签名文件（.sig）与安装包同名：必须同批进 package，否则
 rem publish_release.py 生成不出 latest.json，自动更新整条链直接失效。
 if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\"

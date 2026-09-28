@@ -427,6 +427,7 @@ def main():
     existing = {a["name"] for a in rel.get("assets", [])}
     bins = []
     sigs = []
+    pdbs = []
     if os.path.isdir(package_dir):
         for name in sorted(os.listdir(package_dir)):
             p = os.path.join(package_dir, name)
@@ -444,8 +445,13 @@ def main():
                 # 少一个就等价于给客户端一个 404 的更新源
                 if args.version in name:
                     sigs.append(p)
+            elif low.endswith(".pdb"):
+                # 调试符号与安装包同批上传：崩溃 dump 只有配上这一版 exe 的
+                # PDB（GUID+Age 匹配）才能精确符号化，漏发即该版本不可查。
+                if args.version in name:
+                    pdbs.append(p)
 
-    assets = bins + sigs
+    assets = bins + sigs + pdbs
     if manifest:
         assets.append(os.path.join(package_dir, "latest.json"))
 

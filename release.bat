@@ -214,6 +214,12 @@ if not exist "%BIN%\package\*.exe.sig" (
   echo         Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, then repackage.
   exit /b 1
 )
+rem 没有 PDB 就无法对线上崩溃做任何符号化：这一版发出去等于放弃排查能力
+if not exist "%BIN%\package\*.pdb" (
+  echo [ERROR] no .pdb in bin\package - crash dumps for this release could never be symbolised.
+  echo         Check that target\...\release\niuma_timer.pdb exists, then repackage.
+  exit /b 1
+)
 
 rem  Pick a Python interpreter for the gh-less publish path
 set "PYEXE="
@@ -316,6 +322,9 @@ for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do set "ASSETS=!ASSETS!
 rem 签名与 updater 清单同样是 Release 资产：客户端按 latest.json 找安装包，
 rem 少一个都会让自动更新 404
 for %%f in ("%BIN%\package\*.exe.sig" "%BIN%\package\*.msi.sig") do set "ASSETS=!ASSETS! "%%f""
+rem PDB（调试符号）同样是 Release 资产：客户端崩溃 dump 必须用「与那个 exe
+rem 同批构建」的 PDB 才能精确符号化，漏发这一版就永久查不了。
+for %%f in ("%BIN%\package\*.pdb") do set "ASSETS=!ASSETS! "%%f""
 rem Manifest and checksums are generated above, so collect them after generation.
 if exist "%BIN%\package\latest.json" set "ASSETS=!ASSETS! "%BIN%\package\latest.json""
 if exist "%BIN%\package\SHA256SUMS.txt" set "ASSETS=!ASSETS! "%BIN%\package\SHA256SUMS.txt""
@@ -364,6 +373,7 @@ goto :summary
 :publish_browser
 echo   Create the release manually and drag these files in:
 for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%f
+if exist "%BIN%\package\*.pdb" for %%f in ("%BIN%\package\*.pdb") do echo     %%f
 if exist "%BIN%\package\latest.json" echo     %BIN%\package\latest.json
 start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
 popd

@@ -1,6 +1,6 @@
 [package]
 name = "niuma-timer"
-version = "1.4.0"
+version = "1.4.1"
 description = "牛马计时器 - 实时显示今天赚了多少钱、上了多少小时班"
 authors = ["Tim"]
 edition = "2021"
@@ -62,3 +62,7 @@ windows = { version = "0.61", features = [
 lto = "thin"
 codegen-units = 1
 strip = true
+# 保留完整调试信息（源码行号+局部变量）：随 PDB 一起发布，线上崩溃 dump 才能
+# 精确符号化到行。debug=false 的 PDB 只有函数级符号，看到栈也定位不到行。
+# 注：MSVC 下 strip 只清 exe 自身的符号表，不影响 PDB 内容与 CodeView GUID 匹配。
+debug = true

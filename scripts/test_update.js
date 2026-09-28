@@ -141,6 +141,10 @@ has("release.bat 构建前断言签名口令", relA9, "TAURI_SIGNING_PRIVATE_KEY
 has("release.bat 发布后校验 latest.json", relA9, "latest.json");
 has("release.bat 校验 platforms 非空", relA9, "PSObject.Properties");
 has("release.bat 资产清单纳入签名文件", relA9, "*.exe.sig");
+has("publish_release.py 把 .pdb 纳入上传资产", pyA9, 'endswith(".pdb")');
+has("build.bat 把便携版 PDB 复制进 package", bldA9, "niuma-timer-%APPVER%-portable.pdb");
+has("release.bat 资产清单纳入 PDB", relA9, "*.pdb");
+has("release.bat 缺 PDB 时拦截发布", relA9, "no .pdb in bin\\package");
 has("CHANGELOG 记录自动检查更新", chnA9, "自动检查更新");
 
 console.log(pass + " passed, " + fail + " failed");

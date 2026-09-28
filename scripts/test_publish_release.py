@@ -186,6 +186,46 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
 
+    def test_debug_symbols_uploaded_but_not_checksummed(self):
+        # 崩溃 dump 只能靠与 exe 同批构建的 PDB（GUID+Age）符号化，所以 .pdb
+        # 必须随 Release 上传；但它不是给用户下载的安装包，不进 SHA256SUMS。
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
+            (root / "niuma-timer-1.4.0-portable.pdb").write_bytes(b"symbols")
+            uploads, published = [], [False]
+
+            def call(method, url, data=None, content_type=None):
+                if method == "POST" and url.endswith("/releases"):
+                    return 201, {"id": 7, "upload_url": "https://upload.test/assets", "assets": []}
+                if method == "POST":
+                    uploads.append(urllib.parse.parse_qs(
+                        urllib.parse.urlparse(url).query)["name"][0])
+                    return 201, {}
+                if method == "PATCH":
+                    published[0] = True
+                    return 200, {}
+                if method == "GET":
+                    if "/releases/tags/" in url:
+                        return (200, {"draft": False}) if published[0] else (404, {})
+                    if url.endswith("/releases?per_page=100"):
+                        return 200, []
+                    if url.endswith("/releases/7"):
+                        return 200, {"assets": [{"name": n, "size": 1} for n in uploads],
+                                     "html_url": "https://example.test/release"}
+                return 404, {}
+
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
+                 mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 0)
+            self.assertIn("niuma-timer-1.4.0-portable.pdb", uploads)
+            sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
+            self.assertIn("niuma-timer-1.4.0-portable.exe", sums)
+            self.assertNotIn(".pdb", sums)
+
 
 if __name__ == "__main__":
     unittest.main()
