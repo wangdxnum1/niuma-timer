@@ -1968,8 +1968,7 @@ function paintWeekBill() {
   if (!bill || curView !== "viewBill") return;
   const start = String(bill.period_start || "");
   const end = String(bill.period_end || "");
-  $("billWeekLabel").textContent =
-    bill.period_label + " · " + start.slice(5).replace("-", ".") + "–" + end.slice(5).replace("-", ".");
+  $("billWeekLabel").textContent = bill.period_label + " · " + fmtDateRange(start, end);
   $("billNextWeek").disabled = !!bill.is_current_period;
   // 整周零记录 → 空态：工资虽是推算的，但没有任何监控证据就不评判，不排一排 ¥0.00
   const anyRecord = (bill.buckets || []).some((d) => d.has_record);
@@ -2165,10 +2164,20 @@ async function loadBillTab() {
   return loadBodyBill();
 }
 
+// 日期范围标签：同年右端省年份；跨年双侧都带（12.29–01.04 不再看不出年份）。
+function fmtDateRange(startIso, endIso) {
+  const f = (iso, withYear) => {
+    const md = String(iso || "").slice(5).replace("-", ".");
+    return withYear ? String(iso || "").slice(0, 4) + "." + md : md;
+  };
+  const sy = String(startIso || "").slice(0, 4);
+  const ey = String(endIso || "").slice(0, 4);
+  return f(startIso, true) + "–" + f(endIso, sy !== ey);
+}
+
 // 账单页顶部周导航随当前 tab 的数据更新（后端已封顶未来周，周日晚 ≥ 今天即本周）
 function paintBillNav(startIso, endIso) {
-  $("billWeekLabel").textContent =
-    String(startIso).slice(5).replace("-", ".") + "–" + String(endIso).slice(5).replace("-", ".");
+  $("billWeekLabel").textContent = fmtDateRange(startIso, endIso);
   $("billNextWeek").disabled = String(endIso) >= todayStr();
 }
 
@@ -2400,10 +2409,7 @@ function paintWeekTrend() {
       "pointer-events": "all",
     });
     z.addEventListener("mouseenter", () => {
-      const range =
-        String(p.period_start || "").slice(5).replace("-", ".") +
-        "–" +
-        String(p.period_end || "").slice(5).replace("-", ".");
+      const range = fmtDateRange(p.period_start, p.period_end);
       const rate = p.slack_rate == null ? "—" : Math.round(p.slack_rate * 100) + "%";
       tip.textContent = range + " · 入账 " + fmtMoney(p.income) + " · 摸鱼率 " + rate;
       const px = Math.max(
