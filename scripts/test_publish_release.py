@@ -42,9 +42,14 @@ class ManifestTests(unittest.TestCase):
                                          {"niuma-timer-1.4.0-portable.exe", "latest.json", "SHA256SUMS.txt"})
                         self.assertFalse(json.loads(data)["draft"])
                         return 200, {}
-                    if not any(c[0] == "POST" for c in calls):
-                        return 404, {}
-                    return 200, {"assets": assets, "html_url": "https://example.test/release"}
+                    if method == "GET":
+                        if "/releases/tags/" in url:
+                            return 404, {}  # 草稿没有 tag 引用，按 tag 查必 404
+                        if url.endswith("/releases?per_page=100"):
+                            return 200, []  # 无可复用草稿 → 走新建
+                        if url.endswith("/releases/7"):
+                            return 200, {"assets": assets, "html_url": "https://example.test/release"}
+                    return 404, {}
                 gh = mock.Mock()
                 gh.call.side_effect = call
                 argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
@@ -52,6 +57,44 @@ class ManifestTests(unittest.TestCase):
                      mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
                     self.assertEqual(release.main(), 1 if fail_upload else 0)
                 self.assertEqual(any(c[0] == "PATCH" for c in calls), not fail_upload)
+
+    def test_existing_draft_is_reused_not_duplicated(self):
+        # 重跑发布时的真实场景：草稿已存在且部分资产已上传，
+        # 必须复用同一份草稿（POST /releases 不得再次出现）。
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
+            calls, uploads = [], []
+            draft = {"id": 7, "draft": True, "tag_name": "v1.4.0",
+                     "upload_url": "https://upload.test/assets",
+                     "assets": [{"name": "niuma-timer-1.4.0-portable.exe", "size": 8}]}
+            def call(method, url, data=None, content_type=None):
+                calls.append((method, url))
+                if method == "GET":
+                    if "/releases/tags/" in url:
+                        return 404, {}
+                    if url.endswith("/releases?per_page=100"):
+                        return 200, [draft]
+                    if url.endswith("/releases/7"):
+                        return 200, {"assets": draft["assets"] + uploads,
+                                     "html_url": "https://example.test/release"}
+                if method == "POST":
+                    name = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["name"][0]
+                    uploads.append({"name": name, "size": len(data)})
+                    return 201, {}
+                if method == "PATCH":
+                    self.assertFalse(json.loads(data)["draft"])
+                    return 200, {}
+                raise AssertionError("unexpected call: %s %s" % (method, url))
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
+                 mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 0)
+            self.assertFalse(any(c[0] == "POST" and c[1].endswith("/releases") for c in calls),
+                             "must reuse the existing draft instead of creating a duplicate")
+            self.assertEqual({u["name"] for u in uploads}, {"latest.json", "SHA256SUMS.txt"})
 
     def test_empty_or_unsigned_installer_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:

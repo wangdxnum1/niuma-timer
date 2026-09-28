@@ -387,26 +387,37 @@ def main():
             return 1
         log("  release: already exists, reusing id=%s" % rel.get("id"))
     else:
-        body = open(notes_path, encoding="utf-8").read().splitlines()
-        if body and body[0].startswith("# "):
-            body = body[1:]
-            while body and not body[0].strip():
+        # 草稿没有 tag 引用，/releases/tags/{tag} 对草稿返回 404；
+        # 扫 release 列表按 tag_name 复用现有草稿，避免重跑时重复建草稿。
+        rel = None
+        lst, rels = gh.call("GET", "%s/releases?per_page=100" % api)
+        if lst == 200:
+            for r in rels:
+                if r.get("draft") and r.get("tag_name") == args.tag:
+                    rel = r
+                    log("  release: reusing existing draft id=%s" % rel.get("id"))
+                    break
+        if rel is None:
+            body = open(notes_path, encoding="utf-8").read().splitlines()
+            if body and body[0].startswith("# "):
                 body = body[1:]
-        payload = {
-            "tag_name": args.tag,
-            "name": args.title or ("Niuma Timer %s" % args.version),
-            "body": "\n".join(body).strip(),
-            "draft": True,
-            "prerelease": False,
-            "target_commitish": DEFAULT_BRANCH,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        st, rel = gh.call("POST", "%s/releases" % api, data,
-                          "application/json; charset=utf-8")
-        if st not in (200, 201):
-            log("  [ERROR] create release failed HTTP %s: %s" % (st, rel))
-            return 1
-        log("  release: created %s" % rel.get("html_url"))
+                while body and not body[0].strip():
+                    body = body[1:]
+            payload = {
+                "tag_name": args.tag,
+                "name": args.title or ("Niuma Timer %s" % args.version),
+                "body": "\n".join(body).strip(),
+                "draft": True,
+                "prerelease": False,
+                "target_commitish": DEFAULT_BRANCH,
+            }
+            data = json.dumps(payload).encode("utf-8")
+            st, rel = gh.call("POST", "%s/releases" % api, data,
+                              "application/json; charset=utf-8")
+            if st not in (200, 201):
+                log("  [ERROR] create release failed HTTP %s: %s" % (st, rel))
+                return 1
+            log("  release: created %s" % rel.get("html_url"))
 
     upload_base = (rel.get("upload_url") or "").split("{")[0]
     if not upload_base:
@@ -471,7 +482,8 @@ def main():
             log("  [FAIL] %s HTTP %s: %s" % (name, st, res))
             failed = True
 
-    st, final = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
+    # 草稿在 tags 端点查不到，按 id 取最终状态（草稿/已发布均有效）。
+    st, final = gh.call("GET", "%s/releases/%s" % (api, rel["id"]))
     if st == 200:
         uploaded = {a["name"] for a in final.get("assets", [])}
         if not {os.path.basename(p) for p in assets}.issubset(uploaded):
