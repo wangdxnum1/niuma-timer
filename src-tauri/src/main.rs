@@ -726,23 +726,94 @@ async fn check_update(app: tauri::AppHandle) -> Result<update::UpdateInfo, Strin
     Ok(info)
 }
 
-/// 立即更新。安装版走官方 updater 静默升级；绿色版起内置助手进程替换自身后退出。
+/// 立即更新：按安装形态分发；两条路径都把进度经 `update-progress` 事件推给前端。
 #[tauri::command]
 async fn start_update(app: tauri::AppHandle) -> Result<(), String> {
     let _operation = update::UpdateOperation::begin()?;
-    use tauri_plugin_updater::UpdaterExt;
-    if let Some(target) = update::installed_kind() {
-        let updater = app.updater_builder().target(target).build().map_err(|e| e.to_string())?;
-        let Some(pending) = updater.check().await.map_err(|e| e.to_string())? else {
-            return Err("已是最新版本".to_string());
-        };
-        pending
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| e.to_string())?;
-        app.restart();
+    if update::installed_kind().is_some() {
+        start_update_installed(app).await
+    } else {
+        start_update_portable(app).await
     }
-    // 绿色版：拉清单 → 取 portable 资产 → 取 SHA256SUMS.txt → 起助手（拦截在 Tauri 之前）
+}
+
+/// 安装版：官方 updater 分步下载（带进度与重试）→ 交给安装器静默安装。
+/// 成功后进程由安装器接管，`install` 返回即到头——这里不也不该再 restart。
+async fn start_update_installed(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let Some(target) = update::installed_kind() else {
+        return Err("当前不是安装版".to_string());
+    };
+    let updater = app
+        .updater_builder()
+        .target(target)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let Some(pending) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("已是最新版本".to_string());
+    };
+    update::emit_progress(&app, "downloading", 0, None, 1);
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut last_err = String::from("未知错误");
+    for attempt in 1..=update::DOWNLOAD_ATTEMPTS {
+        // Cell 不是 Send：跨 await 的闭包只能捕获 owned 局部量
+        let mut seen: u64 = 0;
+        let mut last_pct: i64 = -2;
+        let mut last_at = std::time::Instant::now();
+        let chunk_app = app.clone();
+        let on_chunk = move |len: usize, total: Option<u64>| {
+            seen += len as u64;
+            let pct = match total {
+                Some(t) if t > 0 => (seen as f64 / t as f64 * 100.0) as i64,
+                _ => -1,
+            };
+            let now = std::time::Instant::now();
+            // 节流：百分比变化或距上次 ≥120ms 才发；total 未知时只按时间节流
+            if pct != last_pct || now.duration_since(last_at) >= std::time::Duration::from_millis(120) {
+                last_pct = pct;
+                last_at = now;
+                update::emit_progress(&chunk_app, "downloading", seen, total, attempt);
+            }
+        };
+        let finish_app = app.clone();
+        let on_finish = move || update::emit_progress(&finish_app, "verifying", 0, None, attempt);
+        match pending.download(on_chunk, on_finish).await {
+            Ok(b) => {
+                bytes = Some(b);
+                break;
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+        if attempt < update::DOWNLOAD_ATTEMPTS {
+            update::emit_progress(&app, "retrying", 0, None, attempt + 1);
+            // async 环境里的退避等待：丢到阻塞线程再 sleep
+            let secs = if attempt <= 1 { 1u64 } else { 3u64 };
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                std::thread::sleep(std::time::Duration::from_secs(secs))
+            })
+            .await;
+        }
+    }
+    let Some(bytes) = bytes else {
+        update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
+        return Err(format!(
+            "下载失败（已重试 {} 次）：{last_err}",
+            update::DOWNLOAD_ATTEMPTS - 1
+        ));
+    };
+    update::emit_progress(
+        &app,
+        "installing",
+        bytes.len() as u64,
+        Some(bytes.len() as u64),
+        1,
+    );
+    pending.install(&bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 绿色版（Task 6 前的过渡）：保持原有「把 url 交给助手下载」的行为。
+async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
     let rel = tauri::async_runtime::spawn_blocking(update::fetch_remote)
         .await
         .map_err(|e| e.to_string())?
