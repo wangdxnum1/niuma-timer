@@ -396,6 +396,57 @@ def build_notes(root, version, package_dir):
     return "\n".join(lines)
 
 
+def publish_pdb_only(args, root, package_dir):
+    """仅补传调试符号。
+
+    与默认发布的根本差异：这里允许操作**已公开**的 release（默认模式会拒绝
+    改动已发布内容）。PDB 不是运行时依赖，缺失只影响该版本崩溃的可符号化能力，
+    所以本模式失败返回 1 仅供调用方告警，调用方不得据此判定发布失败。
+    """
+    token = github_token()
+    if not token:
+        log("  [ERROR] no GitHub token available from the git credential store")
+        return 1
+
+    gh = GitHub(token, build_opener())
+    api = "%s/repos/%s" % (API, args.repo)
+
+    st, rel = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
+    if st != 200:
+        # tags 端点对草稿与「尚未公开」的 tag 可能 404，退回列表按 tag_name 找
+        rel = None
+        lst, rels = gh.call("GET", "%s/releases?per_page=100" % api)
+        if lst == 200:
+            for r in rels:
+                if r.get("tag_name") == args.tag:
+                    rel = r
+                    break
+    if not rel:
+        log("  [ERROR] no release found for tag %s" % args.tag)
+        return 1
+
+    upload_base = (rel.get("upload_url") or "").split("{")[0]
+    if not upload_base:
+        log("  [ERROR] no upload_url in the release payload")
+        return 1
+
+    existing = {a["name"] for a in rel.get("assets", [])}
+    _, _, pdbs = collect_package_assets(package_dir, args.version)
+    if not pdbs:
+        log("  [WARN] no PDB assets matching %s in %s" % (args.version, package_dir))
+        return 0
+
+    failed = False
+    for path in pdbs:
+        name = os.path.basename(path)
+        if name in existing:
+            log("  [skip] %s (already uploaded)" % name)
+            continue
+        if not upload_with_retry(gh, upload_base, path):
+            failed = True
+    return 1 if failed else 0
+
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
@@ -408,12 +459,18 @@ def main():
     ap.add_argument("--title", default=None)
     ap.add_argument("--root", default=None)
     ap.add_argument("--generate-notes-only", action="store_true")
+    ap.add_argument("--pdb-only", action="store_true",
+                    help="只补传调试符号（PDB），允许操作已公开的 release；"
+                         "不建草稿、不 PATCH、不校验；失败返回 1（调用方只应告警）")
     args = ap.parse_args()
 
     root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     package_dir = args.package
     if not os.path.isabs(package_dir):
         package_dir = os.path.join(root, package_dir)
+
+    if args.pdb_only:
+        return publish_pdb_only(args, root, package_dir)
 
     notes_path = os.path.join(package_dir, "RELEASE_NOTES.md")
     if os.path.isfile(notes_path) and not args.generate_notes_only:
