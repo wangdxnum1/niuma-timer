@@ -359,11 +359,7 @@ pub fn estimate_usage_conn(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<
         .zip(counts)
         .map(|((table, _, _), n)| TableUsage {
             table: (*table).to_string(),
-            bytes: if total_rows == 0 {
-                0
-            } else {
-                used.saturating_mul(n) / total_rows
-            },
+            bytes: used.saturating_mul(n).checked_div(total_rows).unwrap_or(0),
             rows: n,
         })
         .collect();
@@ -446,7 +442,7 @@ pub(crate) fn build_storage_info(cfg: &Config, p: StorageParts) -> StorageInfo {
         .saturating_add(p.log_bytes);
 
     // 降序：用户第一眼看的是「谁占得最多」
-    slices.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    slices.sort_by_key(|s| std::cmp::Reverse(s.bytes));
 
     StorageInfo {
         db_bytes: p.db_bytes,
@@ -560,9 +556,10 @@ mod tests {
     }
 
     fn cfg_with_retention(days: u32) -> crate::config::Config {
-        let mut c = crate::config::Config::default();
-        c.retention_days = days;
-        c
+        crate::config::Config {
+            retention_days: days,
+            ..Default::default()
+        }
     }
 
     /// 回归：默认配置的保留期必须是 0（永久保留）。

@@ -314,8 +314,10 @@ mod tests {
 
     #[test]
     fn payday_persisted_date_survives_restart() {
-        let mut cfg = Config::default();
-        cfg.remind_payday_last_date = Some("2026-09-10".to_string());
+        let cfg = Config {
+            remind_payday_last_date: Some("2026-09-10".to_string()),
+            ..Default::default()
+        };
         let reloaded: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
         assert!(!payday_due(&reloaded, today, false));

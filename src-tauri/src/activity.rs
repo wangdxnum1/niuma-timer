@@ -224,6 +224,7 @@ static LAST_LBTN_Y: AtomicI32 = AtomicI32::new(0);
 /// 键盘状态：每键码(0..=255)一个原子槽，避免 BTreeMap+Mutex 在每次按键时抢锁。
 /// - KEY_LAST_TIME[vk]：该键上次按下时刻（毫秒，过滤自动重复），仅钩子回调写；
 /// - KEY_PENDING[vk]：该键待合并的按键次数，钩子回调 +1、合并线程每 10s swap(0) 取走。
+///
 /// 用 OnceLock 延迟初始化定长原子数组（vkCode 范围 1..=254，256 足够覆盖）。
 fn key_last_time() -> &'static [AtomicU32; 256] {
     static ARR: OnceLock<[AtomicU32; 256]> = OnceLock::new();
@@ -807,7 +808,7 @@ fn assemble(
     }
     // 高频键 Top 10
     let mut ranked: Vec<(u64, u32)> = key_detail.iter().map(|(&k, &c)| (c, k)).collect();
-    ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    ranked.sort_unstable_by_key(|item| std::cmp::Reverse(item.0));
     let top_keys: Vec<KeyCount> = ranked
         .into_iter()
         .take(10)

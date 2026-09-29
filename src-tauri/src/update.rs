@@ -493,8 +493,8 @@ fn installation_matches(exe: &Path, location: &str, icon: &str) -> bool {
     if !location.trim().is_empty() && norm(location) == parent {
         return true;
     }
-    let icon_path = if icon.starts_with('"') {
-        icon[1..].split('"').next().unwrap_or("")
+    let icon_path = if let Some(rest) = icon.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
     } else {
         icon.rsplit_once(',').map(|(p, _)| p).unwrap_or(icon)
     };
@@ -1346,14 +1346,14 @@ mod tests {
     }
 
     /// 跑一遍 download_with_retry，回收三类回调的调用记录
-    fn run_download(
-        fetcher: &FakeFetcher,
-    ) -> (
+    type DownloadRunRecord = (
         Result<Vec<u8>, String>,
         Vec<(u64, Option<u64>, u32)>,
         Vec<u32>,
         Vec<u32>,
-    ) {
+    );
+
+    fn run_download(fetcher: &FakeFetcher) -> DownloadRunRecord {
         let mut progress = Vec::new();
         let mut retries = Vec::new();
         let mut pauses = Vec::new();

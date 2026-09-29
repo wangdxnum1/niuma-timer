@@ -352,11 +352,9 @@ fn maybe_record_overtime_lock(state: &AppState) {
         // 导致 weekend_overtime 开关形同虚设——开了也永远走不到计算。
         if kind.is_rest() && !cfg.weekend_overtime {
             None
-        } else if let Some(record) = overtime::calc_record_auto(lt, &cfg, Some(&hol)) {
-            // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
-            Some(overtime::upsert_auto(record))
         } else {
-            None
+            // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
+            overtime::calc_record_auto(lt, &cfg, Some(&hol)).map(overtime::upsert_auto)
         }
     } else {
         None
@@ -379,7 +377,7 @@ async fn refresh_holidays(
                 fetched_at: 0,
                 days,
             };
-            let mw = current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
+            let mw = current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
             apply_holiday_cache(&app, c, true);
             Ok(mw)
         }
@@ -391,7 +389,7 @@ async fn refresh_holidays(
                 Some(c) => {
                     db::debug_log(&format!("节假日：改用内置 {year} 年法定节假日表"));
                     let mw =
-                        current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
+                        current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
                     apply_holiday_cache(&app, c, false);
                     Ok(mw)
                 }
@@ -719,9 +717,6 @@ if (!window.__TAURI__) {
 }
 "#;
 
-/// 修复任务栏图标模糊：
-/// tauri-codegen 生成默认窗口图标时只解码 icon.ico 的**第一个图层**（本项目为 16×16），
-
 /// 检查更新（手动入口）。网络 IO 交给 spawn_blocking，不占主线程；
 /// 返回原始真相、不受「跳过此版本」影响（手动检查不该被 skip 掩盖）。
 #[tauri::command]
@@ -891,9 +886,8 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| {
+    .inspect_err(|_| {
         update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
-        e
     })?;
 
     update::emit_progress(

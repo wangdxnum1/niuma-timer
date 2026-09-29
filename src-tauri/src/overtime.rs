@@ -202,7 +202,7 @@ fn rate_of(cfg: &Config, kind: DayKind) -> f64 {
 
 /// 方案一：有效时长计算
 /// - 不足 1 小时 → 0（无效）
-/// - >= 1 小时 → 向下取 0.5 小时
+/// - \>= 1 小时 → 向下取 0.5 小时
 ///   例: 1.3→1.0, 1.6→1.5, 2.0→2.0
 pub fn calc_valid_hours(raw_hours: f64) -> f64 {
     if raw_hours < 1.0 {
@@ -660,8 +660,10 @@ mod tests {
 
     #[test]
     fn compute_record_weekend_enabled_some() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
+        let cfg = Config {
+            weekend_overtime: true,
+            ..Default::default()
+        };
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
         let r = compute_record(
             date,
@@ -748,8 +750,10 @@ mod tests {
     /// 因为 `lock_min <= ot_start` 直接 return None，一分钱算不到且无任何提示。
     #[test]
     fn rest_day_starts_at_09_by_default() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
+        let cfg = Config {
+            weekend_overtime: true,
+            ..Default::default()
+        };
         let r = calc_record_auto(lock_dt(2026, 8, 22, 14, 0), &cfg, None).expect("休息日应生成");
         assert_eq!(r.ot_start, "09:00");
         assert!(approx(r.valid_hours, 5.0));
@@ -784,9 +788,11 @@ mod tests {
     /// 法定节假日：日期类型来自 holiday 数据（周三国庆），费率走节假日档
     #[test]
     fn holiday_uses_holiday_rate() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
-        cfg.overtime_rate_holiday = Some(60.0);
+        let cfg = Config {
+            weekend_overtime: true,
+            overtime_rate_holiday: Some(60.0),
+            ..Default::default()
+        };
         let c = holiday_with(&[(2026, 10, 1, 3)]);
         let r =
             calc_record_auto(lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");

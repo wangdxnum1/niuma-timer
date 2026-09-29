@@ -6,6 +6,7 @@
 //! - 单个工作线程独占 `HoverController`（持有全部状态），用 `recv_timeout`
 //!   统一驱动延迟显示、真实光标/菜单状态采样与首次加载重发；
 //! - 空闲时每 100ms 采样兜底（无忙循环）；状态变更只发生在一个线程。
+//!
 //! 前端握手协议（hover_ready / hover_show / hover_hide / hover_data）保持不变。
 
 use crate::sync;
@@ -590,6 +591,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
 /// 更新托盘的 tooltip / 悬停卡片
 /// - 彩色卡片开启：清空系统 tooltip（避免双显），卡片可见时每秒推送实时数据
 /// - 彩色卡片关闭：恢复系统原生 tooltip
+///
 /// 直接查询窗口可见性，不依赖任何全局状态。
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
     let cfg = sync::lock(&app.state::<crate::AppState>().config, "state.config").clone();

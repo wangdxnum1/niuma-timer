@@ -931,6 +931,109 @@ pub fn audio_meters() -> Option<Vec<AudioMeter>> {
     }
 }
 
+/// 用 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
+/// 分别加载 ICON_BIG / ICON_SMALL 并 WM_SETICON 覆盖，消除任务栏高 DPI 下图标发糊。
+///
+/// 底层 tao 默认只挂一张固定 16px 位图，任务栏在高 DPI 下放大必然发糊；
+/// 托盘图标是运行时 SDF 动态绘制、资源管理器读的是完整多尺寸 ico，所以那两处清晰。
+///
+/// SAFETY：内部 FFI 调用（LoadImageW / SendMessageW / GetDpiForWindow 等）均为只读式
+/// 系统调用，句柄经 WM_SETICON 后由窗口接管，无需手动释放；本函数对调用方暴露为 safe。
+#[cfg(windows)]
+pub fn set_window_icons_from_resource(hwnd: HWND) {
+    // SAFETY：以下均为只读式系统调用；句柄经 WM_SETICON 后由窗口接管，无需手动释放。
+    let hmod = match unsafe { GetModuleHandleW(None) } {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let hinst = HINSTANCE(hmod.0);
+    // MAKEINTRESOURCEW(32512)
+    let name = PCWSTR(32512usize as *const u16);
+    let mut dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        dpi = 96;
+    }
+
+    let set_icon = |wparam: u32, cx: _, cy: _| {
+        let (cx, cy) = (
+            unsafe { GetSystemMetricsForDpi(cx, dpi) }.max(1),
+            unsafe { GetSystemMetricsForDpi(cy, dpi) }.max(1),
+        );
+        if let Ok(h) = unsafe { LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) }
+        {
+            // SAFETY：WM_SETICON 把图标句柄交给窗口，由窗口负责后续生命周期。
+            unsafe {
+                let _ = SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    Some(WPARAM(wparam as usize)),
+                    Some(LPARAM(h.0 as isize)),
+                );
+            }
+        }
+    };
+    set_icon(ICON_BIG, SM_CXICON, SM_CYICON);
+    set_icon(ICON_SMALL, SM_CXSMICON, SM_CYSMICON);
+}
+
+/// 弹一个模态错误对话框，用于构建期 / 启动期致命错误，把「双击无反应」转成可操作的提示。
+///
+/// SAFETY：MessageBoxW 是只读式模态对话框，无资源需释放，对调用方暴露为 safe。
+#[cfg(windows)]
+pub fn message_box(title: &str, msg: &str) {
+    let wide_msg: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(wide_msg.as_ptr()),
+            PCWSTR(wide_title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+/// 注册 AppUserModelID 到 HKCU\SOFTWARE\Classes\AppUserModelId\<aumid>。
+/// 绿色 exe（不经安装器）发系统 toast 时，若该 AUMID 未注册，Windows 会静默丢弃
+/// 通知，且 tauri-plugin-notification 连同真实错误一起吞掉，排查零线索
+/// （2026-09-23 实测踩坑：exe 放 Tools 目录即触发）。幂等设计：键名用应用
+/// identifier（与安装目录无关），每次启动覆盖写，换目录自动刷新；仅写 HKCU，
+/// 无需管理员权限。失败返回 Err，由调用方记 debug.log。
+/// `icon_uri`：toast 图标来源，建议传独立 .ico 文件路径（见 write_aumid_icon_file）；
+/// WinRT toast 的 IconUri 指向 exe 时提取图标不稳定（实测显示空白）。
+pub fn register_aumid(
+    aumid: &str,
+    display_name: &str,
+    icon_uri: Option<&str>,
+) -> Result<(), String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let path = format!(r"SOFTWARE\Classes\AppUserModelId\{aumid}");
+    let (key, _) = hkcu
+        .create_subkey(&path)
+        .map_err(|e| format!("创建注册表键 {path} 失败: {e:?}"))?;
+    key.set_value("DisplayName", &display_name.to_string())
+        .map_err(|e| format!("写 DisplayName 失败: {e:?}"))?;
+    if let Some(icon) = icon_uri {
+        key.set_value("IconUri", &icon.to_string())
+            .map_err(|e| format!("写 IconUri 失败: {e:?}"))?;
+    }
+    Ok(())
+}
+
+/// 把编译期内嵌的应用图标（src-tauri/icons/icon.ico，与 exe 图标同源）写出到
+/// dir/icon.ico 并返回路径。目录不存在时自动创建；内容随构建固定，覆盖写幂等。
+/// WinRT toast 的 IconUri 对「指向 exe」的提取不稳定，指向独立 .ico 最可靠。
+pub fn write_aumid_icon_file(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录 {} 失败: {e:?}", dir.display()))?;
+    let path = dir.join("icon.ico");
+    std::fs::write(&path, include_bytes!("../icons/icon.ico"))
+        .map_err(|e| format!("写图标文件 {} 失败: {e:?}", path.display()))?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,107 +1321,4 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok(); // 清理临时目录
     }
-}
-
-/// 用 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
-/// 分别加载 ICON_BIG / ICON_SMALL 并 WM_SETICON 覆盖，消除任务栏高 DPI 下图标发糊。
-///
-/// 底层 tao 默认只挂一张固定 16px 位图，任务栏在高 DPI 下放大必然发糊；
-/// 托盘图标是运行时 SDF 动态绘制、资源管理器读的是完整多尺寸 ico，所以那两处清晰。
-///
-/// SAFETY：内部 FFI 调用（LoadImageW / SendMessageW / GetDpiForWindow 等）均为只读式
-/// 系统调用，句柄经 WM_SETICON 后由窗口接管，无需手动释放；本函数对调用方暴露为 safe。
-#[cfg(windows)]
-pub fn set_window_icons_from_resource(hwnd: HWND) {
-    // SAFETY：以下均为只读式系统调用；句柄经 WM_SETICON 后由窗口接管，无需手动释放。
-    let hmod = match unsafe { GetModuleHandleW(None) } {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let hinst = HINSTANCE(hmod.0);
-    // MAKEINTRESOURCEW(32512)
-    let name = PCWSTR(32512usize as *const u16);
-    let mut dpi = unsafe { GetDpiForWindow(hwnd) };
-    if dpi == 0 {
-        dpi = 96;
-    }
-
-    let set_icon = |wparam: u32, cx: _, cy: _| {
-        let (cx, cy) = (
-            unsafe { GetSystemMetricsForDpi(cx, dpi) }.max(1),
-            unsafe { GetSystemMetricsForDpi(cy, dpi) }.max(1),
-        );
-        if let Ok(h) = unsafe { LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) }
-        {
-            // SAFETY：WM_SETICON 把图标句柄交给窗口，由窗口负责后续生命周期。
-            unsafe {
-                let _ = SendMessageW(
-                    hwnd,
-                    WM_SETICON,
-                    Some(WPARAM(wparam as usize)),
-                    Some(LPARAM(h.0 as isize)),
-                );
-            }
-        }
-    };
-    set_icon(ICON_BIG, SM_CXICON, SM_CYICON);
-    set_icon(ICON_SMALL, SM_CXSMICON, SM_CYSMICON);
-}
-
-/// 弹一个模态错误对话框，用于构建期 / 启动期致命错误，把「双击无反应」转成可操作的提示。
-///
-/// SAFETY：MessageBoxW 是只读式模态对话框，无资源需释放，对调用方暴露为 safe。
-#[cfg(windows)]
-pub fn message_box(title: &str, msg: &str) {
-    let wide_msg: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
-    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe {
-        let _ = MessageBoxW(
-            None,
-            PCWSTR(wide_msg.as_ptr()),
-            PCWSTR(wide_title.as_ptr()),
-            MB_OK | MB_ICONERROR,
-        );
-    }
-}
-
-/// 注册 AppUserModelID 到 HKCU\SOFTWARE\Classes\AppUserModelId\<aumid>。
-/// 绿色 exe（不经安装器）发系统 toast 时，若该 AUMID 未注册，Windows 会静默丢弃
-/// 通知，且 tauri-plugin-notification 连同真实错误一起吞掉，排查零线索
-/// （2026-09-23 实测踩坑：exe 放 Tools 目录即触发）。幂等设计：键名用应用
-/// identifier（与安装目录无关），每次启动覆盖写，换目录自动刷新；仅写 HKCU，
-/// 无需管理员权限。失败返回 Err，由调用方记 debug.log。
-/// `icon_uri`：toast 图标来源，建议传独立 .ico 文件路径（见 write_aumid_icon_file）；
-/// WinRT toast 的 IconUri 指向 exe 时提取图标不稳定（实测显示空白）。
-pub fn register_aumid(
-    aumid: &str,
-    display_name: &str,
-    icon_uri: Option<&str>,
-) -> Result<(), String> {
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let path = format!(r"SOFTWARE\Classes\AppUserModelId\{aumid}");
-    let (key, _) = hkcu
-        .create_subkey(&path)
-        .map_err(|e| format!("创建注册表键 {path} 失败: {e:?}"))?;
-    key.set_value("DisplayName", &display_name.to_string())
-        .map_err(|e| format!("写 DisplayName 失败: {e:?}"))?;
-    if let Some(icon) = icon_uri {
-        key.set_value("IconUri", &icon.to_string())
-            .map_err(|e| format!("写 IconUri 失败: {e:?}"))?;
-    }
-    Ok(())
-}
-
-/// 把编译期内嵌的应用图标（src-tauri/icons/icon.ico，与 exe 图标同源）写出到
-/// dir/icon.ico 并返回路径。目录不存在时自动创建；内容随构建固定，覆盖写幂等。
-/// WinRT toast 的 IconUri 对「指向 exe」的提取不稳定，指向独立 .ico 最可靠。
-pub fn write_aumid_icon_file(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录 {} 失败: {e:?}", dir.display()))?;
-    let path = dir.join("icon.ico");
-    std::fs::write(&path, include_bytes!("../icons/icon.ico"))
-        .map_err(|e| format!("写图标文件 {} 失败: {e:?}", path.display()))?;
-    Ok(path)
 }

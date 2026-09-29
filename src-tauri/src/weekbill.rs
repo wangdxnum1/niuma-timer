@@ -1034,9 +1034,9 @@ mod tests {
         assert_eq!(f(b[0].slack_rate), 0.5);
         assert_eq!(b[0].salary, 2000.0);
         assert_eq!(b[1].slack_rate, 0.0); // 0/2000
-        assert_eq!(b[1].has_record, true);
+        assert!(b[1].has_record);
         assert_eq!(b[2].label, "3 月");
-        assert_eq!(b[2].has_record, false); // 空桶
+        assert!(!b[2].has_record); // 空桶
         assert_eq!(b[11].label, "12 月");
         assert_eq!(b[0].date, None);
         assert_eq!(b[0].is_workday, None);
