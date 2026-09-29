@@ -93,7 +93,10 @@ pub fn is_remote_active(window: Duration) -> bool {
     if is_rdp_session() {
         return true;
     }
-    match LAST_REMOTE_INPUT.get().and_then(|m| *m.lock().unwrap_or_else(|e| e.into_inner())) {
+    match LAST_REMOTE_INPUT
+        .get()
+        .and_then(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
+    {
         Some(t) => t.elapsed() < window,
         None => false,
     }

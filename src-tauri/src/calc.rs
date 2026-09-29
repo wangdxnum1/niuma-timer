@@ -269,12 +269,27 @@ mod tests {
 
     #[test]
     fn days_to_payday_variants() {
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), 10), 9);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), 10), 0);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(), 10), 26);
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), 10),
+            9
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), 10),
+            0
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(), 10),
+            26
+        );
         // 发薪日超过当月天数 → 钳到月末
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap(), 31), 13);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 31), 29);
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap(), 31),
+            13
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 31),
+            29
+        );
     }
 
     #[test]

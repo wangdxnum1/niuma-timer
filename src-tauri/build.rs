@@ -23,7 +23,12 @@ use std::path::{Path, PathBuf};
 const FRONTEND: &str = "../frontend";
 const FE_VER_PREFIX: &str = "const FE_VER = \"";
 /// 需要同步缓存戳的文件（路径相对 build.rs 的工作目录，即 src-tauri/）
-const TARGETS: &[&str] = &["../frontend/index.html", "../frontend/app.js", "tauri.conf.json", "src/tray.rs"];
+const TARGETS: &[&str] = &[
+    "../frontend/index.html",
+    "../frontend/app.js",
+    "tauri.conf.json",
+    "src/tray.rs",
+];
 /// 主程序权限清单（自动补齐 `allow-*` 项）
 const CAPABILITIES: &str = "capabilities/default.json";
 
@@ -109,7 +114,9 @@ fn apply_fe<'a>(rest: &'a str, ver: &str, out: &mut String) -> &'a str {
 /// 计算 frontend 目录的内容指纹（FNV-1a，对归一化后的文本求哈希）。
 fn frontend_fingerprint(dir: &Path) -> u64 {
     fn walk(dir: &Path, h: &mut u64, count: &mut u64) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         // 排序：read_dir 的返回顺序不保证，不排序会导致同一份内容算出不同指纹
         let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
         entries.sort();
@@ -168,7 +175,9 @@ fn command_names() -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let mut rest: &str = &src;
     while let Some(p) = rest.find("#[tauri::command") {
-        let Some(off) = rest[p..].find(']') else { break };
+        let Some(off) = rest[p..].find(']') else {
+            break;
+        };
         let mut cur = &rest[p + off + 1..];
         // 属性与 fn 之间可能夹着别的属性或行注释
         loop {
@@ -306,7 +315,10 @@ fn main() {
 
     // 构建信息注入：同版本号可以构建很多次，光看 v1.2.0 分不清用户装的是哪一次构建、
     // 哪个提交、哪份前端资源。这四项在编译期写死进 exe，运行时由 main.rs 落日志。
-    println!("cargo:rustc-env=BUILD_TIME={}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    println!(
+        "cargo:rustc-env=BUILD_TIME={}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    );
     println!("cargo:rustc-env=BUILD_GIT={}", git_rev());
     println!("cargo:rustc-env=BUILD_FE_VER={ver}");
     println!("cargo:rerun-if-changed=../CHANGELOG.md");
@@ -321,7 +333,9 @@ fn main() {
     }
     let added = sync_capabilities(&cmds);
     if added > 0 {
-        println!("cargo:warning=已自动补齐 {added} 条命令权限到 {CAPABILITIES}（提交时请一并带上）");
+        println!(
+            "cargo:warning=已自动补齐 {added} 条命令权限到 {CAPABILITIES}（提交时请一并带上）"
+        );
     }
 
     // AppManifest::commands 要求 'static 生命周期，build script 是短命进程，
@@ -331,8 +345,7 @@ fn main() {
         .map(|s| &*Box::leak(s.into_boxed_str()))
         .collect();
     let cmd_refs: &'static [&'static str] = Box::leak(cmd_refs.into_boxed_slice());
-    let attrs = tauri_build::Attributes::default().app_manifest(
-        tauri_build::AppManifest::new().commands(cmd_refs),
-    );
+    let attrs = tauri_build::Attributes::default()
+        .app_manifest(tauri_build::AppManifest::new().commands(cmd_refs));
     tauri_build::try_build(attrs).expect("tauri-build failed");
 }

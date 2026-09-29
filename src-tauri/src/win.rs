@@ -20,51 +20,53 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, POINT,
+    WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BI_RGB,
-    BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, HGDIOBJ,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetObjectW, SelectObject, BITMAP,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, HGDIOBJ,
 };
 use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
     MMDeviceEnumerator,
 };
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::Accessibility::{
-    HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent, WINEVENTPROC,
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
+};
+use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO,
 };
 use windows::Win32::UI::Input::{
     GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
-    RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEKEYBOARD,
+    RAWKEYBOARD, RAWMOUSE, RIDEV_INPUTSINK, RIDEV_REMOVE, RID_INPUT, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
 };
-use windows::Win32::UI::Input::{
-    GetRawInputDeviceInfoW, RIDI_DEVICENAME,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, GetLastInputInfo, LASTINPUTINFO};
+use windows::Win32::UI::Input::{GetRawInputDeviceInfoW, RIDI_DEVICENAME};
+use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx,
-    EVENT_SYSTEM_FOREGROUND, GetCursorPos, GetForegroundWindow, GetIconInfo, GetMessageTime,
-    GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, PostThreadMessageW, RegisterClassW,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, DI_NORMAL, HICON, ICONINFO, MSG, RI_KEY_BREAK,
-    ICON_BIG, ICON_SMALL, IMAGE_ICON, LoadImageW, LR_DEFAULTSIZE,
-    MessageBoxW, MB_ICONERROR, MB_OK, SendMessageW, SM_CXICON, SM_CXSMICON, SM_CYICON,
-    SM_CYSMICON, WM_SETICON, WM_QUIT,
+    CreateWindowExW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, GetCursorPos,
+    GetForegroundWindow, GetIconInfo, GetMessageTime, GetMessageW, GetWindowThreadProcessId,
+    LoadImageW, MessageBoxW, PostThreadMessageW, RegisterClassW, SendMessageW, TranslateMessage,
+    DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON, HWND_MESSAGE, ICONINFO, ICON_BIG, ICON_SMALL,
+    IMAGE_ICON, LR_DEFAULTSIZE, MB_ICONERROR, MB_OK, MSG, RI_KEY_BREAK, SM_CXICON, SM_CXSMICON,
+    SM_CYICON, SM_CYSMICON, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_QUIT, WM_SETICON, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -99,7 +101,9 @@ fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
         hInstance: match unsafe { GetModuleHandleW(None) } {
             Ok(h) => h.into(),
             Err(e) => {
-                crate::db::debug_log(&format!("[win] GetModuleHandleW 失败，Raw Input 窗口类未注册: {e}"));
+                crate::db::debug_log(&format!(
+                    "[win] GetModuleHandleW 失败，Raw Input 窗口类未注册: {e}"
+                ));
                 return;
             }
         },
@@ -306,7 +310,10 @@ pub struct RawMouse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RawEvent {
     /// 虚拟键码 + 是否为「抬起」
-    Keyboard { vk: u16, up: bool },
+    Keyboard {
+        vk: u16,
+        up: bool,
+    },
     Mouse(RawMouse),
 }
 
@@ -363,17 +370,21 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
 /// 原生菜单或鼠标按键仍占用交互时，不显示自定义 tooltip。
 /// 查询失败保守返回 None，由调用方暂停弹卡，避免盖住系统菜单。
 pub fn tooltip_input_blocked() -> Option<bool> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetGUIThreadInfo, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE,
     };
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON, VK_MBUTTON,
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
     };
-    let mut info = GUITHREADINFO { cbSize: size_of::<GUITHREADINFO>() as u32, ..Default::default() };
     // SAFETY: writable, correctly sized structure; thread 0 queries the foreground GUI thread.
     unsafe { GetGUIThreadInfo(0, &mut info) }.ok()?;
     let menu_flags = GUI_INMENUMODE.0 | GUI_POPUPMENUMODE.0 | GUI_SYSTEMMENUMODE.0;
-    let pressed = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter()
+    let pressed = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .iter()
         .any(|key| unsafe { GetAsyncKeyState(key.0 as i32) } < 0);
     Some(info.flags.0 & menu_flags != 0 || pressed)
 }
@@ -381,7 +392,7 @@ pub fn tooltip_input_blocked() -> Option<bool> {
 /// Polling must not mistake coordinates behind an app window / hidden taskbar for a tray hover.
 pub fn cursor_over_taskbar(x: i32, y: i32) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
-        WindowFromPoint, GetAncestor, GetClassNameW, GA_ROOT,
+        GetAncestor, GetClassNameW, WindowFromPoint, GA_ROOT,
     };
     let mut class = [0u16; 128];
     // SAFETY: borrowed HWNDs are used only for read-only queries; class is a valid output buffer.
@@ -390,10 +401,16 @@ pub fn cursor_over_taskbar(x: i32, y: i32) -> bool {
         let root = GetAncestor(window, GA_ROOT);
         GetClassNameW(root, &mut class)
     };
-    if len <= 0 { return false; }
-    matches!(String::from_utf16_lossy(&class[..len as usize]).as_str(),
-        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow"
-        | "TopLevelWindowForOverflowXamlIsland")
+    if len <= 0 {
+        return false;
+    }
+    matches!(
+        String::from_utf16_lossy(&class[..len as usize]).as_str(),
+        "Shell_TrayWnd"
+            | "Shell_SecondaryTrayWnd"
+            | "NotifyIconOverflowWindow"
+            | "TopLevelWindowForOverflowXamlIsland"
+    )
 }
 
 /// 当前消息的时间戳（`GetMessageTime`），与 `GetTickCount` 同域的毫秒计数。
@@ -415,8 +432,7 @@ pub fn raw_input_hdevice(buf: &[u8]) -> Option<usize> {
     // hDevice 位于偏移 8，x64 下为 8 字节指针
     let bytes = buf.get(8..16)?;
     let v = u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]);
     Some(v as usize)
 }
@@ -446,7 +462,11 @@ pub fn raw_input_device_name(hdevice: HANDLE) -> Option<String> {
     }
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     let s = String::from_utf16_lossy(&buf[..end]);
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// 当前线程 ID（`GetCurrentThreadId`）。用于向特定线程投递 `WM_QUIT`。
@@ -703,7 +723,14 @@ pub fn extract_icon_rgba(exe_path: &str) -> Option<IconRgba> {
         let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
         let mut hlarge = HICON::default();
         let mut hsmall = HICON::default();
-        if ExtractIconExW(PCWSTR(wide.as_ptr()), 0, Some(&mut hlarge), Some(&mut hsmall), 1) == 0 {
+        if ExtractIconExW(
+            PCWSTR(wide.as_ptr()),
+            0,
+            Some(&mut hlarge),
+            Some(&mut hsmall),
+            1,
+        ) == 0
+        {
             return None;
         }
         // 从这一行起，两个图标句柄交给守卫：后续任何提前 return 都会释放它们。
@@ -795,8 +822,13 @@ pub fn file_description(exe_path: &str) -> Option<String> {
             return None;
         }
         let mut buf = vec![0u8; size as usize];
-        if GetFileVersionInfoW(PCWSTR(wide.as_ptr()), Some(0), size, buf.as_mut_ptr() as *mut c_void)
-            .is_err()
+        if GetFileVersionInfoW(
+            PCWSTR(wide.as_ptr()),
+            Some(0),
+            size,
+            buf.as_mut_ptr() as *mut c_void,
+        )
+        .is_err()
         {
             return None;
         }
@@ -871,10 +903,10 @@ pub fn audio_meters() -> Option<Vec<AudioMeter>> {
         let enumerator =
             CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .ok()?;
-        let device = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+        let mgr = device
+            .Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)
             .ok()?;
-        let mgr = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None).ok()?;
         let sessions = mgr.GetSessionEnumerator().ok()?;
         let count = sessions.GetCount().ok()?;
 
@@ -899,7 +931,6 @@ pub fn audio_meters() -> Option<Vec<AudioMeter>> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,7 +950,12 @@ mod tests {
         let mut raw: RAWINPUT = unsafe { std::mem::zeroed() };
         raw.header.dwType = RIM_TYPEKEYBOARD.0;
         raw.header.dwSize = (size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>()) as u32;
-        unsafe { raw.data.keyboard = RAWKEYBOARD { VKey: 65, ..std::mem::zeroed() } };
+        unsafe {
+            raw.data.keyboard = RAWKEYBOARD {
+                VKey: 65,
+                ..std::mem::zeroed()
+            }
+        };
         let bytes = as_bytes(&raw, size_of::<RAWINPUTHEADER>() + size_of::<RAWKEYBOARD>());
         assert_eq!(
             parse_raw_input(&bytes),
@@ -1135,7 +1171,10 @@ mod tests {
     #[test]
     fn foreground_hook_guard_installs_drops_and_reinstalls() {
         let guard = WinEventHookGuard::install_foreground_hook(Some(noop_win_event_proc));
-        assert!(guard.is_some(), "SetWinEventHook 安装失败（OUTOFCONTEXT 钩子无需窗口）");
+        assert!(
+            guard.is_some(),
+            "SetWinEventHook 安装失败（OUTOFCONTEXT 钩子无需窗口）"
+        );
         drop(guard);
         assert!(
             WinEventHookGuard::install_foreground_hook(Some(noop_win_event_proc)).is_some(),
@@ -1170,12 +1209,15 @@ mod tests {
         let path = write_aumid_icon_file(&dir).expect("写出图标文件应成功");
 
         let bytes = std::fs::read(&path).expect("图标文件应存在");
-        assert!(bytes.len() > 1024, "图标文件应非空（实际 {} 字节）", bytes.len());
+        assert!(
+            bytes.len() > 1024,
+            "图标文件应非空（实际 {} 字节）",
+            bytes.len()
+        );
         assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x01, 0x00], "应为 ICO 魔数头");
 
         std::fs::remove_dir_all(&dir).ok(); // 清理临时目录
     }
-
 }
 
 /// 用 exe 内嵌的多尺寸 ico 资源（tauri-build 固定 ID 32512）按窗口实际 DPI
@@ -1206,7 +1248,8 @@ pub fn set_window_icons_from_resource(hwnd: HWND) {
             unsafe { GetSystemMetricsForDpi(cx, dpi) }.max(1),
             unsafe { GetSystemMetricsForDpi(cy, dpi) }.max(1),
         );
-        if let Ok(h) = unsafe { LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) } {
+        if let Ok(h) = unsafe { LoadImageW(Some(hinst), name, IMAGE_ICON, cx, cy, LR_DEFAULTSIZE) }
+        {
             // SAFETY：WM_SETICON 把图标句柄交给窗口，由窗口负责后续生命周期。
             unsafe {
                 let _ = SendMessageW(
@@ -1247,7 +1290,11 @@ pub fn message_box(title: &str, msg: &str) {
 /// 无需管理员权限。失败返回 Err，由调用方记 debug.log。
 /// `icon_uri`：toast 图标来源，建议传独立 .ico 文件路径（见 write_aumid_icon_file）；
 /// WinRT toast 的 IconUri 指向 exe 时提取图标不稳定（实测显示空白）。
-pub fn register_aumid(aumid: &str, display_name: &str, icon_uri: Option<&str>) -> Result<(), String> {
+pub fn register_aumid(
+    aumid: &str,
+    display_name: &str,
+    icon_uri: Option<&str>,
+) -> Result<(), String> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
@@ -1275,4 +1322,3 @@ pub fn write_aumid_icon_file(dir: &std::path::Path) -> Result<std::path::PathBuf
         .map_err(|e| format!("写图标文件 {} 失败: {e:?}", path.display()))?;
     Ok(path)
 }
-

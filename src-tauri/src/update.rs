@@ -4,29 +4,43 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
-use std::cmp::Ordering;
-use std::collections::HashMap;
 
 static UPDATE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub struct UpdateOperation;
 impl UpdateOperation {
     pub fn begin() -> Result<Self, String> {
-        UPDATE_BUSY.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst).map(|_| Self).map_err(|_| "更新正在进行，请勿重复操作".into())
+        UPDATE_BUSY
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .map(|_| Self)
+            .map_err(|_| "更新正在进行，请勿重复操作".into())
     }
 }
 impl Drop for UpdateOperation {
-    fn drop(&mut self) { UPDATE_BUSY.store(false, std::sync::atomic::Ordering::SeqCst); }
+    fn drop(&mut self) {
+        UPDATE_BUSY.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn helper_lock(target: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
-        .share_mode(0).open(target.with_extension("update.lock"))
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(target.with_extension("update.lock"))
 }
 
 // The file may remain after a crash; ownership is the OS handle, not its existence.
@@ -50,7 +64,9 @@ pub fn resume_after_helper() -> Result<bool, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     if wait_for_helper(&exe)? {
         // This process may have mapped the OLD image before replacement. Never initialize it.
-        std::process::Command::new(&exe).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new(&exe)
+            .spawn()
+            .map_err(|e| e.to_string())?;
         return Ok(true);
     }
     Ok(false)
@@ -68,7 +84,8 @@ mod concurrency_tests {
     }
     #[test]
     fn helper_lock_excludes_second_helper_and_startup_waits() {
-        let target = std::env::temp_dir().join(format!("niuma-lock-test-{}.exe", std::process::id()));
+        let target =
+            std::env::temp_dir().join(format!("niuma-lock-test-{}.exe", std::process::id()));
         let lock = helper_lock(&target).unwrap();
         assert!(helper_lock(&target).is_err());
         let path = target.clone();
@@ -303,7 +320,9 @@ pub fn run_helper_flow<IO: HelperIo>(io: &IO, args: &HelperArgs) -> i32 {
         io.log(&format!("替换失败，尝试回滚：{e}"));
         let _ = io.remove(&new_path);
         if let Err(e2) = io.rename(&old_path, target) {
-            io.log(&format!("回滚失败，请手动把 {old_path:?} 改回 {target:?}：{e2}"));
+            io.log(&format!(
+                "回滚失败，请手动把 {old_path:?} 改回 {target:?}：{e2}"
+            ));
             return 1;
         }
         if let Err(e3) = io.spawn(target) {
@@ -334,7 +353,11 @@ pub fn run_helper_flow<IO: HelperIo>(io: &IO, args: &HelperArgs) -> i32 {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// 真实 IO 实现：进程探测复用 `win::process_exe_path`，下载走 reqwest blocking，
@@ -429,7 +452,9 @@ impl HelperIo for RealHelperIo {
 
 /// 以真实 IO 跑助手流程（`fn main` 的 `--apply-update` 分支调用）。
 pub fn run_helper(args: HelperArgs) -> i32 {
-    let Ok(_ownership) = helper_lock(Path::new(&args.target)) else { return 1; };
+    let Ok(_ownership) = helper_lock(Path::new(&args.target)) else {
+        return 1;
+    };
     run_helper_flow(&RealHelperIo::new(), &args)
 }
 
@@ -454,43 +479,75 @@ pub struct UpdateInfo {
 }
 
 fn installation_matches(exe: &Path, location: &str, icon: &str) -> bool {
-    let norm = |s: &str| s.trim().trim_matches('"').replace('/', "\\").trim_end_matches('\\').to_lowercase();
-    let parent = exe.parent().map(|p| norm(&p.to_string_lossy())).unwrap_or_default();
-    if !location.trim().is_empty() && norm(location) == parent { return true; }
+    let norm = |s: &str| {
+        s.trim()
+            .trim_matches('"')
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    let parent = exe
+        .parent()
+        .map(|p| norm(&p.to_string_lossy()))
+        .unwrap_or_default();
+    if !location.trim().is_empty() && norm(location) == parent {
+        return true;
+    }
     let icon_path = if icon.starts_with('"') {
         icon[1..].split('"').next().unwrap_or("")
-    } else { icon.rsplit_once(',').map(|(p, _)| p).unwrap_or(icon) };
+    } else {
+        icon.rsplit_once(',').map(|(p, _)| p).unwrap_or(icon)
+    };
     !icon_path.is_empty() && norm(icon_path) == norm(&exe.to_string_lossy())
 }
 
 /// Match the actual running path across user/machine and both registry views.
 pub fn installed_kind() -> Option<&'static str> {
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+    use winreg::enums::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+    };
     use winreg::RegKey;
     let exe = std::env::current_exe().ok()?;
     for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
             let root = RegKey::predef(hive);
-            let Ok(uninstall) = root.open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Uninstall", KEY_READ | view) else { continue };
+            let Ok(uninstall) = root.open_subkey_with_flags(
+                r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+                KEY_READ | view,
+            ) else {
+                continue;
+            };
             for name in uninstall.enum_keys().flatten() {
-                let Ok(sub) = uninstall.open_subkey(&name) else { continue };
+                let Ok(sub) = uninstall.open_subkey(&name) else {
+                    continue;
+                };
                 let display: String = sub.get_value("DisplayName").unwrap_or_default();
-                if !display.contains("牛马计时器") && !display.contains("niuma-timer") { continue; }
+                if !display.contains("牛马计时器") && !display.contains("niuma-timer") {
+                    continue;
+                }
                 let location: String = sub.get_value("InstallLocation").unwrap_or_default();
                 let icon: String = sub.get_value("DisplayIcon").unwrap_or_default();
-                if !installation_matches(&exe, &location, &icon) { continue; }
+                if !installation_matches(&exe, &location, &icon) {
+                    continue;
+                }
                 let msi: u32 = sub.get_value("WindowsInstaller").unwrap_or(0);
                 let uninstall: String = sub.get_value("UninstallString").unwrap_or_default();
-                return Some(if msi == 1 || uninstall.to_lowercase().contains("msiexec") {
-                    "windows-x86_64-msi"
-                } else { "windows-x86_64-nsis" });
+                return Some(
+                    if msi == 1 || uninstall.to_lowercase().contains("msiexec") {
+                        "windows-x86_64-msi"
+                    } else {
+                        "windows-x86_64-nsis"
+                    },
+                );
             }
         }
     }
     None
 }
 
-pub fn is_installed() -> bool { installed_kind().is_some() }
+pub fn is_installed() -> bool {
+    installed_kind().is_some()
+}
 
 /// 本轮所有网络请求的唯一入口（15 秒超时 + 显式 UA：GitHub 对无 UA 请求会限流）。
 pub fn fetch_text(url: &str) -> Result<String, String> {
@@ -688,7 +745,12 @@ pub fn build_helper_args(
 }
 
 /// 组装本地交接的助手参数：主程序已下载并校验过，助手只独立复核一次 SHA256。
-pub fn build_helper_args_local(target: &str, wait_pid: u32, path: &str, sha256: &str) -> HelperArgs {
+pub fn build_helper_args_local(
+    target: &str,
+    wait_pid: u32,
+    path: &str,
+    sha256: &str,
+) -> HelperArgs {
     HelperArgs {
         target: target.to_string(),
         wait_pid: Some(wait_pid),
@@ -828,8 +890,16 @@ mod tests {
     fn installation_must_match_running_executable() {
         let exe = Path::new(r"C:\Program Files\Niuma\niuma-timer.exe");
         assert!(installation_matches(exe, r"C:\Program Files\Niuma\", ""));
-        assert!(installation_matches(exe, "", r#""C:\Program Files\Niuma\niuma-timer.exe",0"#));
-        assert!(!installation_matches(Path::new(r"C:\Portable\niuma-timer.exe"), r"C:\Program Files\Niuma", ""));
+        assert!(installation_matches(
+            exe,
+            "",
+            r#""C:\Program Files\Niuma\niuma-timer.exe",0"#
+        ));
+        assert!(!installation_matches(
+            Path::new(r"C:\Portable\niuma-timer.exe"),
+            r"C:\Program Files\Niuma",
+            ""
+        ));
         assert!(!installation_matches(exe, "", ""));
     }
     #[test]
@@ -924,7 +994,9 @@ mod tests {
 
         fn spawn(&self, path: &Path) -> Result<(), String> {
             self.spawned.borrow_mut().push(path.to_path_buf());
-            if self.fail_first_spawn && self.spawned.borrow().len() == 1 { return Err("spawn failed".to_string()); }
+            if self.fail_first_spawn && self.spawned.borrow().len() == 1 {
+                return Err("spawn failed".to_string());
+            }
             Ok(())
         }
 
@@ -982,7 +1054,10 @@ mod tests {
 
     #[test]
     fn run_helper_flow_spawn_failure_rolls_back() {
-        let io = FakeIo { fail_first_spawn: true, ..FakeIo::default() };
+        let io = FakeIo {
+            fail_first_spawn: true,
+            ..FakeIo::default()
+        };
         assert_eq!(run_helper_flow(&io, &helper_args_for_test()), 1);
         assert_eq!(io.rename_calls.get(), 3);
         assert_eq!(io.spawned.borrow().len(), 2);
@@ -990,7 +1065,10 @@ mod tests {
 
     #[test]
     fn run_helper_flow_read_failure_restarts_old() {
-        let io = FakeIo { read_result: Err("offline".to_string()), ..FakeIo::default() };
+        let io = FakeIo {
+            read_result: Err("offline".to_string()),
+            ..FakeIo::default()
+        };
         assert_eq!(run_helper_flow(&io, &helper_args_for_test()), 1);
         assert_eq!(io.spawned.borrow().len(), 1);
         assert_eq!(io.rename_calls.get(), 0);
@@ -1142,7 +1220,10 @@ mod tests {
         let h = parse_helper_args(&argv).unwrap();
         assert_eq!(h.target, "C:\\app\\niuma-timer.exe");
         assert_eq!(h.wait_pid, Some(1234));
-        assert_eq!(h.source, Source::Url("https://example.com/new.exe".to_string()));
+        assert_eq!(
+            h.source,
+            Source::Url("https://example.com/new.exe".to_string())
+        );
         assert_eq!(h.sha256, "abc");
     }
 
@@ -1182,7 +1263,10 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let h = parse_helper_args(&argv).unwrap();
-        assert_eq!(h.source, Source::Local("C:\\app\\niuma-timer.exe.download".to_string()));
+        assert_eq!(
+            h.source,
+            Source::Local("C:\\app\\niuma-timer.exe.download".to_string())
+        );
         assert_eq!(h.sha256, "abc");
     }
 
@@ -1196,7 +1280,9 @@ mod tests {
         assert_eq!(run_helper_flow(&io, &args), 0);
         assert_eq!(
             *io.read_sources.borrow(),
-            vec![Source::Local("C:\\app\\niuma-timer.exe.download".to_string())]
+            vec![Source::Local(
+                "C:\\app\\niuma-timer.exe.download".to_string()
+            )]
         );
         assert_eq!(io.rename_calls.get(), 2);
         // 成功后清理：备份 + 本地交接文件
@@ -1234,7 +1320,12 @@ mod tests {
     }
 
     impl Fetcher for FakeFetcher {
-        fn fetch(&self, _url: &str, buf: &mut Vec<u8>, on_chunk: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+        fn fetch(
+            &self,
+            _url: &str,
+            buf: &mut Vec<u8>,
+            on_chunk: &mut dyn FnMut(u64, Option<u64>),
+        ) -> Result<(), String> {
             let n = self.fetch_calls.get() + 1;
             self.fetch_calls.set(n);
             if self.ignore_range {

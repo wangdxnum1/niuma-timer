@@ -40,70 +40,72 @@ pub fn start(app: AppHandle) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new().name("niuma-scheduler".to_string()).spawn(move || {
-        let mut beats: u64 = 0;
-        let mut last_visible: Option<bool> = None;
-        let mut last_maint: Option<chrono::NaiveDate> = None;
-        loop {
-            thread::sleep(TICK);
-            beats = beats.wrapping_add(1);
+    let _ = std::thread::Builder::new()
+        .name("niuma-scheduler".to_string())
+        .spawn(move || {
+            let mut beats: u64 = 0;
+            let mut last_visible: Option<bool> = None;
+            let mut last_maint: Option<chrono::NaiveDate> = None;
+            loop {
+                thread::sleep(TICK);
+                beats = beats.wrapping_add(1);
 
-            // ── 每拍（1s）：主窗口可见性广播 + 托盘实时状态 ──
-            //
-            // 可见性放在状态侧统一检测，而不是逐个改 show/hide 调用点：触发路径
-            // 太多（托盘菜单 / hide、show 命令 / 关闭按钮拦截 / 前端 Esc），只有
-            // 统一检测才能全覆盖。前端据此暂停 2 秒轮询省电；窗口隐藏时这段照跑，
-            // 代价仅一次 bool 比较。
-            let vis = app
-                .get_webview_window("main")
-                .map(|w| w.is_visible().unwrap_or(false))
-                .unwrap_or(false);
-            if last_visible != Some(vis) {
-                last_visible = Some(vis);
-                let _ = app.emit("win-visibility", vis);
-            }
-            {
-                let state = app.state::<crate::AppState>();
-                run("refresh_tray", || crate::refresh_tray(&app, state.inner()));
-            }
+                // ── 每拍（1s）：主窗口可见性广播 + 托盘实时状态 ──
+                //
+                // 可见性放在状态侧统一检测，而不是逐个改 show/hide 调用点：触发路径
+                // 太多（托盘菜单 / hide、show 命令 / 关闭按钮拦截 / 前端 Esc），只有
+                // 统一检测才能全覆盖。前端据此暂停 2 秒轮询省电；窗口隐藏时这段照跑，
+                // 代价仅一次 bool 比较。
+                let vis = app
+                    .get_webview_window("main")
+                    .map(|w| w.is_visible().unwrap_or(false))
+                    .unwrap_or(false);
+                if last_visible != Some(vis) {
+                    last_visible = Some(vis);
+                    let _ = app.emit("win-visibility", vis);
+                }
+                {
+                    let state = app.state::<crate::AppState>();
+                    run("refresh_tray", || crate::refresh_tray(&app, state.inner()));
+                }
 
-            // ── 每 5 拍：跨天重拉节假日 + 锁屏加班落盘 ──
-            // 从 1s 放宽到 5s 对加班统计无影响（锁屏→记加班的延迟 ≤5s）。
-            if beats % EVERY_5S == 0 {
-                let state = app.state::<crate::AppState>();
-                run("rollover_day", || {
-                    crate::maybe_rollover_day(state.inner(), &app)
-                });
-                run("overtime_lock", || {
-                    crate::maybe_record_overtime_lock(state.inner())
-                });
-            }
-
-            // ── 每 10 拍：活动统计落盘 + 应用使用结算 ──
-            if beats % EVERY_10S == 0 {
-                run("activity_flush", crate::activity::flush_now);
-                run("app_usage_tick", crate::app_usage::tick_now);
-            }
-
-            // ── 每日一次：数据生命周期维护（WAL 收缩 + 过期图标 / 数据清理）──
-            // 用「日期变了」而不是纯节拍计数：程序重启后当天还能补跑一次，
-            // 不会因计数归零而漏掉一整天的维护（WAL 会一直胖着）。
-            if beats % EVERY_60S == 0 {
-                let today = chrono::Local::now().date_naive();
-                if last_maint != Some(today) {
-                    last_maint = Some(today);
-                    let app2 = app.clone();
-                    run("maintenance", move || {
-                        let state = app2.state::<crate::AppState>();
-                        let cfg = crate::sync::lock(&state.config, "state.config").clone();
-                        crate::maintain::run_daily(&cfg);
+                // ── 每 5 拍：跨天重拉节假日 + 锁屏加班落盘 ──
+                // 从 1s 放宽到 5s 对加班统计无影响（锁屏→记加班的延迟 ≤5s）。
+                if beats % EVERY_5S == 0 {
+                    let state = app.state::<crate::AppState>();
+                    run("rollover_day", || {
+                        crate::maybe_rollover_day(state.inner(), &app)
+                    });
+                    run("overtime_lock", || {
+                        crate::maybe_record_overtime_lock(state.inner())
                     });
                 }
-                // 守护提醒（久坐/下班）：分钟级精度足够，每分钟判定一次
-                run("remind_tick", || crate::remind::tick(&app));
+
+                // ── 每 10 拍：活动统计落盘 + 应用使用结算 ──
+                if beats % EVERY_10S == 0 {
+                    run("activity_flush", crate::activity::flush_now);
+                    run("app_usage_tick", crate::app_usage::tick_now);
+                }
+
+                // ── 每日一次：数据生命周期维护（WAL 收缩 + 过期图标 / 数据清理）──
+                // 用「日期变了」而不是纯节拍计数：程序重启后当天还能补跑一次，
+                // 不会因计数归零而漏掉一整天的维护（WAL 会一直胖着）。
+                if beats % EVERY_60S == 0 {
+                    let today = chrono::Local::now().date_naive();
+                    if last_maint != Some(today) {
+                        last_maint = Some(today);
+                        let app2 = app.clone();
+                        run("maintenance", move || {
+                            let state = app2.state::<crate::AppState>();
+                            let cfg = crate::sync::lock(&state.config, "state.config").clone();
+                            crate::maintain::run_daily(&cfg);
+                        });
+                    }
+                    // 守护提醒（久坐/下班）：分钟级精度足够，每分钟判定一次
+                    run("remind_tick", || crate::remind::tick(&app));
+                }
             }
-        }
-    });
+        });
 }
 
 /// 跑一个周期任务，兜住 panic：调度线程必须活下去，单个任务的失败只损失一拍。

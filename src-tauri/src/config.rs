@@ -309,7 +309,9 @@ pub fn load() -> Config {
             cfg
         }
         LoadResult::Unreadable(e) => {
-            eprintln!("[config] config.json 读取失败（{e}），本次先用默认配置运行，不覆盖磁盘原文件");
+            eprintln!(
+                "[config] config.json 读取失败（{e}），本次先用默认配置运行，不覆盖磁盘原文件"
+            );
             crate::db::debug_log(&format!("[config] config.json 读取失败: {e}"));
             Config::default()
         }
