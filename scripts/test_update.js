@@ -65,18 +65,16 @@ has("update.rs 引入 sha2", rsUpd, "use sha2::{Digest, Sha256};");
 has("update.rs 有真实 IO 实现", rsUpd, "impl HelperIo for RealHelperIo");
 has("update.rs 用 win::process_exe_path 探测进程", rsUpd, "crate::win::process_exe_path");
 
-// ---- 区块 5：托盘更新入口（A6）----
+// ---- 区块 5：托盘更新入口（A6；v1.5.0 起托盘菜单不放「更新到 vX.Y.Z」动态项）----
 const rsTray = read("src-tauri/src/tray.rs");
 has("tray.rs 新增「检查更新」静态项", rsTray, '"check-update", "检查更新"');
-has("tray.rs 新增动态项 id", rsTray, '"update-now"');
-has("tray.rs 动态项文案含版本", rsTray, 'format!("更新到 v{version}")');
-has("tray.rs 有 set_update_available", rsTray, "pub fn set_update_available(app: &AppHandle, version: &str)");
-has("tray.rs 记录已挂版本", rsTray, "static UPDATE_VERSION: Mutex<Option<String>>");
-has("tray.rs 持有托盘菜单句柄", rsTray, "static TRAY_MENU: Mutex<Option<Menu<tauri::Wry>>>");
-has("tray.rs 动态项追加进菜单", rsTray, "menu.append(&item)");
+lacks("tray.rs 无动态更新菜单项", rsTray, '"update-now"');
+lacks("tray.rs 无「更新到」文案", rsTray, "更新到 v");
+has("tray.rs 有 set_update_available", rsTray, "pub fn set_update_available(version: &str)");
+has("tray.rs 记录已发现版本", rsTray, "static UPDATE_VERSION: Mutex<Option<String>>");
 has("tray.rs tooltip 追加新版本提示", rsTray, "（有新版本 v{v}）");
 has("tray.rs 托盘项通知前端", rsTray, '"update-view-requested"');
-has("tray.rs create_tray 收尾补挂早到版本", rsTray, "let early = sync::lock(&UPDATE_VERSION");
+lacks("tray.rs 不再持有托盘菜单句柄", rsTray, "static TRAY_MENU");
 
 // ---- 区块 6：检查更新四命令 + 安装版判定 + 自动检查调度（A7）----
 const rsMain7 = read("src-tauri/src/main.rs");

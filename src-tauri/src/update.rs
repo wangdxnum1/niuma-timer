@@ -760,7 +760,7 @@ pub fn check_now() -> UpdateInfo {
     }
 }
 
-/// 自动检查：发现可用且未被跳过的版本才提示（写托盘项 + 发系统通知）。
+/// 自动检查：发现可用且未被跳过的版本才提示（托盘记新版本 + 发系统通知）。
 /// 返回被提示的版本号，供调用方记日志。
 pub fn check_and_notify(app: &tauri::AppHandle) -> Option<String> {
     let rel = match fetch_remote() {
@@ -782,7 +782,7 @@ pub fn check_and_notify(app: &tauri::AppHandle) -> Option<String> {
     if !should_notify(&rel.version, current, skipped.as_deref()) {
         return None;
     }
-    crate::tray::set_update_available(app, &rel.version);
+    crate::tray::set_update_available(&rel.version);
     crate::remind::notify(
         app,
         "发现新版本",
