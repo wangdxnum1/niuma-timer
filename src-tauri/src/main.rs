@@ -775,8 +775,11 @@ async fn start_update(app: tauri::AppHandle) -> Result<(), String> {
         argv.push("--wait-pid".to_string());
         argv.push(pid.to_string());
     }
+    let update::Source::Url(url) = &args.source else {
+        return Err("内部错误：助手参数不是 url 来源".to_string());
+    };
     argv.push("--url".to_string());
-    argv.push(args.url.clone());
+    argv.push(url.clone());
     argv.push("--sha256".to_string());
     argv.push(args.sha256.clone());
     std::process::Command::new(&exe)

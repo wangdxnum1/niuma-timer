@@ -109,6 +109,13 @@ impl RemoteRelease {
     }
 }
 
+/// 助手取更新包的两个来源：远程 url（旧路径保留）或主程序已下好的本地文件（新流程）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    Url(String),
+    Local(String),
+}
+
 /// `--apply-update` 助手模式参数
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelperArgs {
@@ -116,8 +123,8 @@ pub struct HelperArgs {
     pub target: String,
     /// 需等待其退出的父进程 pid
     pub wait_pid: Option<u32>,
-    /// 新 exe 下载地址
-    pub url: String,
+    /// 新包来源（url 或本地交接文件）
+    pub source: Source,
     /// 期望的 SHA256（小写十六进制）
     pub sha256: String,
 }
@@ -187,10 +194,15 @@ pub fn parse_helper_args(argv: &[String]) -> Option<HelperArgs> {
             .and_then(|i| argv.get(i + 1))
             .cloned()
     };
+    let source = match (value_of("--url"), value_of("--local-file")) {
+        (Some(url), _) => Source::Url(url),
+        (None, Some(path)) => Source::Local(path),
+        (None, None) => return None,
+    };
     Some(HelperArgs {
         target: value_of("--target")?,
         wait_pid: value_of("--wait-pid").and_then(|s| s.parse::<u32>().ok()),
-        url: value_of("--url")?,
+        source,
         sha256: value_of("--sha256")?.to_lowercase(),
     })
 }
@@ -208,8 +220,8 @@ const WAIT_MAX_POLLS: u32 = 60;
 pub trait HelperIo {
     /// 指定 pid 的进程是否仍存活
     fn is_running(&self, pid: u32) -> bool;
-    /// 把 url 的内容下载到内存
-    fn download(&self, url: &str) -> Result<Vec<u8>, String>;
+    /// 按来源取更新包内容（url 下载 / 本地文件读盘）
+    fn read(&self, source: &Source) -> Result<Vec<u8>, String>;
     /// 写出字节到文件（覆盖）
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), String>;
     /// 重命名 / 覆盖移动
@@ -224,7 +236,7 @@ pub trait HelperIo {
     fn poll_interval_ms(&self) -> u64;
 }
 
-/// 助手状态机：等旧进程退出 → 下载 → 校验 SHA256 → 写 `.new` → 备份 `.old`
+/// 助手状态机：等旧进程退出 → 取更新包 → 校验 SHA256 → 写 `.new` → 备份 `.old`
 /// → 顶替（失败回滚）→ 拉新版 → 清理备份。
 ///
 /// 返回进程退出码：0 成功，1 失败（失败原因全部进日志）。
@@ -252,11 +264,11 @@ pub fn run_helper_flow<IO: HelperIo>(io: &IO, args: &HelperArgs) -> i32 {
         }
     }
 
-    // ② 下载
-    let bytes = match io.download(&args.url) {
+    // ② 取更新包内容
+    let bytes = match io.read(&args.source) {
         Ok(b) => b,
         Err(e) => {
-            io.log(&format!("下载失败：{e}"));
+            io.log(&format!("读取新版本失败：{e}"));
             let _ = io.spawn(target);
             return 1;
         }
@@ -309,8 +321,11 @@ pub fn run_helper_flow<IO: HelperIo>(io: &IO, args: &HelperArgs) -> i32 {
         return 1;
     }
 
-    // ⑧ 清理备份
+    // ⑧ 清理备份与本地交接文件（失败路径不清理，下次更新会覆盖写）
     let _ = io.remove(&old_path);
+    if let Source::Local(path) = &args.source {
+        let _ = io.remove(Path::new(path));
+    }
     io.log("更新完成");
     0
 }
@@ -352,18 +367,24 @@ impl HelperIo for RealHelperIo {
         crate::win::process_exe_path(pid).is_some()
     }
 
-    fn download(&self, url: &str) -> Result<Vec<u8>, String> {
-        let resp = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| e.to_string())?
-            .get(url)
-            .send()
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
+    fn read(&self, source: &Source) -> Result<Vec<u8>, String> {
+        match source {
+            // 主程序已下好并校验过的本地交接文件：直接读盘
+            Source::Local(path) => std::fs::read(path).map_err(|e| e.to_string()),
+            Source::Url(url) => {
+                let resp = reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(120))
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .get(url)
+                    .send()
+                    .map_err(|e| e.to_string())?;
+                if !resp.status().is_success() {
+                    return Err(format!("HTTP {}", resp.status()));
+                }
+                resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+            }
         }
-        resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -662,9 +683,19 @@ pub fn build_helper_args(
     Ok(HelperArgs {
         target: target.to_string(),
         wait_pid: Some(wait_pid),
-        url: url.to_string(),
+        source: Source::Url(url.to_string()),
         sha256,
     })
+}
+
+/// 组装本地交接的助手参数：主程序已下载并校验过，助手只独立复核一次 SHA256。
+pub fn build_helper_args_local(target: &str, wait_pid: u32, path: &str, sha256: &str) -> HelperArgs {
+    HelperArgs {
+        target: target.to_string(),
+        wait_pid: Some(wait_pid),
+        source: Source::Local(path.to_string()),
+        sha256: sha256.to_lowercase(),
+    }
 }
 
 /// 是否「刚升级」：上次记录的运行版本存在且与当前版本不同。
@@ -831,8 +862,9 @@ mod tests {
     /// 假 IO：记录调用序列，可注入「下载内容 / 某次重命名失败 / 进程永不退出」。
     /// 手写 `Default`——`Result` 没实现 `Default`，不能 derive。
     struct FakeIo {
-        /// download 返回值
-        download_result: Result<Vec<u8>, String>,
+        /// read 返回值
+        read_result: Result<Vec<u8>, String>,
+        read_sources: RefCell<Vec<Source>>,
         /// 第 N 次 rename（从 1 起）返回失败；None = 从不失败
         fail_rename_at: Option<u32>,
         fail_first_spawn: bool,
@@ -848,7 +880,8 @@ mod tests {
     impl Default for FakeIo {
         fn default() -> Self {
             Self {
-                download_result: Ok(vec![1, 2, 3]),
+                read_result: Ok(vec![1, 2, 3]),
+                read_sources: RefCell::new(Vec::new()),
                 fail_rename_at: None,
                 fail_first_spawn: false,
                 never_exit: false,
@@ -866,8 +899,9 @@ mod tests {
             self.never_exit
         }
 
-        fn download(&self, _url: &str) -> Result<Vec<u8>, String> {
-            self.download_result.clone()
+        fn read(&self, source: &Source) -> Result<Vec<u8>, String> {
+            self.read_sources.borrow_mut().push(source.clone());
+            self.read_result.clone()
         }
 
         fn write(&self, path: &Path, _bytes: &[u8]) -> Result<(), String> {
@@ -909,7 +943,7 @@ mod tests {
         HelperArgs {
             target: "C:\\app\\niuma-timer.exe".to_string(),
             wait_pid: Some(1),
-            url: "https://example.com/new.exe".to_string(),
+            source: Source::Url("https://example.com/new.exe".to_string()),
             sha256: sha256_hex(&[1, 2, 3]),
         }
     }
@@ -936,7 +970,7 @@ mod tests {
     #[test]
     fn run_helper_flow_hash_mismatch() {
         let io = FakeIo {
-            download_result: Ok(vec![9, 9, 9]),
+            read_result: Ok(vec![9, 9, 9]),
             ..FakeIo::default()
         };
         let args = helper_args_for_test();
@@ -956,8 +990,8 @@ mod tests {
     }
 
     #[test]
-    fn run_helper_flow_download_failure_restarts_old() {
-        let io = FakeIo { download_result: Err("offline".to_string()), ..FakeIo::default() };
+    fn run_helper_flow_read_failure_restarts_old() {
+        let io = FakeIo { read_result: Err("offline".to_string()), ..FakeIo::default() };
         assert_eq!(run_helper_flow(&io, &helper_args_for_test()), 1);
         assert_eq!(io.spawned.borrow().len(), 1);
         assert_eq!(io.rename_calls.get(), 0);
@@ -1109,7 +1143,7 @@ mod tests {
         let h = parse_helper_args(&argv).unwrap();
         assert_eq!(h.target, "C:\\app\\niuma-timer.exe");
         assert_eq!(h.wait_pid, Some(1234));
-        assert_eq!(h.url, "https://example.com/new.exe");
+        assert_eq!(h.source, Source::Url("https://example.com/new.exe".to_string()));
         assert_eq!(h.sha256, "abc");
     }
 
@@ -1129,6 +1163,61 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(parse_helper_args(&argv).is_none());
+    }
+
+    #[test]
+    fn parse_helper_args_local_file() {
+        let argv: Vec<String> = [
+            "niuma-timer.exe",
+            "--apply-update",
+            "--target",
+            "C:\\app\\niuma-timer.exe",
+            "--wait-pid",
+            "1234",
+            "--local-file",
+            "C:\\app\\niuma-timer.exe.download",
+            "--sha256",
+            "ABC",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let h = parse_helper_args(&argv).unwrap();
+        assert_eq!(h.source, Source::Local("C:\\app\\niuma-timer.exe.download".to_string()));
+        assert_eq!(h.sha256, "abc");
+    }
+
+    #[test]
+    fn run_helper_flow_from_local_source() {
+        let io = FakeIo::default();
+        let args = HelperArgs {
+            source: Source::Local("C:\\app\\niuma-timer.exe.download".to_string()),
+            ..helper_args_for_test()
+        };
+        assert_eq!(run_helper_flow(&io, &args), 0);
+        assert_eq!(
+            *io.read_sources.borrow(),
+            vec![Source::Local("C:\\app\\niuma-timer.exe.download".to_string())]
+        );
+        assert_eq!(io.rename_calls.get(), 2);
+        // 成功后清理：备份 + 本地交接文件
+        assert_eq!(io.removed.borrow().len(), 2);
+    }
+
+    #[test]
+    fn run_helper_flow_local_content_mismatch() {
+        let io = FakeIo {
+            read_result: Ok(vec![7, 7, 7]),
+            ..FakeIo::default()
+        };
+        let args = HelperArgs {
+            source: Source::Local("C:\\app\\niuma-timer.exe.download".to_string()),
+            ..helper_args_for_test()
+        };
+        assert_eq!(run_helper_flow(&io, &args), 1);
+        assert!(io.written.borrow().is_empty());
+        assert_eq!(io.rename_calls.get(), 0);
+        assert_eq!(io.read_sources.borrow().len(), 1);
     }
 
     // ---- download_with_retry：假 Fetcher 驱动断点续传 / 全量重来 / 重试耗尽 ----
