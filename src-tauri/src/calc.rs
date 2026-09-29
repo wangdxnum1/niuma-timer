@@ -155,9 +155,7 @@ pub fn compute(
     let worked_h = worked_min / 60.0;
 
     let off_work = is_workday && now_min >= pm_e;
-    let to_off_h = if !is_workday {
-        0.0
-    } else if now_min >= pm_e {
+    let to_off_h = if !is_workday || now_min >= pm_e {
         0.0
     } else {
         (pm_e - now_min) / 60.0
@@ -259,22 +257,39 @@ mod tests {
     #[test]
     fn daily_hours_default_and_custom() {
         assert!(approx(daily_hours(&Config::default()), 8.0));
-        let mut cfg = Config::default();
-        cfg.am_start = "10:00".into();
-        cfg.am_end = "12:00".into();
-        cfg.pm_start = "13:00".into();
-        cfg.pm_end = "17:30".into();
+        let cfg = Config {
+            am_start: "10:00".into(),
+            am_end: "12:00".into(),
+            pm_start: "13:00".into(),
+            pm_end: "17:30".into(),
+            ..Default::default()
+        };
         assert!(approx(daily_hours(&cfg), 6.5));
     }
 
     #[test]
     fn days_to_payday_variants() {
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), 10), 9);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), 10), 0);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(), 10), 26);
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), 10),
+            9
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(), 10),
+            0
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(), 10),
+            26
+        );
         // 发薪日超过当月天数 → 钳到月末
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap(), 31), 13);
-        assert_eq!(days_to_payday(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 31), 29);
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap(), 31),
+            13
+        );
+        assert_eq!(
+            days_to_payday(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 31),
+            29
+        );
     }
 
     #[test]

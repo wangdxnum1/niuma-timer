@@ -259,7 +259,9 @@ pub fn purge_old_icons() -> u32 {
             continue;
         }
         let Ok(md) = entry.metadata() else { continue };
-        let Ok(modified) = md.modified() else { continue };
+        let Ok(modified) = md.modified() else {
+            continue;
+        };
         let secs = modified
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -357,11 +359,7 @@ pub fn estimate_usage_conn(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<
         .zip(counts)
         .map(|((table, _, _), n)| TableUsage {
             table: (*table).to_string(),
-            bytes: if total_rows == 0 {
-                0
-            } else {
-                used.saturating_mul(n) / total_rows
-            },
+            bytes: used.saturating_mul(n).checked_div(total_rows).unwrap_or(0),
             rows: n,
         })
         .collect();
@@ -444,7 +442,7 @@ pub(crate) fn build_storage_info(cfg: &Config, p: StorageParts) -> StorageInfo {
         .saturating_add(p.log_bytes);
 
     // 降序：用户第一眼看的是「谁占得最多」
-    slices.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    slices.sort_by_key(|s| std::cmp::Reverse(s.bytes));
 
     StorageInfo {
         db_bytes: p.db_bytes,
@@ -486,9 +484,7 @@ pub fn storage_info(cfg: &Config) -> StorageInfo {
         Ok(v) => Ok((v, false)),
         Err(first) => match estimate_usage_conn(g) {
             Ok(v) => {
-                crate::db::debug_log(&format!(
-                    "[maintain] dbstat 不可用，改用行数估算: {first}"
-                ));
+                crate::db::debug_log(&format!("[maintain] dbstat 不可用，改用行数估算: {first}"));
                 Ok((v, true))
             }
             Err(_) => Err(first),
@@ -560,9 +556,10 @@ mod tests {
     }
 
     fn cfg_with_retention(days: u32) -> crate::config::Config {
-        let mut c = crate::config::Config::default();
-        c.retention_days = days;
-        c
+        crate::config::Config {
+            retention_days: days,
+            ..Default::default()
+        }
     }
 
     /// 回归：默认配置的保留期必须是 0（永久保留）。
@@ -662,7 +659,8 @@ mod tests {
 
         let db = Connection::open(&dbp).unwrap();
         db.pragma_update(None, "journal_mode", "WAL").unwrap();
-        db.execute_batch("CREATE TABLE t(a INTEGER, b TEXT)").unwrap();
+        db.execute_batch("CREATE TABLE t(a INTEGER, b TEXT)")
+            .unwrap();
 
         // 写入约 4MB，让 WAL 明显越过硬盘上的收缩阈值
         db.execute_batch("BEGIN").unwrap();
@@ -676,7 +674,10 @@ mod tests {
         db.execute_batch("COMMIT").unwrap();
 
         let before = file_size(&walp);
-        assert!(before > 512 * 1024, "WAL 应先涨到足够大，实测 {before} 字节");
+        assert!(
+            before > 512 * 1024,
+            "WAL 应先涨到足够大，实测 {before} 字节"
+        );
 
         let busy = checkpoint_wal_conn(&db).unwrap();
         assert_eq!(busy, 0, "单连接场景 checkpoint 不应被占用");
@@ -818,7 +819,12 @@ mod tests {
         let info = build_storage_info(&cfg, parts_with(vec![tu("ot_records", 300, 1)], 1000));
         let v: serde_json::Value = serde_json::to_value(&info).expect("StorageInfo 应可序列化");
 
-        let mut keys: Vec<&str> = v.as_object().expect("应为 JSON 对象").keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = v
+            .as_object()
+            .expect("应为 JSON 对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort();
         assert_eq!(
             keys,
@@ -909,7 +915,10 @@ mod tests {
     /// 回归：图标清理只认 .png，目录里的其它文件必须原样保留
     #[test]
     fn icon_purge_only_touches_png() {
-        let dir = std::env::temp_dir().join(format!("niuma-icon-test-{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-icon-test-{}",
+            Local::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
         let _ = fs::create_dir_all(&dir);
         fs::write(dir.join("a.png"), b"x").unwrap();
         fs::write(dir.join("b.txt"), b"y").unwrap();

@@ -257,6 +257,7 @@ fn config_path() -> PathBuf {
 /// 配置装载的四分类。read_config_file 只读+分类、**零写副作用**，
 /// 因此能离线单测（见 tests）。
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Loaded(Config) 使枚举达 552 字节，但 LoadResult 仅在 load 内短生命周期使用，装箱改动面大、收益小
 enum LoadResult {
     /// 读到有效配置
     Loaded(Config),
@@ -309,7 +310,9 @@ pub fn load() -> Config {
             cfg
         }
         LoadResult::Unreadable(e) => {
-            eprintln!("[config] config.json 读取失败（{e}），本次先用默认配置运行，不覆盖磁盘原文件");
+            eprintln!(
+                "[config] config.json 读取失败（{e}），本次先用默认配置运行，不覆盖磁盘原文件"
+            );
             crate::db::debug_log(&format!("[config] config.json 读取失败: {e}"));
             Config::default()
         }
@@ -405,8 +408,10 @@ mod tests {
 
     #[test]
     fn merge_keeps_fields_not_in_payload() {
-        let mut cfg = Config::default();
-        cfg.monthly_salary = 15000.0;
+        let cfg = Config {
+            monthly_salary: 15000.0,
+            ..Default::default()
+        };
         let incoming = serde_json::json!({"monitor_activity": false});
         let merged = merge_from_value(&cfg, &incoming).unwrap();
         assert_eq!(merged.monthly_salary, 15000.0);
@@ -415,9 +420,11 @@ mod tests {
 
     #[test]
     fn override_from_other_month_is_ignored() {
-        let mut cfg = Config::default();
-        cfg.workdays_override = Some(18);
-        cfg.workdays_override_for = Some("2026-10".into());
+        let cfg = Config {
+            workdays_override: Some(18),
+            workdays_override_for: Some("2026-10".into()),
+            ..Default::default()
+        };
         assert_eq!(effective_workdays_override(&cfg, 2026, 10), Some(18));
         assert_eq!(
             effective_workdays_override(&cfg, 2026, 11),
@@ -428,8 +435,10 @@ mod tests {
 
     #[test]
     fn stamp_override_month_only_once() {
-        let mut cfg = Config::default();
-        cfg.workdays_override = Some(18);
+        let mut cfg = Config {
+            workdays_override: Some(18),
+            ..Default::default()
+        };
         assert!(stamp_override_month(&mut cfg));
         let stamped = cfg.workdays_override_for.clone();
         assert!(stamped.is_some());

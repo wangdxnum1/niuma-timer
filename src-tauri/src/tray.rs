@@ -6,6 +6,7 @@
 //! - 单个工作线程独占 `HoverController`（持有全部状态），用 `recv_timeout`
 //!   统一驱动延迟显示、真实光标/菜单状态采样与首次加载重发；
 //! - 空闲时每 100ms 采样兜底（无忙循环）；状态变更只发生在一个线程。
+//!
 //! 前端握手协议（hover_ready / hover_show / hover_hide / hover_data）保持不变。
 
 use crate::sync;
@@ -14,11 +15,11 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tauri::menu::{Menu, MenuId, MenuItem};
+use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
 use tauri::Listener;
 use tauri::Manager;
-use tauri::menu::{Menu, MenuId, MenuItem};
-use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::calc::DayStatus;
@@ -46,40 +47,64 @@ mod placement_tests {
             let (x, y, w, h) = hover_card_rect(PhysicalPosition::new(2730.0, 1752.0), scale, area);
             assert_eq!((w, h), ((380.0 * scale).round(), (352.0 * scale).round()));
             assert!(x >= 8.0 * scale && x + w <= area.2 - 8.0 * scale);
-            assert!(y + h <= area.3 - 8.0 * scale, "scale={scale}: card bottom {} crosses work area", y+h);
+            assert!(
+                y + h <= area.3 - 8.0 * scale,
+                "scale={scale}: card bottom {} crosses work area",
+                y + h
+            );
         }
     }
 
     #[test]
     fn placement_uses_secondary_monitor_origin() {
-        for area in [(-2560.0, -200.0, 2560.0, 1392.0), (2880.0, 400.0, 1920.0, 1032.0)] {
+        for area in [
+            (-2560.0, -200.0, 2560.0, 1392.0),
+            (2880.0, 400.0, 1920.0, 1032.0),
+        ] {
             let anchor = PhysicalPosition::new(area.0 + area.2 - 60.0, area.1 + area.3 + 24.0);
             let (x, y, w, h) = hover_card_rect(anchor, 1.5, area);
-            assert!(x >= area.0 && x+w <= area.0+area.2);
-            assert!(y >= area.1 && y+h <= area.1+area.3);
+            assert!(x >= area.0 && x + w <= area.0 + area.2);
+            assert!(y >= area.1 && y + h <= area.1 + area.3);
         }
     }
 
     #[test]
     fn top_and_side_taskbars_stay_outside_card() {
         for (anchor, area) in [
-            (PhysicalPosition::new(1600.0, 30.0), (0.0, 60.0, 1920.0, 1020.0)),
-            (PhysicalPosition::new(30.0, 900.0), (60.0, 0.0, 1860.0, 1080.0)),
-            (PhysicalPosition::new(1890.0, 900.0), (0.0, 0.0, 1860.0, 1080.0)),
+            (
+                PhysicalPosition::new(1600.0, 30.0),
+                (0.0, 60.0, 1920.0, 1020.0),
+            ),
+            (
+                PhysicalPosition::new(30.0, 900.0),
+                (60.0, 0.0, 1860.0, 1080.0),
+            ),
+            (
+                PhysicalPosition::new(1890.0, 900.0),
+                (0.0, 0.0, 1860.0, 1080.0),
+            ),
         ] {
-            let (x,y,w,h) = hover_card_rect(anchor, 1.5, area);
-            assert!(x >= area.0 && x+w <= area.0+area.2);
-            assert!(y >= area.1 && y+h <= area.1+area.3);
+            let (x, y, w, h) = hover_card_rect(anchor, 1.5, area);
+            assert!(x >= area.0 && x + w <= area.0 + area.2);
+            assert!(y >= area.1 && y + h <= area.1 + area.3);
         }
     }
 
     #[test]
     fn monitor_switch_recalculates_physical_size() {
-        let external = hover_card_rect(PhysicalPosition::new(-100.0, 1050.0), 1.0, (-1920.0,0.0,1920.0,1032.0));
-        let laptop = hover_card_rect(PhysicalPosition::new(2750.0, 1750.0), 2.0, (0.0,0.0,2880.0,1704.0));
-        assert_eq!((external.2, external.3), (380.0,352.0));
-        assert_eq!((laptop.2, laptop.3), (760.0,704.0));
-        assert!(laptop.0 >= 0.0 && laptop.1+laptop.3 <= 1704.0);
+        let external = hover_card_rect(
+            PhysicalPosition::new(-100.0, 1050.0),
+            1.0,
+            (-1920.0, 0.0, 1920.0, 1032.0),
+        );
+        let laptop = hover_card_rect(
+            PhysicalPosition::new(2750.0, 1750.0),
+            2.0,
+            (0.0, 0.0, 2880.0, 1704.0),
+        );
+        assert_eq!((external.2, external.3), (380.0, 352.0));
+        assert_eq!((laptop.2, laptop.3), (760.0, 704.0));
+        assert!(laptop.0 >= 0.0 && laptop.1 + laptop.3 <= 1704.0);
     }
 
     #[test]
@@ -87,19 +112,29 @@ mod placement_tests {
         for logical_pos in [false, true] {
             for logical_size in [false, true] {
                 let rect = tauri::Rect {
-                    position: if logical_pos { tauri::LogicalPosition::new(100.0,200.0).into() }
-                        else { PhysicalPosition::new(200,400).into() },
-                    size: if logical_size { tauri::LogicalSize::new(20.0,20.0).into() }
-                        else { tauri::PhysicalSize::new(40,40).into() },
+                    position: if logical_pos {
+                        tauri::LogicalPosition::new(100.0, 200.0).into()
+                    } else {
+                        PhysicalPosition::new(200, 400).into()
+                    },
+                    size: if logical_size {
+                        tauri::LogicalSize::new(20.0, 20.0).into()
+                    } else {
+                        tauri::PhysicalSize::new(40, 40).into()
+                    },
                 };
-                assert_eq!(physical_tray_rect(rect, 2.0), (200.0,400.0,40.0,40.0));
+                assert_eq!(physical_tray_rect(rect, 2.0), (200.0, 400.0, 40.0, 40.0));
             }
         }
     }
 
     #[test]
     fn undersized_work_area_does_not_panic() {
-        let rect = hover_card_rect(PhysicalPosition::new(80.0, 90.0), 2.0, (0.0,0.0,100.0,100.0));
+        let rect = hover_card_rect(
+            PhysicalPosition::new(80.0, 90.0),
+            2.0,
+            (0.0, 0.0, 100.0, 100.0),
+        );
         assert!(rect.0.is_finite() && rect.1.is_finite());
     }
 }
@@ -123,7 +158,11 @@ fn hover_card_rect(
     let bottom = (work.1 + work.3 - margin - height).max(top);
     let x = (anchor.x - width / 2.0).clamp(left, right);
     let above = anchor.y - height - HOVER_CARD_GAP * scale;
-    let y = if above < top { anchor.y + 18.0 * scale } else { above };
+    let y = if above < top {
+        anchor.y + 18.0 * scale
+    } else {
+        above
+    };
     (x.round(), y.clamp(top, bottom).round(), width, height)
 }
 
@@ -138,8 +177,13 @@ fn tray_rect(app: &AppHandle, cursor: PhysicalPosition<f64>) -> Option<(f64, f64
     // Windows Shell 返回物理矩形；常规采样不必跨 UI 线程查询显示器。
     let physical = matches!(rect.position, tauri::Position::Physical(_))
         && matches!(rect.size, tauri::Size::Physical(_));
-    let scale = if physical { 1.0 } else {
-        app.monitor_from_point(cursor.x, cursor.y).ok().flatten()?.scale_factor()
+    let scale = if physical {
+        1.0
+    } else {
+        app.monitor_from_point(cursor.x, cursor.y)
+            .ok()
+            .flatten()?
+            .scale_factor()
     };
     let rect = physical_tray_rect(rect, scale);
     (rect.2 > 0.0 && rect.3 > 0.0).then_some(rect)
@@ -162,7 +206,11 @@ static UPDATE_VERSION: Mutex<Option<String>> = Mutex::new(None);
 fn hover_log(msg: &str) {
     use std::io::Write;
     let p = std::env::temp_dir().join("niuma_timer_hover.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+    {
         let _ = writeln!(f, "{msg}");
     }
 }
@@ -199,36 +247,64 @@ impl HoverController {
     fn card_pos(app: &AppHandle, anchor: PhysicalPosition<f64>) -> Option<(f64, f64, f64, f64)> {
         let monitor = app.monitor_from_point(anchor.x, anchor.y).ok().flatten()?;
         let area = monitor.work_area();
-        let work = (area.position.x as f64, area.position.y as f64,
-            area.size.width as f64, area.size.height as f64);
+        let work = (
+            area.position.x as f64,
+            area.position.y as f64,
+            area.size.width as f64,
+            area.size.height as f64,
+        );
         Some(hover_card_rect(anchor, monitor.scale_factor(), work))
     }
 
     /// 分开采样触发区（托盘）与保持区（已显示卡片），隐藏卡片不能反向触发弹出。
-    fn pointer_sample(&self, app: &AppHandle) -> (Option<bool>, bool, Option<PhysicalPosition<f64>>) {
-        let Some((x, y)) = crate::win::cursor_pos() else { return (None, false, None); };
+    fn pointer_sample(
+        &self,
+        app: &AppHandle,
+    ) -> (Option<bool>, bool, Option<PhysicalPosition<f64>>) {
+        let Some((x, y)) = crate::win::cursor_pos() else {
+            return (None, false, None);
+        };
         let pos = PhysicalPosition::new(x as f64, y as f64);
         let on_card = self.state.is_shown()
-            && self.card_rect.is_some_and(|rect| hover_state::in_card((pos.x, pos.y), rect, rect.2 / HOVER_CARD_W))
-            && app.get_webview_window("hover_card").is_some_and(|w| w.is_visible().unwrap_or(false));
-        let Some(rect) = tray_rect(app, pos) else { return (None, on_card, None); };
-        let inside = hover_state::in_tray((pos.x, pos.y), rect)
-            && crate::win::cursor_over_taskbar(x, y);
-        (Some(inside), on_card, Some(PhysicalPosition::new(rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0)))
+            && self.card_rect.is_some_and(|rect| {
+                hover_state::in_card((pos.x, pos.y), rect, rect.2 / HOVER_CARD_W)
+            })
+            && app
+                .get_webview_window("hover_card")
+                .is_some_and(|w| w.is_visible().unwrap_or(false));
+        let Some(rect) = tray_rect(app, pos) else {
+            return (None, on_card, None);
+        };
+        let inside =
+            hover_state::in_tray((pos.x, pos.y), rect) && crate::win::cursor_over_taskbar(x, y);
+        (
+            Some(inside),
+            on_card,
+            Some(PhysicalPosition::new(
+                rect.0 + rect.2 / 2.0,
+                rect.1 + rect.3 / 2.0,
+            )),
+        )
     }
 
     fn do_show(&mut self, app: &AppHandle) -> bool {
-        let Some(w) = ensure_hover_card(app) else { return false; };
+        let Some(w) = ensure_hover_card(app) else {
+            return false;
+        };
         // 首次创建 WebView 可能耗时；创建后重新检查，不能使用数百毫秒前的 Enter。
         let (inside, _, anchor) = self.pointer_sample(app);
         if inside != Some(true) || crate::win::tooltip_input_blocked() != Some(false) {
             return false;
         }
-        let Some(rect) = anchor.and_then(|a| Self::card_pos(app, a)) else { return false; };
+        let Some(rect) = anchor.and_then(|a| Self::card_pos(app, a)) else {
+            return false;
+        };
         let (x, y, width, height) = rect;
         if self.card_rect != Some(rect) {
-            if let Err(e) = w.set_position(PhysicalPosition::new(x, y))
-                .and_then(|_| w.set_size(tauri::PhysicalSize::new(width as u32, height as u32))) {
+            if let Err(e) = w
+                .set_position(PhysicalPosition::new(x, y))
+                .and_then(|_| w.set_size(tauri::PhysicalSize::new(width as u32, height as u32)))
+            {
                 hover_log(&format!("[hover_card] 设置位置/尺寸失败: {e}"));
                 return false;
             }
@@ -264,13 +340,20 @@ impl HoverController {
     }
 
     fn poll(&mut self, app: &AppHandle) {
-        let enabled = sync::lock(&app.state::<crate::AppState>().config, "state.config").tray_hover_card;
+        let enabled =
+            sync::lock(&app.state::<crate::AppState>().config, "state.config").tray_hover_card;
         if !enabled {
-            if self.state.reset() == hover_state::Action::Hide { self.do_hide(app); }
+            if self.state.reset() == hover_state::Action::Hide {
+                self.do_hide(app);
+            }
             return;
         }
         let blocked = crate::win::tooltip_input_blocked().unwrap_or(true);
-        let (inside, on_card, _) = if blocked { (None, false, None) } else { self.pointer_sample(app) };
+        let (inside, on_card, _) = if blocked {
+            (None, false, None)
+        } else {
+            self.pointer_sample(app)
+        };
         match self.state.observe(Instant::now(), inside, on_card, blocked) {
             hover_state::Action::Show => {
                 if !self.do_show(app) {
@@ -286,7 +369,9 @@ impl HoverController {
             if let Some(base) = self.retry_base {
                 if self.retry_idx >= RETRY_DELAYS.len() {
                     self.retry_base = None;
-                } else if Instant::now() >= base + Duration::from_millis(RETRY_DELAYS[self.retry_idx]) {
+                } else if Instant::now()
+                    >= base + Duration::from_millis(RETRY_DELAYS[self.retry_idx])
+                {
                     self.emit_show(app);
                     self.retry_idx += 1;
                 }
@@ -310,16 +395,20 @@ impl HoverController {
                     let _ = w.show();
                     let _ = w.set_focus();
                     let w2 = w.clone();
-                    let _ = std::thread::Builder::new().name("niuma-focus-retry".to_string()).spawn(move || {
-                        std::thread::sleep(Duration::from_millis(300));
-                        let _ = w2.set_focus();
-                    });
+                    let _ = std::thread::Builder::new()
+                        .name("niuma-focus-retry".to_string())
+                        .spawn(move || {
+                            std::thread::sleep(Duration::from_millis(300));
+                            let _ = w2.set_focus();
+                        });
                 }
             }
             HoverMsg::Ready => {
                 // 页面就绪不能越过延迟、离开或右键抑制；先检查真实位置和菜单状态。
                 self.poll(app);
-                if self.state.is_shown() { self.emit_show(app); }
+                if self.state.is_shown() {
+                    self.emit_show(app);
+                }
             }
         }
     }
@@ -329,7 +418,8 @@ impl HoverController {
         let mut delay = self.state.next_wakeup(now);
         if let Some(base) = self.retry_base {
             if let Some(ms) = RETRY_DELAYS.get(self.retry_idx) {
-                delay = delay.min((base + Duration::from_millis(*ms)).saturating_duration_since(now));
+                delay =
+                    delay.min((base + Duration::from_millis(*ms)).saturating_duration_since(now));
             }
         }
         delay
@@ -338,18 +428,20 @@ impl HoverController {
 
 /// 单个 worker 串行处理消息和真实光标采样。100ms 低频兜底覆盖 Shell 漏发事件。
 fn spawn_hover_worker(app: AppHandle, rx: mpsc::Receiver<HoverMsg>) {
-    let _ = std::thread::Builder::new().name("niuma-hover".to_string()).spawn(move || {
-        let mut ctrl = HoverController::default();
-        hover_log("[hover_card] 工作线程已启动");
-        loop {
-            match rx.recv_timeout(ctrl.next_wakeup()) {
-                Ok(msg) => ctrl.handle(msg, &app),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+    let _ = std::thread::Builder::new()
+        .name("niuma-hover".to_string())
+        .spawn(move || {
+            let mut ctrl = HoverController::default();
+            hover_log("[hover_card] 工作线程已启动");
+            loop {
+                match rx.recv_timeout(ctrl.next_wakeup()) {
+                    Ok(msg) => ctrl.handle(msg, &app),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+                ctrl.poll(&app);
             }
-            ctrl.poll(&app);
-        }
-    });
+        });
 }
 
 /// 创建托盘图标、菜单；悬停卡片窗口首次悬停时懒创建（启动路径不创建额外窗口）。
@@ -362,7 +454,6 @@ pub fn set_update_available(version: &str) {
     }
     *cur = Some(version.to_string());
 }
-
 
 pub fn create_tray(app: &App) -> tauri::Result<TrayIcon> {
     let settings = MenuItem::with_id(app, "settings", "主界面", true, None::<&str>)?;
@@ -500,6 +591,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
 /// 更新托盘的 tooltip / 悬停卡片
 /// - 彩色卡片开启：清空系统 tooltip（避免双显），卡片可见时每秒推送实时数据
 /// - 彩色卡片关闭：恢复系统原生 tooltip
+///
 /// 直接查询窗口可见性，不依赖任何全局状态。
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
     let cfg = sync::lock(&app.state::<crate::AppState>().config, "state.config").clone();
@@ -517,7 +609,11 @@ pub fn update_tray(app: &AppHandle, status: &DayStatus) {
     }
     // 暂停菜单项文案跟随全局状态；先比对现文案，避免每秒对原生菜单做无谓的 set_text
     if let Some(item) = sync::lock(&PAUSE_ITEM, "tray::PAUSE_ITEM").as_ref() {
-        let want = if status.paused { "恢复监控" } else { "暂停监控" };
+        let want = if status.paused {
+            "恢复监控"
+        } else {
+            "暂停监控"
+        };
         if item.text().map(|t| t != want).unwrap_or(true) {
             let _ = item.set_text(want);
         }

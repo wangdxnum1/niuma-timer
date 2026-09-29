@@ -6,18 +6,20 @@
 //! 避免把锁屏界面 / 解锁输入误记为工作活动。媒体播放（听歌）不受影响。
 
 use crate::sync;
+use chrono::Local;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use chrono::Local;
 
 use windows::core::w;
-use windows::Win32::Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+use windows::Win32::Foundation::{
+    GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::RemoteDesktop::{
-    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
+    WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
 
 /// WM_WTSSESSION_CHANGE = 0x02B1，定义在 winuser.h
@@ -50,22 +52,24 @@ pub fn start() {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new().name("niuma-lock-monitor".to_string()).spawn(|| {
-        let mut delay = Duration::from_secs(1);
-        loop {
-            match try_run() {
-                Ok(()) => return,
-                Err(e) => {
-                    crate::db::debug_log(&format!(
-                        "[lock_monitor] {e}，{}s 后重试",
-                        delay.as_secs()
-                    ));
-                    std::thread::sleep(delay);
-                    delay = (delay * 2).min(Duration::from_secs(60));
+    let _ = std::thread::Builder::new()
+        .name("niuma-lock-monitor".to_string())
+        .spawn(|| {
+            let mut delay = Duration::from_secs(1);
+            loop {
+                match try_run() {
+                    Ok(()) => return,
+                    Err(e) => {
+                        crate::db::debug_log(&format!(
+                            "[lock_monitor] {e}，{}s 后重试",
+                            delay.as_secs()
+                        ));
+                        std::thread::sleep(delay);
+                        delay = (delay * 2).min(Duration::from_secs(60));
+                    }
                 }
             }
-        }
-    });
+        });
 }
 
 fn try_run() -> Result<(), String> {
@@ -91,8 +95,14 @@ fn try_run() -> Result<(), String> {
             class_name,
             w!(""),
             WINDOW_STYLE::default(),
-            0, 0, 0, 0,
-            None, None, None, None,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
         )
         .map_err(|e| format!("CreateWindowExW 失败: {e}"))?;
 
@@ -105,12 +115,7 @@ fn try_run() -> Result<(), String> {
 }
 
 /// 窗口过程：接收 WM_WTSSESSION_CHANGE 消息
-extern "system" fn wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_WTSSESSION_CHANGE {
         match wparam.0 as u32 {
             WTS_SESSION_LOCK => {

@@ -23,9 +23,7 @@ impl HolidayCache {
 
     /// 该日期是否为工作日（班/补班）。未知返回 None
     pub fn is_workday(&self, date: NaiveDate) -> Option<bool> {
-        self.days
-            .get(&date)
-            .map(|t| *t == 0 || *t == 2)
+        self.days.get(&date).map(|t| *t == 0 || *t == 2)
     }
 
     /// 当月实际上班天数（班+补班）。年份不符或无数据返回 None
@@ -54,7 +52,11 @@ impl HolidayCache {
 
 fn days_in_month(y: i32, m: u32) -> u32 {
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-    NaiveDate::from_ymd_opt(ny, nm, 1).unwrap().pred_opt().expect("valid date").day()
+    NaiveDate::from_ymd_opt(ny, nm, 1)
+        .unwrap()
+        .pred_opt()
+        .expect("valid date")
+        .day()
 }
 
 fn cache_path(year: i32) -> PathBuf {
@@ -191,9 +193,18 @@ pub fn weekday_count(year: i32, month: u32) -> u32 {
 pub async fn fetch_year(year: i32) -> Result<HashMap<NaiveDate, u8>, String> {
     // 主源 + 备用 CDN（同份数据，不同边缘节点）
     let urls = [
-        format!("https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
-        format!("https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
-        format!("https://gcore.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json", year),
+        format!(
+            "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json",
+            year
+        ),
+        format!(
+            "https://fastly.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json",
+            year
+        ),
+        format!(
+            "https://gcore.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{}.json",
+            year
+        ),
     ];
 
     let client = reqwest::Client::builder()
@@ -228,7 +239,10 @@ pub async fn fetch_year(year: i32) -> Result<HashMap<NaiveDate, u8>, String> {
             }
         }
     }
-    Err(format!("节假日数据获取失败（已尝试多个数据源）: {}", last_err))
+    Err(format!(
+        "节假日数据获取失败（已尝试多个数据源）: {}",
+        last_err
+    ))
 }
 
 /// 解析 NateScarlet/holiday-cn 格式：
@@ -246,7 +260,10 @@ fn parse_holiday_cn(json: &serde_json::Value, year: i32) -> Result<HashMap<Naive
     if let Some(arr) = json.get("days").and_then(|v| v.as_array()) {
         for item in arr {
             let date_str = item.get("date").and_then(|v| v.as_str());
-            let is_off = item.get("isOffDay").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_off = item
+                .get("isOffDay")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if let Some(s) = date_str {
                 if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
                     overrides.insert(d, is_off);
@@ -271,14 +288,18 @@ fn expand_year(overrides: &HashMap<NaiveDate, bool>, year: i32) -> HashMap<Naive
         for day in 1..=dim {
             if let Some(dt) = NaiveDate::from_ymd_opt(year, month, day) {
                 let wd = dt.weekday().num_days_from_monday(); // 0=Mon
-                // 基础：周一到周五=工作日(0)，周六日=周末(1)
+                                                              // 基础：周一到周五=工作日(0)，周六日=周末(1)
                 let mut t: u8 = if wd < 5 { 0 } else { 1 };
                 // 覆盖：补班(2)；放假日里工作日才是法定节假日(3)，周末放假仍是周末(1)。
                 // holiday-cn 不区分「法定」与「调休连休」——把周六日也标成 3，
                 // 会让 overtime_rate_holiday（劳动法 300%）误套到普通周末。
                 if let Some(is_off) = overrides.get(&dt) {
                     t = if *is_off {
-                        if wd < 5 { 3 } else { 1 }
+                        if wd < 5 {
+                            3
+                        } else {
+                            1
+                        }
                     } else {
                         2
                     };

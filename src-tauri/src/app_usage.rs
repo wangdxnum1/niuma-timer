@@ -91,8 +91,7 @@ const KNOWN_MAP: &[(&str, &str)] = &[
 
 /// 图标捐赠者：显示名已归一、但 exe 自身图标不代表主程序的「马甲进程」。
 /// 从马甲进程完整路径向上层目录找主程序 exe 借图标（同安装树内检索）。
-const ICON_DONORS: &[(&str, &[&str])] =
-    &[("wechatappex.exe", &["weixin.exe", "wechat.exe"])];
+const ICON_DONORS: &[(&str, &[&str])] = &[("wechatappex.exe", &["weixin.exe", "wechat.exe"])];
 
 /// 马甲进程 → 捐赠者主程序 exe 路径。非马甲或树内未命中返回 None，
 /// 调用方回退自身图标（= 旧行为，无回归）。检索自浅而深：目录层
@@ -201,7 +200,8 @@ fn fold_categories(apps: &[(&str, i64, &str)]) -> Vec<CategorySlice> {
         ("comm", CAT_COMM),
         ("other", CAT_OTHER),
     ];
-    ORDER.iter()
+    ORDER
+        .iter()
         .map(|(key, label)| CategorySlice {
             key: (*key).to_string(),
             label: (*label).to_string(),
@@ -488,8 +488,7 @@ fn update_cur_app(hwnd: HWND) {
     // 注意：图标不再在这里（前台切换回调，热路径）同步提取，改为在 tick() 后台线程懒提取，
     // 避免 GDI 提取 + PNG 编码 + 落盘阻塞切换识别造成卡顿。
     // 记录「显示名→exe路径」，供 summary() 懒提取覆盖 tick 未来得及提取的边界情况。
-    sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP")
-        .insert(display.clone(), exe_path.clone());
+    sync::lock(app_exe_map(), "app_usage::APP_EXE_MAP").insert(display.clone(), exe_path.clone());
     sync::lock(&CUR, "app_usage::CUR").app = Some(CurApp { display, exe_path });
 }
 
@@ -720,7 +719,9 @@ pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new().name("niuma-app-usage".to_string()).spawn(watch_thread);
+    let _ = std::thread::Builder::new()
+        .name("niuma-app-usage".to_string())
+        .spawn(watch_thread);
 }
 
 /// 周期结算入口（由 `scheduler` 每 10 秒调用一次）：
@@ -778,9 +779,9 @@ pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppU
     // 图标提取必须在 DB 锁外：settle() 是 ICON_CACHE → DB，这里若反过来会 ABBA 死锁。
     let (rows, hourly) = crate::db::with_db(|g| {
         let mut apps = Vec::new();
-        if let Ok(mut stmt) = g.prepare(
-            "SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC",
-        ) {
+        if let Ok(mut stmt) =
+            g.prepare("SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC")
+        {
             if let Ok(rows) = stmt.query_map(params![date], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             }) {
@@ -1120,10 +1121,18 @@ mod tests {
     #[test]
     fn donor_found_in_parent_tree() {
         let root = temp_dir("found");
-        let appex = root.join("Tencent").join("Weixin").join("WeChatAppEx").join("14153");
+        let appex = root
+            .join("Tencent")
+            .join("Weixin")
+            .join("WeChatAppEx")
+            .join("14153");
         std::fs::create_dir_all(&appex).unwrap();
         std::fs::write(appex.join("WeChatAppEx.exe"), b"stub").unwrap();
-        std::fs::write(root.join("Tencent").join("Weixin").join("Weixin.exe"), b"stub").unwrap();
+        std::fs::write(
+            root.join("Tencent").join("Weixin").join("Weixin.exe"),
+            b"stub",
+        )
+        .unwrap();
         let exe = appex.join("WeChatAppEx.exe").to_string_lossy().into_owned();
         let donor = donor_exe_path(&exe).unwrap();
         let expected = root.join("Tencent").join("Weixin").join("Weixin.exe");
@@ -1139,7 +1148,11 @@ mod tests {
     #[test]
     fn donor_absent_returns_none() {
         let root = temp_dir("absent");
-        let appex = root.join("Tencent").join("Weixin").join("WeChatAppEx").join("14153");
+        let appex = root
+            .join("Tencent")
+            .join("Weixin")
+            .join("WeChatAppEx")
+            .join("14153");
         std::fs::create_dir_all(&appex).unwrap();
         std::fs::write(appex.join("WeChatAppEx.exe"), b"stub").unwrap();
         let exe = appex.join("WeChatAppEx.exe").to_string_lossy().into_owned();

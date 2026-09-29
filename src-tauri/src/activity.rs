@@ -78,7 +78,14 @@ pub struct HourBucket {
 impl HourBucket {
     /// 该小时「事件总数」：用于图表高度/活跃度排序（像素不计入，避免数值淹没）。
     fn total_events(&self) -> u64 {
-        self.moves + self.left + self.dbl + self.right + self.wheel + self.mid + self.xbtn + self.keys
+        self.moves
+            + self.left
+            + self.dbl
+            + self.right
+            + self.wheel
+            + self.mid
+            + self.xbtn
+            + self.keys
     }
 
     fn add(&mut self, o: &HourBucket) {
@@ -217,6 +224,7 @@ static LAST_LBTN_Y: AtomicI32 = AtomicI32::new(0);
 /// 键盘状态：每键码(0..=255)一个原子槽，避免 BTreeMap+Mutex 在每次按键时抢锁。
 /// - KEY_LAST_TIME[vk]：该键上次按下时刻（毫秒，过滤自动重复），仅钩子回调写；
 /// - KEY_PENDING[vk]：该键待合并的按键次数，钩子回调 +1、合并线程每 10s swap(0) 取走。
+///
 /// 用 OnceLock 延迟初始化定长原子数组（vkCode 范围 1..=254，256 足够覆盖）。
 fn key_last_time() -> &'static [AtomicU32; 256] {
     static ARR: OnceLock<[AtomicU32; 256]> = OnceLock::new();
@@ -357,7 +365,9 @@ impl DayState {
 fn day() -> &'static Mutex<DayState> {
     static DAY: OnceLock<Mutex<DayState>> = OnceLock::new();
     DAY.get_or_init(|| {
-        Mutex::new(DayState::new(Local::now().date_naive().format("%Y-%m-%d").to_string()))
+        Mutex::new(DayState::new(
+            Local::now().date_naive().format("%Y-%m-%d").to_string(),
+        ))
     })
 }
 
@@ -379,7 +389,9 @@ fn write_delta(g: &mut Connection, d: &DayState) -> rusqlite::Result<()> {
         if !*dirty {
             continue;
         }
-        let Some(b) = d.hourly.get(hour) else { continue };
+        let Some(b) = d.hourly.get(hour) else {
+            continue;
+        };
         tx.execute(
             "INSERT OR REPLACE INTO act_hourly \
              (date, hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys) \
@@ -507,9 +519,13 @@ pub fn start() {
     // 先恢复当天已落盘数据，再开始累加，重启不归零
     load_today();
     // 键盘事件工作线程：消费 WM_INPUT 键盘分支入队的按键增量（去重 / 计数 / 明细累加）
-    let _ = std::thread::Builder::new().name("niuma-activity-keyq".to_string()).spawn(keyq_worker);
+    let _ = std::thread::Builder::new()
+        .name("niuma-activity-keyq".to_string())
+        .spawn(keyq_worker);
     // 原始输入线程：注册 Raw Input 后必须进入消息循环才能收到 WM_INPUT
-    let _ = std::thread::Builder::new().name("niuma-activity-raw".to_string()).spawn(raw_thread);
+    let _ = std::thread::Builder::new()
+        .name("niuma-activity-raw".to_string())
+        .spawn(raw_thread);
     // 周期落盘改由 scheduler 统一调度（每 10 秒调一次 `flush_now`），
     // 本模块只保留采集相关的两条线程，不再单独起合并线程。
 }
@@ -594,11 +610,15 @@ fn on_raw_mouse(m: &crate::win::RawMouse) {
     if moved || m.last_x != 0 || m.last_y != 0 {
         if let Some((x, y)) = crate::win::cursor_pos() {
             C_MOVES.fetch_add(1, Ordering::Relaxed);
-            let (px, py) = (LAST_X.load(Ordering::Relaxed), LAST_Y.load(Ordering::Relaxed));
+            let (px, py) = (
+                LAST_X.load(Ordering::Relaxed),
+                LAST_Y.load(Ordering::Relaxed),
+            );
             if px != i32::MIN && py != i32::MIN {
                 let (dx, dy) = (x - px, y - py);
                 if dx != 0 || dy != 0 {
-                    let dist = ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64).sqrt() as u64;
+                    let dist =
+                        ((dx as i64 * dx as i64 + dy as i64 * dy as i64) as f64).sqrt() as u64;
                     C_PIXELS.fetch_add(dist, Ordering::Relaxed);
                 }
             }
@@ -788,7 +808,7 @@ fn assemble(
     }
     // 高频键 Top 10
     let mut ranked: Vec<(u64, u32)> = key_detail.iter().map(|(&k, &c)| (c, k)).collect();
-    ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    ranked.sort_unstable_by_key(|item| std::cmp::Reverse(item.0));
     let top_keys: Vec<KeyCount> = ranked
         .into_iter()
         .take(10)

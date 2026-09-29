@@ -8,7 +8,7 @@
 //!
 //! 表结构：
 //! - `ot_records`   加班记录，date 主键（跨月归档自然消失——按年月过滤即可），
-//!                  另有 `source` 列区分自动(0)/手动(1)，手动记录不会被自动 upsert 覆盖
+//!   另有 `source` 列区分自动(0)/手动(1)，手动记录不会被自动 upsert 覆盖
 //! - `act_hourly`   活动统计小时桶，(date, hour) 主键
 //! - `act_keys`     活动统计按键明细，(date, vk) 主键
 
@@ -135,11 +135,8 @@ pub(crate) fn init_tables(db: &Connection) {
 ///
 /// 全新库的建表 DDL 里已含这些列，只有 v1.0.0 及更早的库才需要 ALTER。
 /// 列一旦长期稳定可把声明并进 DDL、从这里移除。
-const EXTRA_COLUMNS: &[(&str, &str, &str)] = &[(
-    "ot_records",
-    "cross_midnight",
-    "INTEGER NOT NULL DEFAULT 0",
-)];
+const EXTRA_COLUMNS: &[(&str, &str, &str)] =
+    &[("ot_records", "cross_midnight", "INTEGER NOT NULL DEFAULT 0")];
 
 /// 幂等补列：仅当列不存在时 `ALTER TABLE ... ADD COLUMN`。
 ///

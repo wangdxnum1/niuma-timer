@@ -256,7 +256,9 @@ pub fn start() {
     if WATCH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new().name("niuma-audio".to_string()).spawn(tick_loop);
+    let _ = std::thread::Builder::new()
+        .name("niuma-audio".to_string())
+        .spawn(tick_loop);
 }
 
 /// 程序退出前调用（5 秒粒度最多丢 5 秒，可接受，无需额外结算）。
@@ -301,9 +303,9 @@ pub fn summary(known_icons: &[String], date: Option<&str>) -> AudioUsageSummary 
     // 图标提取必须在 DB 锁外，理由同 app_usage::summary。
     let (rows, hourly) = crate::db::with_db(|g| {
         let mut apps = Vec::new();
-        if let Ok(mut stmt) = g.prepare(
-            "SELECT app, seconds FROM audio_usage WHERE date = ?1 ORDER BY seconds DESC",
-        ) {
+        if let Ok(mut stmt) =
+            g.prepare("SELECT app, seconds FROM audio_usage WHERE date = ?1 ORDER BY seconds DESC")
+        {
             if let Ok(rows) = stmt.query_map(params![date], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             }) {

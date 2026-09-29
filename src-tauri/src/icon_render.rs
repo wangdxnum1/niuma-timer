@@ -6,12 +6,12 @@ const CX: f64 = 32.0;
 const CY: f64 = 32.0;
 const R: f64 = 30.0;
 
-type RGB = (f64, f64, f64);
+type Rgb = (f64, f64, f64);
 
 /// 品牌金色（延续前端 #ffd650）
-const GOLD: RGB = (1.0, 214.0 / 255.0, 80.0 / 255.0);
+const GOLD: Rgb = (1.0, 214.0 / 255.0, 80.0 / 255.0);
 /// 深色圆底（与前端深色主题一致）
-const BG: RGB = (21.0 / 255.0, 24.0 / 255.0, 31.0 / 255.0);
+const BG: Rgb = (21.0 / 255.0, 24.0 / 255.0, 31.0 / 255.0);
 
 // ---------- SDF（有符号距离场），1px 抗锯齿 ----------
 
@@ -37,7 +37,7 @@ fn cov(d: f64) -> f64 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
-fn blend(base: RGB, over: RGB, a: f64) -> RGB {
+fn blend(base: Rgb, over: Rgb, a: f64) -> Rgb {
     (
         over.0 * a + base.0 * (1.0 - a),
         over.1 * a + base.1 * (1.0 - a),

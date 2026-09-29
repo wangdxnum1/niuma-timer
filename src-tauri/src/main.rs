@@ -3,6 +3,7 @@
 mod activity;
 mod app_usage;
 mod audio_usage;
+mod backup;
 mod calc;
 mod config;
 mod db;
@@ -14,14 +15,13 @@ mod maintain;
 mod overtime;
 mod pause;
 mod remind;
+mod remote;
 mod scheduler;
 mod sync;
 mod tray;
 mod update;
 mod weekbill;
 mod win;
-mod remote;
-mod backup;
 
 use std::io::Write;
 use std::panic;
@@ -66,7 +66,10 @@ fn trace_startup(stage: &str) {
         .append(true)
         .open(panic_log_path())
     {
-        let line = format!("[{}] {stage}\n", Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+        let line = format!(
+            "[{}] {stage}\n",
+            Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
+        );
         let _ = f.write_all(line.as_bytes());
     }
 }
@@ -189,7 +192,9 @@ pub fn spawn_holiday_refresh(app: tauri::AppHandle) {
                 db::debug_log(&format!("节假日刷新失败: {}", e));
                 match holiday::builtin_cache(year) {
                     Some(c) => {
-                        db::debug_log(&format!("节假日：网络不可用，改用内置 {year} 年法定节假日表"));
+                        db::debug_log(&format!(
+                            "节假日：网络不可用，改用内置 {year} 年法定节假日表"
+                        ));
                         apply_holiday_cache(&app, c, false);
                     }
                     None => db::debug_log(&format!(
@@ -268,7 +273,9 @@ fn apply_shortcuts(app: &tauri::AppHandle, cfg: &config::Config) {
             }
         }
     }) {
-        db::debug_log(&format!("全局快捷键 Alt+Shift+N 注册失败（可能被占用）: {e:?}"));
+        db::debug_log(&format!(
+            "全局快捷键 Alt+Shift+N 注册失败（可能被占用）: {e:?}"
+        ));
     }
     // Alt+Shift+P：切换手动暂停（与托盘菜单同款：暂停前先结算应用使用时长）
     if let Err(e) = mgr.on_shortcut("Alt+Shift+P", |app, _sc, event| {
@@ -276,7 +283,9 @@ fn apply_shortcuts(app: &tauri::AppHandle, cfg: &config::Config) {
             toggle_pause(app);
         }
     }) {
-        db::debug_log(&format!("全局快捷键 Alt+Shift+P 注册失败（可能被占用）: {e:?}"));
+        db::debug_log(&format!(
+            "全局快捷键 Alt+Shift+P 注册失败（可能被占用）: {e:?}"
+        ));
     }
 }
 
@@ -317,8 +326,7 @@ fn maybe_record_overtime_lock(state: &AppState) {
     };
     // 远程会话期间：锁屏事件不可信（连上/断开远程会伪造），跳过自动加班记录，
     // 但标记已处理，避免远程结束后又把这条错误时间补记上。
-    if cfg.overtime_exclude_remote
-        && crate::remote::is_remote_active(crate::remote::REMOTE_WINDOW)
+    if cfg.overtime_exclude_remote && crate::remote::is_remote_active(crate::remote::REMOTE_WINDOW)
     {
         crate::db::debug_log(&format!(
             "[overtime] 远程会话期间跳过自动加班记录（lock_ts={}）",
@@ -344,11 +352,9 @@ fn maybe_record_overtime_lock(state: &AppState) {
         // 导致 weekend_overtime 开关形同虚设——开了也永远走不到计算。
         if kind.is_rest() && !cfg.weekend_overtime {
             None
-        } else if let Some(record) = overtime::calc_record_auto(lt, &cfg, Some(&hol)) {
-            // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
-            Some(overtime::upsert_auto(record))
         } else {
-            None
+            // 自动路径：只覆盖同为自动来源的记录，用户手改过的那天不会被顶掉
+            overtime::calc_record_auto(lt, &cfg, Some(&hol)).map(overtime::upsert_auto)
         }
     } else {
         None
@@ -371,7 +377,7 @@ async fn refresh_holidays(
                 fetched_at: 0,
                 days,
             };
-            let mw = current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
+            let mw = current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
             apply_holiday_cache(&app, c, true);
             Ok(mw)
         }
@@ -382,7 +388,8 @@ async fn refresh_holidays(
             match holiday::builtin_cache(year) {
                 Some(c) => {
                     db::debug_log(&format!("节假日：改用内置 {year} 年法定节假日表"));
-                    let mw = current_monthly_workdays(&*sync::lock(&state.config, "state.config"), &c);
+                    let mw =
+                        current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
                     apply_holiday_cache(&app, c, false);
                     Ok(mw)
                 }
@@ -503,8 +510,7 @@ fn save_overtime_record(
     input: overtime::ManualOvertimeInput,
 ) -> Result<overtime::MonthlyOvertimeView, String> {
     let now = Local::now();
-    let (y, m) = overtime::month_of(&input.date)
-        .unwrap_or_else(|| (now.year(), now.month()));
+    let (y, m) = overtime::month_of(&input.date).unwrap_or_else(|| (now.year(), now.month()));
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
     overtime::save_manual(input, &cfg, Some(&hol))?;
@@ -513,9 +519,7 @@ fn save_overtime_record(
 
 /// 手动删除某天加班记录（历史月份同样可删）。返回该记录**所属月份**的视图。
 #[tauri::command]
-fn delete_overtime_record(
-    date: String,
-) -> Result<overtime::MonthlyOvertimeView, String> {
+fn delete_overtime_record(date: String) -> Result<overtime::MonthlyOvertimeView, String> {
     let now = Local::now();
     let (y, m) = overtime::month_of(&date).unwrap_or_else(|| (now.year(), now.month()));
     overtime::delete_manual(&date)?;
@@ -557,7 +561,11 @@ fn get_audio_usage_summary(
 ///
 /// 锁内只取 config/holiday 快照，DB 查询全部在锁外（ABBA 死锁规避，见 weekbill 模块注释）。
 #[tauri::command(async)]
-fn get_bill(state: State<'_, AppState>, span: String, offset: i64) -> Result<weekbill::PeriodBill, String> {
+fn get_bill(
+    state: State<'_, AppState>,
+    span: String,
+    offset: i64,
+) -> Result<weekbill::PeriodBill, String> {
     let s = weekbill::parse_span(&span)?;
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
@@ -573,7 +581,11 @@ fn get_heatmap(span: String, offset: i64) -> Result<insights::HourHeatmap, Strin
 
 /// 多周期趋势（最近 8 个周期，入账复用账单口径）——快照模式同 get_bill。
 #[tauri::command(async)]
-fn get_trend(state: State<'_, AppState>, span: String, offset: i64) -> Result<insights::WeekTrend, String> {
+fn get_trend(
+    state: State<'_, AppState>,
+    span: String,
+    offset: i64,
+) -> Result<insights::WeekTrend, String> {
     let s = weekbill::parse_span(&span)?;
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
@@ -640,7 +652,6 @@ fn run_maintenance(state: State<'_, AppState>) -> Result<maintain::StorageInfo, 
     Ok(maintain::storage_info(&cfg))
 }
 
-
 /// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，文件名做安全清洗
 /// （只取 basename、剔除 Windows 非法字符），返回最终保存路径供前端提示文件位置。
 /// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
@@ -706,10 +717,6 @@ if (!window.__TAURI__) {
 }
 "#;
 
-/// 修复任务栏图标模糊：
-/// tauri-codegen 生成默认窗口图标时只解码 icon.ico 的**第一个图层**（本项目为 16×16），
-
-
 /// 检查更新（手动入口）。网络 IO 交给 spawn_blocking，不占主线程；
 /// 返回原始真相、不受「跳过此版本」影响（手动检查不该被 skip 掩盖）。
 #[tauri::command]
@@ -769,7 +776,9 @@ async fn start_update_installed(app: tauri::AppHandle) -> Result<(), String> {
             };
             let now = std::time::Instant::now();
             // 节流：百分比变化或距上次 ≥120ms 才发；total 未知时只按时间节流
-            if pct != last_pct || now.duration_since(last_at) >= std::time::Duration::from_millis(120) {
+            if pct != last_pct
+                || now.duration_since(last_at) >= std::time::Duration::from_millis(120)
+            {
                 last_pct = pct;
                 last_at = now;
                 update::emit_progress(&chunk_app, "downloading", seen, total, attempt);
@@ -823,7 +832,9 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
         .platform_url(update::PORTABLE_KEY)
         .ok_or_else(|| "远端清单里没有便携包条目".to_string())?
         .to_string();
-    if update::compare_versions(&rel.version, env!("CARGO_PKG_VERSION")) != std::cmp::Ordering::Greater {
+    if update::compare_versions(&rel.version, env!("CARGO_PKG_VERSION"))
+        != std::cmp::Ordering::Greater
+    {
         return Err("已是最新版本".to_string());
     }
     let sums_url = update::sums_url_for(&url);
@@ -856,7 +867,9 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
                     _ => -1,
                 };
                 let now = std::time::Instant::now();
-                if pct != last_pct || now.duration_since(last_at) >= std::time::Duration::from_millis(120) {
+                if pct != last_pct
+                    || now.duration_since(last_at) >= std::time::Duration::from_millis(120)
+                {
                     last_pct = pct;
                     last_at = now;
                     update::emit_progress(&downloading_app, "downloading", done, total, attempt);
@@ -873,9 +886,8 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| {
+    .inspect_err(|_| {
         update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
-        e
     })?;
 
     update::emit_progress(
@@ -969,11 +981,13 @@ fn restore_backup(app: tauri::AppHandle, name: String) -> Result<String, String>
         backup::stage_restore(&name, env!("CARGO_PKG_VERSION"))?
     };
     let handle = app.clone();
-    std::thread::Builder::new().name("niuma-restore-restart".to_string())
+    std::thread::Builder::new()
+        .name("niuma-restore-restart".to_string())
         .spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(800));
             handle.restart();
-        }).map_err(|e| format!("还原已准备好，请手动重启（自动重启失败：{e}）"))?;
+        })
+        .map_err(|e| format!("还原已准备好，请手动重启（自动重启失败：{e}）"))?;
     Ok(summary)
 }
 
@@ -988,7 +1002,10 @@ fn main() {
     install_crash_log();
     match update::resume_after_helper() {
         Ok(true) => return,
-        Err(e) => { db::debug_log(&e); return; }
+        Err(e) => {
+            db::debug_log(&e);
+            return;
+        }
         Ok(false) => {}
     }
     // 两条日志都在 .setup 之前：webview 起不来时也能留下「装的是哪一版」的痕迹
@@ -997,7 +1014,10 @@ fn main() {
     let app = tauri::Builder::default()
         // 单例模式：若已有实例在运行，第二个实例启动时被拦截，
         // 并在回调里把已存在的主窗口显示并置前，自己退出。
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         // 系统通知（v1.3.0 守护）：主窗隐藏时久坐/下班提醒走系统通知通道
         .plugin(tauri_plugin_notification::init())
         // 全局快捷键（v1.3.0 守护）：Alt+Shift+N 显隐主窗 / Alt+Shift+P 切换暂停
@@ -1032,7 +1052,9 @@ fn main() {
                 {
                     *sync::lock(&app.state::<AppState>().holiday, "state.holiday") = c;
                 } else {
-                    db::debug_log(&format!("节假日：无缓存且内置表未收录 {year} 年，退回周一至周五估算"));
+                    db::debug_log(&format!(
+                        "节假日：无缓存且内置表未收录 {year} 年，退回周一至周五估算"
+                    ));
                 }
             }
             trace_startup("setup: holiday cache loaded");
@@ -1060,8 +1082,14 @@ fn main() {
                             .unwrap_or_default()
                     }
                 };
-                let icon = if icon_uri.is_empty() { None } else { Some(icon_uri.as_str()) };
-                if let Err(e) = crate::win::register_aumid(&app.config().identifier, "牛马计时器", icon) {
+                let icon = if icon_uri.is_empty() {
+                    None
+                } else {
+                    Some(icon_uri.as_str())
+                };
+                if let Err(e) =
+                    crate::win::register_aumid(&app.config().identifier, "牛马计时器", icon)
+                {
                     db::debug_log(&format!("AUMID 注册失败，系统通知将不弹: {e}"));
                 }
             }
@@ -1074,12 +1102,14 @@ fn main() {
             // 此处兜底——1 秒后无论如何 show，避免前端 JS 异常导致窗口永久不可见
             {
                 let app2 = app.handle().clone();
-                let _ = std::thread::Builder::new().name("niuma-startup-show".to_string()).spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
-                    if let Some(w) = app2.get_webview_window("main") {
-                        let _ = w.show();
-                    }
-                });
+                let _ = std::thread::Builder::new()
+                    .name("niuma-startup-show".to_string())
+                    .spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                        if let Some(w) = app2.get_webview_window("main") {
+                            let _ = w.show();
+                        }
+                    });
             }
 
             // 启动锁屏监听线程（Windows session notification）
@@ -1088,11 +1118,16 @@ fn main() {
 
             // 按配置初始化三个监控开关。活动监控关闭时会真正注销 Raw Input 设备
             // （而非回调里空转），故必须在 activity::start() 之前调用。
-            apply_monitor_switches(&sync::lock(&app.state::<AppState>().config, "state.config").clone());
+            apply_monitor_switches(
+                &sync::lock(&app.state::<AppState>().config, "state.config").clone(),
+            );
             trace_startup("setup: monitor switches applied");
 
             // 注册全局快捷键（Alt+Shift+N / Alt+Shift+P，可被配置关闭）
-            apply_shortcuts(app.handle(), &sync::lock(&app.state::<AppState>().config, "state.config").clone());
+            apply_shortcuts(
+                app.handle(),
+                &sync::lock(&app.state::<AppState>().config, "state.config").clone(),
+            );
             trace_startup("setup: shortcuts applied");
 
             // 启动鼠标/键盘活动统计（Raw Input 旁路采集，常驻托盘即持续统计，输入法零延迟）
@@ -1173,8 +1208,7 @@ fn main() {
             list_backups,
             restore_backup
         ])
-        .build(tauri::generate_context!())
-    ;
+        .build(tauri::generate_context!());
     match app {
         Ok(app) => {
             trace_startup("app: built, entering run loop");

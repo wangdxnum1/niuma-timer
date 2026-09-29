@@ -148,7 +148,10 @@ pub fn resolve_overtime_day(lock_time: DateTime<Local>) -> (NaiveDate, f64, bool
         + lock_time.second() as f64 / 60.0;
     if day_min < CROSS_MIDNIGHT_BEFORE_MIN {
         // pred_opt 理论上不会失败（日期已是合法值），失败就退回当天而非 panic
-        let prev = lock_time.date_naive().pred_opt().unwrap_or_else(|| lock_time.date_naive());
+        let prev = lock_time
+            .date_naive()
+            .pred_opt()
+            .unwrap_or_else(|| lock_time.date_naive());
         (prev, day_min + DAY_MIN, true)
     } else {
         (lock_time.date_naive(), day_min, false)
@@ -199,7 +202,7 @@ fn rate_of(cfg: &Config, kind: DayKind) -> f64 {
 
 /// 方案一：有效时长计算
 /// - 不足 1 小时 → 0（无效）
-/// - >= 1 小时 → 向下取 0.5 小时
+/// - \>= 1 小时 → 向下取 0.5 小时
 ///   例: 1.3→1.0, 1.6→1.5, 2.0→2.0
 pub fn calc_valid_hours(raw_hours: f64) -> f64 {
     if raw_hours < 1.0 {
@@ -288,7 +291,11 @@ fn compute_record(
     Some(OvertimeRecord {
         date: date.format("%Y-%m-%d").to_string(),
         // 跨午夜时 lock_min 已 +24h，展示要还原成当日时刻（"次日"由 cross_midnight 表达）
-        lock_time: format_hm(if cross_midnight { lock_min - DAY_MIN } else { lock_min }),
+        lock_time: format_hm(if cross_midnight {
+            lock_min - DAY_MIN
+        } else {
+            lock_min
+        }),
         ot_start: format_hm(ot_start_min),
         raw_hours: (raw_hours * 10.0).round() / 10.0, // 保留 1 位小数
         valid_hours,
@@ -376,8 +383,7 @@ pub fn save_manual(
         .as_deref()
         .unwrap_or_else(|| ot_start_of(cfg, kind));
     // 预校验，给出明确错误（compute_record 返回 None 时无法区分原因）
-    let ot_start_min = to_min(ot_start_str)
-        .ok_or_else(|| "加班起算时间格式错误".to_string())?;
+    let ot_start_min = to_min(ot_start_str).ok_or_else(|| "加班起算时间格式错误".to_string())?;
     let lock_min = lock_dt.hour() as f64 * 60.0
         + lock_dt.minute() as f64
         + lock_dt.second() as f64 / 60.0
@@ -412,12 +418,10 @@ pub fn delete_manual(date: &str) -> Result<(), String> {
     if is_future(date) {
         return Err("不能删除未来日期的记录".to_string());
     }
-    NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_err(|_| "日期格式错误".to_string())?;
-    let n = crate::db::with_db(|g| {
-        g.execute("DELETE FROM ot_records WHERE date = ?1", params![date])
-    })
-    .map_err(|e| format!("删除失败: {e}"))?;
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| "日期格式错误".to_string())?;
+    let n =
+        crate::db::with_db(|g| g.execute("DELETE FROM ot_records WHERE date = ?1", params![date]))
+            .map_err(|e| format!("删除失败: {e}"))?;
     if n == 0 {
         return Err("未找到该日期的加班记录".to_string());
     }
@@ -488,8 +492,7 @@ pub fn upsert_auto(record: OvertimeRecord) -> Result<(), String> {
 pub fn upsert_manual(record: OvertimeRecord) -> Result<(), String> {
     let mut rec = record;
     rec.source = SOURCE_MANUAL;
-    crate::db::with_db(|g| upsert_into(g, &rec, true))
-        .map_err(|e| format!("加班记录写入失败: {e}"))
+    crate::db::with_db(|g| upsert_into(g, &rec, true)).map_err(|e| format!("加班记录写入失败: {e}"))
 }
 
 /// 这次锁屏事件能否标成已处理（写入 `last_lock_seen`）。
@@ -629,40 +632,38 @@ mod tests {
         let cfg = Config::default();
         let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         // 18:30 离开，加班 0.5h < 1h → 无有效记录
-        assert!(
-            compute_record(
-                date,
-                mins_of(lock_dt(2026, 8, 19, 18, 30)),
-                false,
-                Some("18:00"),
-                &cfg,
-                DayKind::Workday,
-            )
-                .is_none()
-        );
+        assert!(compute_record(
+            date,
+            mins_of(lock_dt(2026, 8, 19, 18, 30)),
+            false,
+            Some("18:00"),
+            &cfg,
+            DayKind::Workday,
+        )
+        .is_none());
     }
 
     #[test]
     fn compute_record_weekend_disabled_none() {
         let cfg = Config::default(); // weekend_overtime=false
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
-        assert!(
-            compute_record(
-                date,
-                mins_of(lock_dt(2026, 8, 22, 22, 0)),
-                false,
-                Some("18:00"),
-                &cfg,
-                DayKind::Weekend,
-            )
-                .is_none()
-        );
+        assert!(compute_record(
+            date,
+            mins_of(lock_dt(2026, 8, 22, 22, 0)),
+            false,
+            Some("18:00"),
+            &cfg,
+            DayKind::Weekend,
+        )
+        .is_none());
     }
 
     #[test]
     fn compute_record_weekend_enabled_some() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
+        let cfg = Config {
+            weekend_overtime: true,
+            ..Default::default()
+        };
         let date = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(); // 周六
         let r = compute_record(
             date,
@@ -749,8 +750,10 @@ mod tests {
     /// 因为 `lock_min <= ot_start` 直接 return None，一分钱算不到且无任何提示。
     #[test]
     fn rest_day_starts_at_09_by_default() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
+        let cfg = Config {
+            weekend_overtime: true,
+            ..Default::default()
+        };
         let r = calc_record_auto(lock_dt(2026, 8, 22, 14, 0), &cfg, None).expect("休息日应生成");
         assert_eq!(r.ot_start, "09:00");
         assert!(approx(r.valid_hours, 5.0));
@@ -785,11 +788,14 @@ mod tests {
     /// 法定节假日：日期类型来自 holiday 数据（周三国庆），费率走节假日档
     #[test]
     fn holiday_uses_holiday_rate() {
-        let mut cfg = Config::default();
-        cfg.weekend_overtime = true;
-        cfg.overtime_rate_holiday = Some(60.0);
+        let cfg = Config {
+            weekend_overtime: true,
+            overtime_rate_holiday: Some(60.0),
+            ..Default::default()
+        };
         let c = holiday_with(&[(2026, 10, 1, 3)]);
-        let r = calc_record_auto(lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");
+        let r =
+            calc_record_auto(lock_dt(2026, 10, 1, 17, 0), &cfg, Some(&c)).expect("节假日应生成");
         assert_eq!(r.ot_start, "09:00");
         assert!(approx(r.valid_hours, 8.0));
         assert!(approx(r.fee, 480.0)); // 8h * 60
@@ -880,8 +886,15 @@ mod tests {
     fn manual_cross_midnight_uses_same_rule() {
         let cfg = Config::default();
         let date = NaiveDate::from_ymd_opt(2026, 9, 11).unwrap();
-        let r = compute_record(date, 90.0 + DAY_MIN, true, Some("18:00"), &cfg, DayKind::Workday)
-            .expect("手动跨午夜应生成");
+        let r = compute_record(
+            date,
+            90.0 + DAY_MIN,
+            true,
+            Some("18:00"),
+            &cfg,
+            DayKind::Workday,
+        )
+        .expect("手动跨午夜应生成");
         assert!(approx(r.valid_hours, 7.5));
         assert!(r.cross_midnight);
         assert_eq!(r.lock_time, "01:30");
@@ -994,7 +1007,10 @@ mod tests {
 
     #[test]
     fn lock_write_failure_is_not_consumed() {
-        assert!(should_mark_lock_seen(None), "无需落盘也应标已处理，避免每 5 秒空转");
+        assert!(
+            should_mark_lock_seen(None),
+            "无需落盘也应标已处理，避免每 5 秒空转"
+        );
         assert!(should_mark_lock_seen(Some(Ok(()))));
         assert!(
             !should_mark_lock_seen(Some(Err("disk full".into()))),

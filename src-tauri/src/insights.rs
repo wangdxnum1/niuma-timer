@@ -21,7 +21,8 @@ fn weekday_cn(d: NaiveDate) -> &'static str {
 }
 
 /// 键鼠总事件口径（与周账单 act_events 一致），SQL 里逐列 SUM 拼不出就传值算
-const EVENTS_EXPR: &str = "SUM(moves)+SUM(`left`)+SUM(dbl)+SUM(`right`)+SUM(wheel)+SUM(mid)+SUM(xbtn)+SUM(keys)";
+const EVENTS_EXPR: &str =
+    "SUM(moves)+SUM(`left`)+SUM(dbl)+SUM(`right`)+SUM(wheel)+SUM(mid)+SUM(xbtn)+SUM(keys)";
 
 // ---------- 时段热力图 ----------
 
@@ -64,7 +65,11 @@ pub fn hour_heatmap_assemble(
     ))?;
     let rows = st
         .query_map(rusqlite::params![a, b], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for (date, hour, events) in rows {
@@ -74,7 +79,14 @@ pub fn hour_heatmap_assemble(
             .to_string();
         map.insert(
             (date.clone(), hour),
-            HourCell { date, weekday, hour, events, front_secs: 0, audio_secs: 0 },
+            HourCell {
+                date,
+                weekday,
+                hour,
+                events,
+                front_secs: 0,
+                audio_secs: 0,
+            },
         );
     }
 
@@ -94,7 +106,11 @@ pub fn hour_heatmap_assemble(
         let mut st = conn.prepare(sql)?;
         let rows = st
             .query_map(rusqlite::params![a, b], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         for (date, hour, secs) in rows {
@@ -142,7 +158,10 @@ pub fn hour_heatmap(span: Span, offset: i64) -> Result<HourHeatmap, String> {
 fn collapse_to_weekly_cells(hm: HourHeatmap) -> HourHeatmap {
     let mut agg: BTreeMap<(usize, i64), (i64, i64, i64)> = BTreeMap::new();
     for c in &hm.cells {
-        let wd = WEEKDAYS_CN.iter().position(|w| *w == c.weekday).unwrap_or(0);
+        let wd = WEEKDAYS_CN
+            .iter()
+            .position(|w| *w == c.weekday)
+            .unwrap_or(0);
         let e = agg.entry((wd, c.hour)).or_insert((0, 0, 0));
         e.0 += c.events;
         e.1 += c.front_secs;
@@ -168,7 +187,12 @@ fn collapse_to_weekly_cells(hm: HourHeatmap) -> HourHeatmap {
         .filter(|(_, ev)| *ev > 0)
         .max_by_key(|(_, ev)| *ev)
         .map(|(h, _)| h);
-    HourHeatmap { week_start: hm.week_start, week_end: hm.week_end, cells, peak_hour }
+    HourHeatmap {
+        week_start: hm.week_start,
+        week_end: hm.week_end,
+        cells,
+        peak_hour,
+    }
 }
 
 // ---------- 多周趋势 ----------
@@ -196,7 +220,12 @@ pub struct WeekTrend {
 
 /// 多周期趋势：以 offset 对应周期为最新点的最近 8 个周期，逐期复用 weekbill::period_bill。
 /// 不再开 with_db：period_bill 自带连接管理，锁纪律由其保证。
-pub fn period_trend(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<WeekTrend, String> {
+pub fn period_trend(
+    cfg: &Config,
+    cur_hol: &HolidayCache,
+    span: Span,
+    offset: i64,
+) -> Result<WeekTrend, String> {
     let off = offset.max(0);
     let today = Local::now().date_naive();
     let (earliest, _) = period_bounds(span, off + 7, today);
@@ -215,12 +244,19 @@ pub fn period_trend(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i6
         });
     }
     points.reverse();
-    Ok(WeekTrend { week_start: earliest.to_string(), points })
+    Ok(WeekTrend {
+        week_start: earliest.to_string(),
+        points,
+    })
 }
 
 /// 周摸鱼率：front=0 → None（前端断线不画 0），否则 slack ÷ front
 fn slack_rate_of(front: i64, slack: i64) -> Option<f64> {
-    if front > 0 { Some(slack as f64 / front as f64) } else { None }
+    if front > 0 {
+        Some(slack as f64 / front as f64)
+    } else {
+        None
+    }
 }
 
 // ---------- 身体账单 ----------
@@ -298,7 +334,11 @@ pub fn body_bill_assemble(
         .iter()
         .filter(|d| d.events > 0)
         .max_by_key(|d| d.events)
-        .map(|d| BodyDay { date: d.date.clone(), weekday: d.weekday.clone(), events: d.events });
+        .map(|d| BodyDay {
+            date: d.date.clone(),
+            weekday: d.weekday.clone(),
+            events: d.events,
+        });
 
     Ok(BodyBill {
         week_start: a,
@@ -336,15 +376,27 @@ fn collapse_days_to_months(bb: BodyBill) -> BodyBill {
     let days: Vec<BodyDay> = (1u32..=12)
         .map(|m| {
             let ym = format!("{year}-{m:02}");
-            BodyDay { events: *by_month.get(&ym).unwrap_or(&0), date: ym, weekday: format!("{m} 月") }
+            BodyDay {
+                events: *by_month.get(&ym).unwrap_or(&0),
+                date: ym,
+                weekday: format!("{m} 月"),
+            }
         })
         .collect();
     let busiest = days
         .iter()
         .filter(|d| d.events > 0)
         .max_by_key(|d| d.events)
-        .map(|d| BodyDay { date: d.date.clone(), weekday: d.weekday.clone(), events: d.events });
-    BodyBill { days, busiest, ..bb }
+        .map(|d| BodyDay {
+            date: d.date.clone(),
+            weekday: d.weekday.clone(),
+            events: d.events,
+        });
+    BodyBill {
+        days,
+        busiest,
+        ..bb
+    }
 }
 
 // ---------- 单测（in-memory，仿 weekbill 基建） ----------
@@ -357,9 +409,19 @@ mod tests {
     fn annual_body_preserves_recorded_day_count() {
         let conn = mem_conn();
         for day in 1..=20 {
-            insert_act(&conn, &format!("2026-01-{day:02}"), 10, [1, 0, 10, 0, 0, 0, 0, 0, 0]);
+            insert_act(
+                &conn,
+                &format!("2026-01-{day:02}"),
+                10,
+                [1, 0, 10, 0, 0, 0, 0, 0, 0],
+            );
         }
-        let bb = body_bill_assemble(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(), &conn).unwrap();
+        let bb = body_bill_assemble(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+            &conn,
+        )
+        .unwrap();
         let year = collapse_days_to_months(bb);
         assert_eq!(year.record_days, 20);
         assert_eq!(year.days[0].weekday, "1 月");
@@ -495,7 +557,10 @@ mod tests {
     fn future_week_bounds_are_capped() {
         // 名字保留：验证周负偏移封顶
         let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
-        assert_eq!(period_bounds(Span::Week, -5, today), period_bounds(Span::Week, 0, today));
+        assert_eq!(
+            period_bounds(Span::Week, -5, today),
+            period_bounds(Span::Week, 0, today)
+        );
         let (s, e) = period_bounds(Span::Week, 0, today);
         assert_eq!((e - s).num_days(), 6);
     }

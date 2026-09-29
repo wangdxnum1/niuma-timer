@@ -59,14 +59,18 @@ pub struct Manifest {
 
 /// 备份目录：文档\niuma-timer-backup；取不到文档目录时退回 %APPDATA%\niuma-timer\backups。
 pub fn backup_dir() -> PathBuf {
-    dirs::document_dir().map(|d| d.join("niuma-timer-backup"))
+    dirs::document_dir()
+        .map(|d| d.join("niuma-timer-backup"))
         .unwrap_or_else(|| crate::config::config_dir().join("backups"))
 }
 
 /// 组 `VACUUM INTO '<path>'` SQL；路径里的单引号在 SQL 字面量中必须双写转义，
 /// 否则 VACUUM 直接语法错（文档目录被 OneDrive 重定向后路径可能含特殊字符）。
 pub fn vacuum_into_sql(path: &Path) -> String {
-    format!("VACUUM INTO '{}'", path.to_string_lossy().replace('\'', "''"))
+    format!(
+        "VACUUM INTO '{}'",
+        path.to_string_lossy().replace('\'', "''")
+    )
 }
 
 use std::fs::File;
@@ -83,13 +87,14 @@ pub fn read_manifest(zip_path: &Path) -> Result<Manifest, String> {
     let mut entry = arc
         .by_name(ENTRY_MANIFEST)
         .map_err(|_| "不是本应用的备份（缺少 manifest.json）".to_string())?;
-    if entry.size() > 65536 { return Err("备份清单过大".to_string()); }
+    if entry.size() > 65536 {
+        return Err("备份清单过大".to_string());
+    }
     let mut json = String::new();
     entry
         .read_to_string(&mut json)
         .map_err(|e| format!("读取清单失败：{e}"))?;
-    let m: Manifest =
-        serde_json::from_str(&json).map_err(|e| format!("清单内容无法解析：{e}"))?;
+    let m: Manifest = serde_json::from_str(&json).map_err(|e| format!("清单内容无法解析：{e}"))?;
     if m.app != "niuma-timer" {
         return Err("不是本应用的备份（app 标识不匹配）".to_string());
     }
@@ -114,9 +119,7 @@ fn create_backup_inner(cfg_version: &str) -> Result<BackupEntry, String> {
 
     // 必须走 with_db：统一处理锁中毒与错误上报，不裸连。
     // with_db 返回 Result<usize, String>，闭包内已 map_err 成 String，单个 ? 即可
-    crate::db::with_db(|conn| {
-        conn.execute(&vacuum_into_sql(&snap), [])
-    })?;
+    crate::db::with_db(|conn| conn.execute(&vacuum_into_sql(&snap), []))?;
 
     let db_bytes = std::fs::metadata(&snap)
         .map_err(|e| format!("读取快照大小失败：{e}"))?
@@ -140,7 +143,11 @@ fn create_backup_inner(cfg_version: &str) -> Result<BackupEntry, String> {
     let out = dir.join(&name);
     let partial = out.with_extension("zip.partial");
     let _partial_guard = SnapshotGuard(partial.clone());
-    let file = File::options().write(true).create_new(true).open(&partial).map_err(|e| format!("创建备份文件失败：{e}"))?;
+    let file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&partial)
+        .map_err(|e| format!("创建备份文件失败：{e}"))?;
     let mut zw = ZipWriter::new(file);
     let deflate = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
@@ -244,8 +251,12 @@ const REQUIRED_TABLES: &[&str] = &[
 /// 还原第一步：校验 + 铺 pending。校验任一环失败即 Err 且零磁盘副作用。
 pub fn stage_restore(name: &str, current_version: &str) -> Result<String, String> {
     let _op = crate::sync::lock(&BACKUP_OP, "backup::operation");
-    if name.is_empty() || Path::new(name).components().count() != 1
-        || name.contains(['/', '\\', ':']) || name.contains("..") || !name.ends_with(".zip") {
+    if name.is_empty()
+        || Path::new(name).components().count() != 1
+        || name.contains(['/', '\\', ':'])
+        || name.contains("..")
+        || !name.ends_with(".zip")
+    {
         return Err("备份名不合法".to_string());
     }
     let dir = crate::config::config_dir();
@@ -253,13 +264,21 @@ pub fn stage_restore(name: &str, current_version: &str) -> Result<String, String
         return Err("已有还原等待重启，请先重启程序".to_string());
     }
     let zip_path = backup_dir().join(name);
-    let check_db = std::env::temp_dir().join(format!("niuma-restore-check-{}-{}.db",
-        std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap_or_default()));
+    let check_db = std::env::temp_dir().join(format!(
+        "niuma-restore-check-{}-{}.db",
+        std::process::id(),
+        chrono::Local::now()
+            .timestamp_nanos_opt()
+            .unwrap_or_default()
+    ));
     let _guard = TempGuard(check_db.clone());
     let cfg_bytes = validate_archive(&zip_path, &check_db)?;
     let guard_entry = create_backup_inner(current_version)?;
     stage_validated(&check_db, cfg_bytes.as_deref(), &dir)?;
-    Ok(format!("还原已就绪；当前数据已自动备份为 {}，重启后生效", guard_entry.name))
+    Ok(format!(
+        "还原已就绪；当前数据已自动备份为 {}，重启后生效",
+        guard_entry.name
+    ))
 }
 
 /// 校验只操作独立临时文件，不读写用户当前数据库。
@@ -271,37 +290,59 @@ fn validate_archive(zip_path: &Path, check_db: &Path) -> Result<Option<Vec<u8>>,
         return Err("备份条目数量与清单不符".to_string());
     }
     {
-        let mut entry = arc.by_name(ENTRY_DB).map_err(|_| "备份缺少 niuma.db".to_string())?;
+        let mut entry = arc
+            .by_name(ENTRY_DB)
+            .map_err(|_| "备份缺少 niuma.db".to_string())?;
         if entry.size() != manifest.db_bytes || entry.size() > 4 * 1024 * 1024 * 1024 {
             return Err("数据库大小与清单不符或超过 4GB".to_string());
         }
-        let mut out = File::options().write(true).create_new(true).open(check_db)
+        let mut out = File::options()
+            .write(true)
+            .create_new(true)
+            .open(check_db)
             .map_err(|e| format!("创建校验文件失败：{e}"))?;
         let copied = std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
-        if copied != manifest.db_bytes { return Err("数据库解压大小不符".to_string()); }
+        if copied != manifest.db_bytes {
+            return Err("数据库解压大小不符".to_string());
+        }
     }
     let cfg_bytes = if manifest.has_config {
-        let mut entry = arc.by_name(ENTRY_CONFIG).map_err(|_| "备份缺少 config.json".to_string())?;
-        if entry.size() > 4 * 1024 * 1024 { return Err("配置文件过大".to_string()); }
+        let mut entry = arc
+            .by_name(ENTRY_CONFIG)
+            .map_err(|_| "备份缺少 config.json".to_string())?;
+        if entry.size() > 4 * 1024 * 1024 {
+            return Err("配置文件过大".to_string());
+        }
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
         serde_json::from_slice::<crate::config::Config>(&bytes)
             .map_err(|e| format!("备份配置无效：{e}"))?;
         Some(bytes)
     } else {
-        if arc.index_for_name(ENTRY_CONFIG).is_some() { return Err("配置与清单不符".to_string()); }
+        if arc.index_for_name(ENTRY_CONFIG).is_some() {
+            return Err("配置与清单不符".to_string());
+        }
         None
     };
     let conn = Connection::open_with_flags(check_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("备份数据库无法打开：{e}"))?;
-    let check: String = conn.pragma_query_value(None, "integrity_check", |row| row.get(0))
+    let check: String = conn
+        .pragma_query_value(None, "integrity_check", |row| row.get(0))
         .map_err(|e| format!("完整性检查失败：{e}"))?;
-    if check != "ok" { return Err(format!("完整性检查未通过：{check}")); }
+    if check != "ok" {
+        return Err(format!("完整性检查未通过：{check}"));
+    }
     for table in REQUIRED_TABLES {
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
-            [table], |row| row.get(0)).map_err(|e| e.to_string())?;
-        if !exists { return Err(format!("备份缺少业务表：{table}")); }
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err(format!("备份缺少业务表：{table}"));
+        }
     }
     Ok(cfg_bytes)
 }
@@ -313,11 +354,19 @@ fn stage_validated(check_db: &Path, cfg: Option<&[u8]>, dir: &Path) -> Result<()
     let _db_guard = TempGuard(db_temp.clone());
     let result = (|| -> Result<(), String> {
         std::fs::copy(check_db, &db_temp).map_err(|e| e.to_string())?;
-        File::options().write(true).open(&db_temp).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+        File::options()
+            .write(true)
+            .open(&db_temp)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())?;
         match cfg {
             Some(bytes) => {
                 std::fs::write(&cfg_pending, bytes).map_err(|e| e.to_string())?;
-                File::options().write(true).open(&cfg_pending).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+                File::options()
+                    .write(true)
+                    .open(&cfg_pending)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|e| e.to_string())?;
             }
             None => {
                 if cfg_pending.exists() {
@@ -328,7 +377,9 @@ fn stage_validated(check_db: &Path, cfg: Option<&[u8]>, dir: &Path) -> Result<()
         std::fs::rename(&db_temp, dir.join("niuma.db.pending")).map_err(|e| e.to_string())?;
         Ok(())
     })();
-    if result.is_err() { let _ = std::fs::remove_file(cfg_pending); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(cfg_pending);
+    }
     result.map_err(|e| format!("准备还原失败：{e}"))
 }
 
@@ -360,34 +411,47 @@ pub(crate) fn swap_pending_in(dir: &Path) -> Option<String> {
     }
 
     if db_pending.exists() {
-    let db = dir.join("niuma.db");
-    let db_bak = dir.join(DB_BAK);
-    let had_old_db = db.exists();
-    if had_old_db {
-        if db_bak.exists() && std::fs::remove_file(&db_bak).is_err() { return None; }
-        if std::fs::rename(&db, &db_bak).is_err() { return None; }
-    }
-    // 保留旧 WAL/SHM；失败时一并恢复，不能先删除未合并的历史数据。
-    let mut sidecars = Vec::new();
-    for suffix in ["-wal", "-shm"] {
-        let from = dir.join(format!("niuma.db{suffix}"));
-        let to = dir.join(format!("{DB_BAK}{suffix}"));
-        if from.exists() {
-            if to.exists() && std::fs::remove_file(&to).is_err()
-                || std::fs::rename(&from, &to).is_err() {
-                for (f, t) in sidecars.iter().rev() { let _ = std::fs::rename(t, f); }
-                if had_old_db { let _ = std::fs::rename(&db_bak, &db); }
+        let db = dir.join("niuma.db");
+        let db_bak = dir.join(DB_BAK);
+        let had_old_db = db.exists();
+        if had_old_db {
+            if db_bak.exists() && std::fs::remove_file(&db_bak).is_err() {
                 return None;
             }
-            sidecars.push((from, to));
+            if std::fs::rename(&db, &db_bak).is_err() {
+                return None;
+            }
         }
-    }
-    if let Err(e) = std::fs::rename(&db_pending, &db) {
-        crate::db::debug_log(&format!("[backup] 新库就位失败，尝试回滚：{e}"));
-        for (f, t) in sidecars.iter().rev() { let _ = std::fs::rename(t, f); }
-        if had_old_db { let _ = std::fs::rename(&db_bak, &db); }
-        return None;
-    }
+        // 保留旧 WAL/SHM；失败时一并恢复，不能先删除未合并的历史数据。
+        let mut sidecars = Vec::new();
+        for suffix in ["-wal", "-shm"] {
+            let from = dir.join(format!("niuma.db{suffix}"));
+            let to = dir.join(format!("{DB_BAK}{suffix}"));
+            if from.exists() {
+                if to.exists() && std::fs::remove_file(&to).is_err()
+                    || std::fs::rename(&from, &to).is_err()
+                {
+                    for (f, t) in sidecars.iter().rev() {
+                        let _ = std::fs::rename(t, f);
+                    }
+                    if had_old_db {
+                        let _ = std::fs::rename(&db_bak, &db);
+                    }
+                    return None;
+                }
+                sidecars.push((from, to));
+            }
+        }
+        if let Err(e) = std::fs::rename(&db_pending, &db) {
+            crate::db::debug_log(&format!("[backup] 新库就位失败，尝试回滚：{e}"));
+            for (f, t) in sidecars.iter().rev() {
+                let _ = std::fs::rename(t, f);
+            }
+            if had_old_db {
+                let _ = std::fs::rename(&db_bak, &db);
+            }
+            return None;
+        }
     }
 
     // 5. 配置非对称处置：库已就位后配置失败**不回退库**（回退会让用户白等一次重启），
@@ -407,22 +471,23 @@ pub(crate) fn swap_pending_in(dir: &Path) -> Option<String> {
         if let Err(e) = std::fs::rename(&cfg_pending, &cfg) {
             // 旧配置此时已在 .pre-restore.bak、config.json 缺位 → 程序走默认配置；
             // 与上方注释一致：不回退库，用户在界面重设即可
-            crate::db::debug_log(&format!(
-                "[backup] 新配置就位失败（不回退已还原的库）：{e}"
-            ));
-            if had_cfg && !cfg.exists() { let _ = std::fs::rename(&cfg_bak, &cfg); }
+            crate::db::debug_log(&format!("[backup] 新配置就位失败（不回退已还原的库）：{e}"));
+            if had_cfg && !cfg.exists() {
+                let _ = std::fs::rename(&cfg_bak, &cfg);
+            }
             cfg_part = "配置还原失败，已尽力保留旧配置".to_string();
         } else {
             cfg_part = format!("配置已还原（旧配置留存 {CONFIG_BAK}）");
         }
     }
     // Leave the marker on retryable config errors; next startup resumes the pair.
-    if !cfg_pending.exists() { let _ = std::fs::remove_file(&marker); }
+    if !cfg_pending.exists() {
+        let _ = std::fs::remove_file(&marker);
+    }
 
     // 6+7.
-    let msg = format!(
-        "[backup] 已应用启动期还原：新库 niuma.db 已就位（旧库留存 {DB_BAK}）；{cfg_part}"
-    );
+    let msg =
+        format!("[backup] 已应用启动期还原：新库 niuma.db 已就位（旧库留存 {DB_BAK}）；{cfg_part}");
     crate::db::debug_log(&msg);
     Some(msg)
 }
@@ -475,10 +540,8 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
     fn tmp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "niuma-restore-test-{tag}-{}",
-            std::process::id()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("niuma-restore-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -514,14 +577,29 @@ mod tests {
     #[test]
     fn restore_resumes_after_db_or_config_rename_crash() {
         for old_cfg_moved in [false, true] {
-            let dir = tmp_dir(if old_cfg_moved { "resume-config" } else { "resume-db" });
+            let dir = tmp_dir(if old_cfg_moved {
+                "resume-config"
+            } else {
+                "resume-db"
+            });
             write_file(&dir, "restore-in-progress", "");
             write_file(&dir, "niuma.db", "NEW-DB");
             write_file(&dir, DB_BAK, "OLD-DB");
-            write_file(&dir, if old_cfg_moved { CONFIG_BAK } else { "config.json" }, "OLD-CFG");
+            write_file(
+                &dir,
+                if old_cfg_moved {
+                    CONFIG_BAK
+                } else {
+                    "config.json"
+                },
+                "OLD-CFG",
+            );
             write_file(&dir, "config.json.pending", "NEW-CFG");
             assert!(swap_pending_in(&dir).is_some());
-            assert_eq!(std::fs::read_to_string(dir.join("config.json")).unwrap(), "NEW-CFG");
+            assert_eq!(
+                std::fs::read_to_string(dir.join("config.json")).unwrap(),
+                "NEW-CFG"
+            );
             assert_eq!(std::fs::read_to_string(dir.join(DB_BAK)).unwrap(), "OLD-DB");
             assert!(!dir.join("restore-in-progress").exists());
             let _ = std::fs::remove_dir_all(&dir);
@@ -535,7 +613,10 @@ mod tests {
         write_file(&dir, "niuma.db.pending", "NEW-DB");
         let msg = swap_pending_in(&dir).expect("应完成交换");
         assert!(msg.contains("niuma.db"), "实际: {msg}");
-        assert_eq!(std::fs::read_to_string(dir.join("niuma.db")).unwrap(), "NEW-DB");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("niuma.db")).unwrap(),
+            "NEW-DB"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join(DB_BAK)).unwrap(),
             "OLD-DB",
@@ -565,7 +646,10 @@ mod tests {
         write_file(&dir, "config.json", "OLD-CFG");
         write_file(&dir, "config.json.pending", "NEW-CFG");
         assert!(swap_pending_in(&dir).is_some());
-        assert_eq!(std::fs::read_to_string(dir.join("config.json")).unwrap(), "NEW-CFG");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("config.json")).unwrap(),
+            "NEW-CFG"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join(CONFIG_BAK)).unwrap(),
             "OLD-CFG"
@@ -580,7 +664,10 @@ mod tests {
         write_file(&dir, "niuma.db.pending", "NEW-DB");
         // 无 config.json 也无 config.json.pending：只换库，且不留任何 config 空文件
         assert!(swap_pending_in(&dir).is_some());
-        assert_eq!(std::fs::read_to_string(dir.join("niuma.db")).unwrap(), "NEW-DB");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("niuma.db")).unwrap(),
+            "NEW-DB"
+        );
         assert!(!dir.join("config.json.pending").exists());
         assert!(!dir.join(CONFIG_BAK).exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -594,7 +681,10 @@ mod tests {
         assert!(swap_pending_in(&dir).is_some());
         // 第二次：pending 已被 rename 吃掉，必须 None 且不破坏结果
         assert!(swap_pending_in(&dir).is_none());
-        assert_eq!(std::fs::read_to_string(dir.join("niuma.db")).unwrap(), "NEW-DB");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("niuma.db")).unwrap(),
+            "NEW-DB"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

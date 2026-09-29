@@ -12,8 +12,8 @@
 //! 下班口径：工作日 + 已过 `pm_end` + 当日有监控记录 + 今天未提醒过 → 触发一次。
 //! 程序在过点后才启动也能补弹（today_done 初始为 false，首拍即满足）。
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use chrono::{Datelike, Timelike};
 use tauri::Manager;
@@ -96,7 +96,11 @@ fn payday_due(cfg: &Config, today: chrono::NaiveDate, done: bool) -> bool {
 
 fn thousands(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
-    let mut out = if n < 0 { String::from("-") } else { String::new() };
+    let mut out = if n < 0 {
+        String::from("-")
+    } else {
+        String::new()
+    };
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i) % 3 == 0 {
             out.push(',');
@@ -106,7 +110,13 @@ fn thousands(n: i64) -> String {
     out
 }
 
-pub(crate) fn payday_texts(month_label: &str, work_days: i64, ot_hours: f64, slack_pct: i64, income: f64) -> (String, String) {
+pub(crate) fn payday_texts(
+    month_label: &str,
+    work_days: i64,
+    ot_hours: f64,
+    slack_pct: i64,
+    income: f64,
+) -> (String, String) {
     (
         "发薪日到了，牛马".to_string(),
         format!("{month_label}战绩：出勤 {work_days} 天 · 加班 {ot_hours:.1}h · 摸鱼率 {slack_pct}% · 折合进账 ¥{}", thousands(income as i64)),
@@ -136,13 +146,25 @@ fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {
     };
     {
         let mut current = sync::lock(&state.config, "state.config");
-        if !payday_due(&current, today, PAYDAY_DONE.load(Ordering::Relaxed)) { return; }
+        if !payday_due(&current, today, PAYDAY_DONE.load(Ordering::Relaxed)) {
+            return;
+        }
         current.remind_payday_last_date = Some(today.to_string());
         crate::config::save(&current);
         PAYDAY_DONE.store(true, Ordering::SeqCst);
     }
-    let month = bill.period_end.get(5..7).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let (title, body) = payday_texts(&format!("{month} 月"), bill.work_days.unwrap_or(0), bill.ot_hours, (bill.slack_rate * 100.0) as i64, bill.total_income);
+    let month = bill
+        .period_end
+        .get(5..7)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let (title, body) = payday_texts(
+        &format!("{month} 月"),
+        bill.work_days.unwrap_or(0),
+        bill.ot_hours,
+        (bill.slack_rate * 100.0) as i64,
+        bill.total_income,
+    );
     notify(app, &title, &body);
 }
 
@@ -222,7 +244,10 @@ fn offwork_tick(app: &tauri::AppHandle, cfg: &Config) {
 /// 当日是否有监控记录（键鼠活动 或 应用使用任一非空）。
 /// 没记录 = 今天根本没在工位，提醒「下班」没有意义。
 fn has_record_today() -> bool {
-    let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
     crate::db::with_db(|g| {
         let n: i64 = g.query_row(
             "SELECT (SELECT COUNT(*) FROM act_hourly WHERE date = ?1) \
@@ -238,13 +263,7 @@ fn has_record_today() -> bool {
 /// 系统通知投递（tauri-plugin-notification）。允许失败——提醒不该影响主流程，
 /// 但失败必须留痕：2026-09-23 曾因 AUMID 未注册被系统静默丢弃，排查零线索。
 pub(crate) fn notify(app: &tauri::AppHandle, title: &str, body: &str) {
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
         crate::db::debug_log(&format!("通知投递失败 [{title}]: {e:?}"));
     }
 }
@@ -295,12 +314,18 @@ mod tests {
 
     #[test]
     fn payday_persisted_date_survives_restart() {
-        let mut cfg = Config::default();
-        cfg.remind_payday_last_date = Some("2026-09-10".to_string());
+        let cfg = Config {
+            remind_payday_last_date: Some("2026-09-10".to_string()),
+            ..Default::default()
+        };
         let reloaded: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
         assert!(!payday_due(&reloaded, today, false));
-        assert!(payday_due(&reloaded, chrono::NaiveDate::from_ymd_opt(2026, 10, 10).unwrap(), false));
+        assert!(payday_due(
+            &reloaded,
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 10).unwrap(),
+            false
+        ));
     }
 
     #[test]
@@ -313,20 +338,30 @@ mod tests {
 
     #[test]
     fn thousands_format() {
-        for (n, expected) in [(0, "0"), (999, "999"), (11240, "11,240"), (1234567, "1,234,567"), (-11240, "-11,240"), (-123, "-123")] {
+        for (n, expected) in [
+            (0, "0"),
+            (999, "999"),
+            (11240, "11,240"),
+            (1234567, "1,234,567"),
+            (-11240, "-11,240"),
+            (-123, "-123"),
+        ] {
             assert_eq!(thousands(n), expected);
         }
     }
 
     #[test]
     fn payday_prev_month_crosses_year() {
-        use chrono::NaiveDate;
         use crate::weekbill::{prev_period_bounds, Span};
+        use chrono::NaiveDate;
         let jan = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
-        assert_eq!(prev_period_bounds(Span::Month, 0, jan), (
-            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            prev_period_bounds(Span::Month, 0, jan),
+            (
+                NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
     }
 
     const M: i64 = 60_000; // 一分钟（毫秒）
@@ -334,18 +369,58 @@ mod tests {
     #[test]
     fn sedentary_requires_active_state() {
         // 暂停 / 锁屏 / 无起点 → 不提醒
-        assert!(!should_remind(100 * M, 40 * M, 99 * M as u64, true, false, 50, 0));
-        assert!(!should_remind(100 * M, 40 * M, 99 * M as u64, false, true, 50, 0));
-        assert!(!should_remind(100 * M, 0, 99 * M as u64, false, false, 50, 0));
+        assert!(!should_remind(
+            100 * M,
+            40 * M,
+            99 * M as u64,
+            true,
+            false,
+            50,
+            0
+        ));
+        assert!(!should_remind(
+            100 * M,
+            40 * M,
+            99 * M as u64,
+            false,
+            true,
+            50,
+            0
+        ));
+        assert!(!should_remind(
+            100 * M,
+            0,
+            99 * M as u64,
+            false,
+            false,
+            50,
+            0
+        ));
     }
 
     #[test]
     fn sedentary_idle_five_minutes_resets() {
         // 挂机满 5 分钟：视为已休息，不提醒（即便连续起点早已超过阈值）
         let idle = IDLE_REST_MS;
-        assert!(!should_remind(100 * M, 40 * M, (100 * M - idle) as u64, false, false, 50, 0));
+        assert!(!should_remind(
+            100 * M,
+            40 * M,
+            (100 * M - idle) as u64,
+            false,
+            false,
+            50,
+            0
+        ));
         // 刚好差 1ms 恢复活跃：正常判定
-        assert!(should_remind(100 * M, 40 * M, (100 * M - idle + 1) as u64, false, false, 50, 0));
+        assert!(should_remind(
+            100 * M,
+            40 * M,
+            (100 * M - idle + 1) as u64,
+            false,
+            false,
+            50,
+            0
+        ));
     }
 
     #[test]
@@ -353,8 +428,24 @@ mod tests {
         // 阈值边界：恰好达到 → 提醒；差 1ms → 不提醒
         let since = 50 * M;
         let now = since + 50 * M;
-        assert!(should_remind(now, since, (now - 1) as u64, false, false, 50, 0));
-        assert!(!should_remind(now - 1, since, (now - 2) as u64, false, false, 50, 0));
+        assert!(should_remind(
+            now,
+            since,
+            (now - 1) as u64,
+            false,
+            false,
+            50,
+            0
+        ));
+        assert!(!should_remind(
+            now - 1,
+            since,
+            (now - 2) as u64,
+            false,
+            false,
+            50,
+            0
+        ));
     }
 
     #[test]
@@ -362,20 +453,74 @@ mod tests {
         // 冷却期内不重复；冷却已过 / 从未提醒过 → 放行
         let since = 50 * M;
         let now = since + 50 * M;
-        assert!(!should_remind(now, since, (now - 1) as u64, false, false, 50, now - 4 * M));
-        assert!(should_remind(now, since, (now - 1) as u64, false, false, 50, now - 5 * M));
-        assert!(should_remind(now, since, (now - 1) as u64, false, false, 50, 0));
+        assert!(!should_remind(
+            now,
+            since,
+            (now - 1) as u64,
+            false,
+            false,
+            50,
+            now - 4 * M
+        ));
+        assert!(should_remind(
+            now,
+            since,
+            (now - 1) as u64,
+            false,
+            false,
+            50,
+            now - 5 * M
+        ));
+        assert!(should_remind(
+            now,
+            since,
+            (now - 1) as u64,
+            false,
+            false,
+            50,
+            0
+        ));
     }
 
     #[test]
     fn offwork_conditions() {
         // 全条件满足（含补弹：过点后启动首拍即触发）
-        assert!(should_remind_offwork(false, true, 18.0 * 60.0, 18.0 * 60.0, true));
+        assert!(should_remind_offwork(
+            false,
+            true,
+            18.0 * 60.0,
+            18.0 * 60.0,
+            true
+        ));
         // 非工作日 / 未过点 / 已提醒 / 空记录日 → 一律不提醒
-        assert!(!should_remind_offwork(false, false, 19.0 * 60.0, 18.0 * 60.0, true));
-        assert!(!should_remind_offwork(false, true, 17.0 * 60.0 + 59.0, 18.0 * 60.0, true));
-        assert!(!should_remind_offwork(true, true, 19.0 * 60.0, 18.0 * 60.0, true));
-        assert!(!should_remind_offwork(false, true, 19.0 * 60.0, 18.0 * 60.0, false));
+        assert!(!should_remind_offwork(
+            false,
+            false,
+            19.0 * 60.0,
+            18.0 * 60.0,
+            true
+        ));
+        assert!(!should_remind_offwork(
+            false,
+            true,
+            17.0 * 60.0 + 59.0,
+            18.0 * 60.0,
+            true
+        ));
+        assert!(!should_remind_offwork(
+            true,
+            true,
+            19.0 * 60.0,
+            18.0 * 60.0,
+            true
+        ));
+        assert!(!should_remind_offwork(
+            false,
+            true,
+            19.0 * 60.0,
+            18.0 * 60.0,
+            false
+        ));
     }
 
     #[test]
@@ -409,6 +554,10 @@ mod tests {
             0,
             "久坐冷却应清零"
         );
-        assert_eq!(*sync::lock(&SED_SINCE, "test::SED_SINCE"), 0, "连续活跃起点应清零");
+        assert_eq!(
+            *sync::lock(&SED_SINCE, "test::SED_SINCE"),
+            0,
+            "连续活跃起点应清零"
+        );
     }
 }

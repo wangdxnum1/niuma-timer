@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run frontend tests
+        run: node scripts/run_all.js
+
+  rust-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+      # 豁免清单（Task 2 存量，逐条含理由）：
+      # - clippy::large_enum_variant（config.rs LoadResult——Loaded(Config) 552 字节枚举，短生命周期，装箱收益低）
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: cargo test
+        run: cargo test
+        working-directory: src-tauri
+      - name: Drift guard (build.rs 回写检测)
+        shell: pwsh
+        run: |
+          $status = git status --porcelain -- frontend src-tauri
+          if ($status) {
+            Write-Host $status
+            throw "build.rs 回写了未提交的自动改动：本地执行 cargo build，将 frontend/ 与 src-tauri/ 的自动变更一并提交后再推送"
+          }

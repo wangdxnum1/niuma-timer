@@ -114,7 +114,11 @@ pub fn week_start_of(d: NaiveDate) -> NaiveDate {
 
 /// 账单时间跨度（前端以字符串 "week"/"month"/"year" 传入）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Span { Week, Month, Year }
+pub enum Span {
+    Week,
+    Month,
+    Year,
+}
 
 /// 解析前端 span 字符串；未知值显式报错，不静默回退（回退会掩盖前端 bug）
 pub fn parse_span(s: &str) -> Result<Span, String> {
@@ -128,7 +132,11 @@ pub fn parse_span(s: &str) -> Result<Span, String> {
 
 /// 该月最后一天（下月 1 号 − 1 天，闰年天然正确）
 fn last_day_of(year: i32, month: u32) -> u32 {
-    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     (NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)).day()
 }
 
@@ -190,12 +198,7 @@ fn is_workday_of(date: NaiveDate, cur: &HolidayCache) -> bool {
 }
 
 /// 当月工作日分母：override > 节假日表 > weekday_count（跨年同 is_workday_of 处理）
-fn monthly_workdays_of(
-    year: i32,
-    month: u32,
-    cfg: &Config,
-    cur: &HolidayCache,
-) -> u32 {
+fn monthly_workdays_of(year: i32, month: u32, cfg: &Config, cur: &HolidayCache) -> u32 {
     if let Some(v) = config::effective_workdays_override(cfg, year, month) {
         return v;
     }
@@ -330,16 +333,17 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
             0.0
         };
 
-        let (ot_total, ot_hours) = ot_map
-            .get(&key)
-            .map(|t| (t.0, t.1))
-            .unwrap_or((0.0, 0.0));
+        let (ot_total, ot_hours) = ot_map.get(&key).map(|t| (t.0, t.1)).unwrap_or((0.0, 0.0));
         let (act_events, keys, clicks) = act_map.get(&key).copied().unwrap_or((0, 0, 0));
         let (front, slack) = app_map.get(&key).copied().unwrap_or((0, 0));
         let has_record = act_events > 0 || front > 0;
 
         // 当日时薪 = 满勤 ÷ 当日工时（固定时薪；今天实时 earned 只影响 salary 字段）
-        let day_rate = if daily_h > 0.0 { full_salary / daily_h } else { 0.0 };
+        let day_rate = if daily_h > 0.0 {
+            full_salary / daily_h
+        } else {
+            0.0
+        };
         // 摸鱼成本按天折算：休息日/未配月薪 → 0
         let day_slack_cost = if is_wd && day_rate > 0.0 {
             slack as f64 / 3600.0 * day_rate
@@ -434,7 +438,12 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
 
 /// 命令入口：off 封顶 0（未来不可看）；环比 = 上一周期 total_income。
 /// cfg/hol 由调用方（main.rs）锁内取快照传入，锁外做 DB 查询。
-pub fn period_bill(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64) -> Result<PeriodBill, String> {
+pub fn period_bill(
+    cfg: &Config,
+    cur_hol: &HolidayCache,
+    span: Span,
+    offset: i64,
+) -> Result<PeriodBill, String> {
     let off = offset.max(0);
     let today = Local::now().date_naive();
     let (start, end) = period_bounds(span, off, today);
@@ -444,13 +453,35 @@ pub fn period_bill(cfg: &Config, cur_hol: &HolidayCache, span: Span, offset: i64
     let today_earned = calc::compute(cfg, is_wd, mw, Local::now()).earned;
 
     let mut bill = db::with_db(|conn| {
-        assemble(&PeriodInput { cfg, cur_hol, span, start, end, today, today_earned }, conn)
+        assemble(
+            &PeriodInput {
+                cfg,
+                cur_hol,
+                span,
+                start,
+                end,
+                today,
+                today_earned,
+            },
+            conn,
+        )
     })?;
 
     // 上一周期：只为取 total_income 做环比（严格早于当前周期，today 不在其中，today_earned 不参与）
     let (prev_start, prev_end) = prev_period_bounds(span, off, today);
     let prev = db::with_db(|conn| {
-        assemble(&PeriodInput { cfg, cur_hol, span, start: prev_start, end: prev_end, today, today_earned }, conn)
+        assemble(
+            &PeriodInput {
+                cfg,
+                cur_hol,
+                span,
+                start: prev_start,
+                end: prev_end,
+                today,
+                today_earned,
+            },
+            conn,
+        )
     })?;
 
     bill.is_current_period = off == 0;
@@ -525,7 +556,11 @@ fn month_bucket(label: String, ds: Vec<&DayBill>) -> BucketBill {
             front += d.front_seconds;
         }
     }
-    b.slack_rate = if front > 0 { b.slack_seconds as f64 / front as f64 } else { 0.0 };
+    b.slack_rate = if front > 0 {
+        b.slack_seconds as f64 / front as f64
+    } else {
+        0.0
+    };
     b
 }
 
@@ -635,8 +670,11 @@ mod tests {
             ..Default::default()
         };
         let conn = mem_conn();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 8, 31).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 8, 31).unwrap()),
+            &conn,
+        )
+        .unwrap();
 
         assert_eq!(bill.period_start, "2026-08-31");
         assert_eq!(bill.period_end, "2026-09-06");
@@ -649,7 +687,10 @@ mod tests {
         assert_eq!(f(bill.buckets[5].salary), 0.0);
         assert_eq!(bill.buckets[5].is_workday, Some(false));
         // base = 1×(22000/21) + 4×(22000/22)
-        assert_eq!(f(bill.base_salary), f(22000.0 / 21.0 + 4.0 * 22000.0 / 22.0));
+        assert_eq!(
+            f(bill.base_salary),
+            f(22000.0 / 21.0 + 4.0 * 22000.0 / 22.0)
+        );
         // 总入账 = base + ot（无加班）
         assert_eq!(f(bill.total_income), f(bill.base_salary));
     }
@@ -664,8 +705,11 @@ mod tests {
             [],
         )
         .unwrap();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         // 周六 9/5：休息日无工资，加班费照记
         assert_eq!(f(bill.buckets[5].salary), 0.0);
         assert_eq!(bill.buckets[5].is_workday, Some(false));
@@ -685,10 +729,13 @@ mod tests {
             [],
         )
         .unwrap();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         let d = &bill.buckets[1]; // 周二
-        // total_events = 100+10+2+3+50+1+0+200 = 366
+                                  // total_events = 100+10+2+3+50+1+0+200 = 366
         assert_eq!(d.act_events, 366);
         assert_eq!(d.keys, 200);
         // clicks = (10−2×2)+2+3+1+0 = 12
@@ -717,8 +764,11 @@ mod tests {
             [],
         )
         .unwrap();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         let d = &bill.buckets[1];
         assert_eq!(d.slack_seconds, 1200);
         assert_eq!(f(d.slack_rate), 0.25);
@@ -805,8 +855,11 @@ mod tests {
             )
             .unwrap();
         }
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         let h = bill.hardest.unwrap();
         assert_eq!(h.date, "2026-09-10");
         assert_eq!(h.ot_hours, 5.0);
@@ -829,8 +882,11 @@ mod tests {
             [],
         )
         .unwrap();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         assert_eq!(bill.work_days, None);
     }
 
@@ -843,8 +899,11 @@ mod tests {
             ..Default::default()
         };
         let conn = mem_conn();
-        let bill = assemble(&input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()), &conn)
-            .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
         assert_eq!(f(bill.total_income), 0.0);
         assert!(bill.buckets.iter().all(|d| !d.has_record));
         assert!(bill.hardest.is_none());
@@ -861,7 +920,10 @@ mod tests {
         assert_eq!(s, NaiveDate::from_ymd_opt(2026, 9, 7).unwrap());
         assert_eq!(e, NaiveDate::from_ymd_opt(2026, 9, 13).unwrap());
         // 负偏移封顶本期（未来不可看）
-        assert_eq!(period_bounds(Span::Week, -5, today), period_bounds(Span::Week, 0, today));
+        assert_eq!(
+            period_bounds(Span::Week, -5, today),
+            period_bounds(Span::Week, 0, today)
+        );
         // 任何周区间恒为 7 天
         let (s, e) = period_bounds(Span::Week, 3, today);
         assert_eq!((e - s).num_days() + 1, 7);
@@ -872,26 +934,39 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
         // 9 月：1 号到 30 号
         let (s, e) = period_bounds(Span::Month, 0, today);
-        assert_eq!((s, e), (
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
-        ));
+        assert_eq!(
+            (s, e),
+            (
+                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(),
+            )
+        );
         // 跨年：1 月的上一期是去年 12 月
         let jan = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
-        assert_eq!(prev_period_bounds(Span::Month, 0, jan), (
-            NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            prev_period_bounds(Span::Month, 0, jan),
+            (
+                NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
         // 闰年：2024 年 2 月有 29 天
-        let (s, e) = period_bounds(Span::Month, 0, NaiveDate::from_ymd_opt(2024, 2, 10).unwrap());
+        let (s, e) = period_bounds(
+            Span::Month,
+            0,
+            NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
+        );
         assert_eq!(s, NaiveDate::from_ymd_opt(2024, 2, 1).unwrap());
         assert_eq!(e.day(), 29);
         // 年区间
         let (s, e) = period_bounds(Span::Year, 1, today);
-        assert_eq!((s, e), (
-            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-        ));
+        assert_eq!(
+            (s, e),
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            )
+        );
     }
 
     #[test]
@@ -899,7 +974,10 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
         for span in [Span::Week, Span::Month, Span::Year] {
             for off in 0..3 {
-                assert_eq!(prev_period_bounds(span, off, today), period_bounds(span, off + 1, today));
+                assert_eq!(
+                    prev_period_bounds(span, off, today),
+                    period_bounds(span, off + 1, today)
+                );
             }
         }
     }
@@ -913,7 +991,15 @@ mod tests {
     }
 
     /// 手构 DayBill（B4 测试专用；全字段显式，slack_rate 由 slack/front 求出）
-    fn dbill(date: &str, weekday: &str, is_workday: bool, has_record: bool, salary: f64, slack: i64, front: i64) -> DayBill {
+    fn dbill(
+        date: &str,
+        weekday: &str,
+        is_workday: bool,
+        has_record: bool,
+        salary: f64,
+        slack: i64,
+        front: i64,
+    ) -> DayBill {
         DayBill {
             date: date.to_string(),
             weekday: weekday.to_string(),
@@ -924,7 +1010,11 @@ mod tests {
             act_events: 0,
             keys: 0,
             clicks: 0,
-            slack_rate: if front > 0 { slack as f64 / front as f64 } else { 0.0 },
+            slack_rate: if front > 0 {
+                slack as f64 / front as f64
+            } else {
+                0.0
+            },
             front_seconds: front,
             has_record,
         }
@@ -940,13 +1030,13 @@ mod tests {
         ];
         let b = bucketize(&days, Span::Year);
         assert_eq!(b.len(), 12); // 12 恒项：缺月 = 空桶
-        // 年桶摸鱼率 = Σ摸鱼秒 ÷ Σ前台秒（200+1800)/(1000+3000) = 0.5，不是各天比率平均 (0.2+0.6)/2 = 0.4
+                                 // 年桶摸鱼率 = Σ摸鱼秒 ÷ Σ前台秒（200+1800)/(1000+3000) = 0.5，不是各天比率平均 (0.2+0.6)/2 = 0.4
         assert_eq!(f(b[0].slack_rate), 0.5);
         assert_eq!(b[0].salary, 2000.0);
         assert_eq!(b[1].slack_rate, 0.0); // 0/2000
-        assert_eq!(b[1].has_record, true);
+        assert!(b[1].has_record);
         assert_eq!(b[2].label, "3 月");
-        assert_eq!(b[2].has_record, false); // 空桶
+        assert!(!b[2].has_record); // 空桶
         assert_eq!(b[11].label, "12 月");
         assert_eq!(b[0].date, None);
         assert_eq!(b[0].is_workday, None);
@@ -970,7 +1060,17 @@ mod tests {
     #[test]
     fn month_buckets_keep_daily_grain() {
         let days: Vec<DayBill> = (1..=30)
-            .map(|i| dbill(&format!("2026-09-{:02}", i), "周几", i % 7 != 6 && i % 7 != 0, i < 23, 1000.0, 10, 100))
+            .map(|i| {
+                dbill(
+                    &format!("2026-09-{:02}", i),
+                    "周几",
+                    i % 7 != 6 && i % 7 != 0,
+                    i < 23,
+                    1000.0,
+                    10,
+                    100,
+                )
+            })
             .collect();
         let b = bucketize(&days, Span::Month);
         assert_eq!(b.len(), 30); // 月视图保持天颗粒
