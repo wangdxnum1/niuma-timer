@@ -59,7 +59,8 @@ class ManifestTests(unittest.TestCase):
                 gh.call.side_effect = call
                 argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
                 with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
-                     mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                     mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh), \
+                     mock.patch.object(release.time, "sleep"):
                     self.assertEqual(release.main(), 1 if fail_upload else 0)
                 self.assertEqual(any(c[0] == "PATCH" for c in calls), not fail_upload)
                 if not fail_upload:
@@ -168,6 +169,16 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("--draft", batch)
         self.assertIn("--draft=false", batch)
 
+    def test_release_bat_decouples_pdb_from_publish(self):
+        # PDB 必须在发布后 best-effort 补传：ASSETS 段不得含 .pdb，
+        # 且脚本必须提供 --pdb-only 与 gh release upload 两条补传路径。
+        batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
+        assets_block = batch[batch.index('set "ASSETS="'):batch.index("where gh >nul")]
+        self.assertNotIn(".pdb", assets_block)
+        self.assertIn("--pdb-only", batch)
+        self.assertIn("gh release upload", batch)
+        self.assertIn("call :upload_pdb", batch)
+
     def test_installer_and_unsigned_portable_have_distinct_entries(self):
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)
@@ -186,9 +197,9 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
 
-    def test_debug_symbols_uploaded_but_not_checksummed(self):
-        # 崩溃 dump 只能靠与 exe 同批构建的 PDB（GUID+Age）符号化，所以 .pdb
-        # 必须随 Release 上传；但它不是给用户下载的安装包，不进 SHA256SUMS。
+    def test_debug_symbols_not_uploaded_in_default_flow(self):
+        # PDB 不是运行时依赖：默认发布只发必需资产，调试符号由 --pdb-only
+        # 在发布后 best-effort 补传（见 PdbOnlyTests）。PDB 失败绝不能阻断发布。
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
@@ -221,10 +232,144 @@ class ManifestTests(unittest.TestCase):
             with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
                  mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
                 self.assertEqual(release.main(), 0)
-            self.assertIn("niuma-timer-1.4.0-portable.pdb", uploads)
+            self.assertNotIn("niuma-timer-1.4.0-portable.pdb", uploads)
             sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
             self.assertIn("niuma-timer-1.4.0-portable.exe", sums)
             self.assertNotIn(".pdb", sums)
+
+
+class UploadRetryTests(unittest.TestCase):
+    def _gh(self, responder):
+        gh = mock.Mock()
+        calls = []
+
+        def call(method, url, data=None, content_type=None):
+            calls.append(url)
+            return responder(len(calls))
+
+        gh.call.side_effect = call
+        return gh, calls
+
+    def test_retries_transient_then_succeeds(self):
+        # 瞬时错误（500）应重试，第 3 次成功则整体成功
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+            gh, calls = self._gh(lambda n: (500, {}) if n < 3 else (201, {}))
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 3)
+
+    def test_client_error_not_retried(self):
+        # 永久错误（422 已存在 / 403 无权限）不得重试，一次即判失败
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+            gh, calls = self._gh(lambda n: (422, {}))
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertFalse(ok)
+            self.assertEqual(len(calls), 1)
+
+    def test_network_error_is_retried(self):
+        # 连接被重置（Errno 10054）属瞬时错误，必须被接住并重试
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+
+            def responder(n):
+                if n < 4:
+                    raise ConnectionResetError(10054, "Connection reset by peer")
+                return 201, {}
+
+            gh, calls = self._gh(responder)
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 4)
+
+
+class PdbOnlyTests(unittest.TestCase):
+    def _run(self, d, call):
+        gh = mock.Mock()
+        gh.call.side_effect = call
+        argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0",
+                "--package", d, "--root", d, "--pdb-only"]
+        with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
+             mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh), \
+             mock.patch.object(release.time, "sleep"):
+            return release.main()
+
+    def test_uploads_pdb_to_published_release(self):
+        # 目标 Release 已公开（draft=false）时仍能补传 PDB，且不改动发布状态
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
+            uploads, patched = [], []
+
+            def call(method, url, data=None, content_type=None):
+                if method == "GET" and "/releases/tags/" in url:
+                    return 200, {"draft": False, "id": 7,
+                                 "upload_url": "https://upload.test/assets", "assets": []}
+                if method == "POST":
+                    uploads.append(urllib.parse.parse_qs(
+                        urllib.parse.urlparse(url).query)["name"][0])
+                    return 201, {}
+                if method == "PATCH":
+                    patched.append(url)
+                    return 200, {}
+                return 404, {}
+
+            self.assertEqual(self._run(d, call), 0)
+            self.assertEqual(uploads, ["niuma-timer-1.4.0-portable.pdb.zip"])
+            self.assertEqual(patched, [], "--pdb-only 绝不能 PATCH 发布状态")
+
+    def test_skips_already_uploaded(self):
+        # 已上传的 PDB 幂等跳过，不重复 POST
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
+            posts = []
+
+            def call(method, url, data=None, content_type=None):
+                if method == "GET" and "/releases/tags/" in url:
+                    return 200, {"draft": False, "id": 7, "upload_url": "https://upload.test/assets",
+                                 "assets": [{"name": "niuma-timer-1.4.0-portable.pdb.zip", "size": 7}]}
+                if method == "POST":
+                    posts.append(url)
+                    return 201, {}
+                return 404, {}
+
+            self.assertEqual(self._run(d, call), 0)
+            self.assertEqual(posts, [])
+
+    def test_fails_when_no_release_found(self):
+        # tags 查不到、草稿列表也没有 → 没有可挂载 PDB 的 Release，返回 1
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
+
+            def call(method, url, data=None, content_type=None):
+                if method == "GET" and url.endswith("/releases?per_page=100"):
+                    return 200, []
+                return 404, {}
+
+            self.assertEqual(self._run(d, call), 1)
+
+    def test_no_pdb_present_is_not_a_failure(self):
+        # package 里没有 PDB（例如手工补传已清理）→ 无操作即成功
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
+
+            def call(method, url, data=None, content_type=None):
+                if method == "GET" and "/releases/tags/" in url:
+                    return 200, {"draft": False, "id": 7,
+                                 "upload_url": "https://upload.test/assets", "assets": []}
+                return 404, {}
+
+            self.assertEqual(self._run(d, call), 0)
 
 
 if __name__ == "__main__":

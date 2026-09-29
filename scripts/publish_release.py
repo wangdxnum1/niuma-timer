@@ -19,6 +19,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import random
 import re
 import socket
 import ssl
@@ -43,6 +44,68 @@ DEFAULT_BRANCH = os.environ.get("NIUMA_DEFAULT_BRANCH", "main")
 
 def log(msg):
     print(msg, flush=True)
+
+
+def upload_with_retry(gh, upload_base, path, attempts=4):
+    """上传单个资产；成功返回 True，仅在瞬时错误上重试。
+
+    大文件（PDB 可达数十 MB）经本地代理上传时偶发连接被远端重置（Errno 10054），
+    属瞬时网络错误，重试几次再判失败；永久错误（4xx，如 422 已存在 / 403 无权限）
+    立即放弃，避免在无意义的重试上空转。网络异常必须在这里接住，否则未捕获的
+    URLError 会让整个脚本崩掉，连 fail-closed 都走不到。
+    """
+    name = os.path.basename(path)
+    with open(path, "rb") as f:
+        data = f.read()
+    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
+    mb = len(data) / 1024.0 / 1024.0
+    st, res = None, None
+    for attempt in range(1, attempts + 1):
+        try:
+            st, res = gh.call("POST", url, data, ctype)
+        except (urllib.error.URLError, ssl.SSLError, OSError) as e:
+            st, res = None, "%s: %s" % (type(e).__name__, e)
+        if st in (200, 201):
+            log("  [ok] %s  %.1f MB" % (name, mb))
+            return True
+        if isinstance(st, int) and 400 <= st < 500:
+            break
+        if attempt < attempts:
+            delay = min(2 ** (attempt - 1) * 2, 30) + random.uniform(0, 1)
+            log("  [retry] %s  %.1f MB attempt %d/%d failed (%s), retry in %.1fs ..."
+                % (name, mb, attempt, attempts, st, delay))
+            time.sleep(delay)
+    log("  [FAIL] %s HTTP %s: %s" % (name, st, res))
+    return False
+
+
+def collect_package_assets(package_dir, version):
+    """按版本筛选 package 目录下的资产，返回 (bins, sigs, pdbs)。
+
+    cargo tauri build 不会清理旧版本的 bundle，所以一律按版本号过滤，
+    避免把上一版的安装包/签名/符号混进本次 Release。PDB 单独成列，
+    因为它不是运行时依赖，不参与主发布的必需资产集合。
+    """
+    bins, sigs, pdbs = [], [], []
+    if os.path.isdir(package_dir):
+        for name in sorted(os.listdir(package_dir)):
+            p = os.path.join(package_dir, name)
+            if not os.path.isfile(p):
+                continue
+            low = name.lower()
+            if low.endswith((".exe", ".msi")):
+                if version not in name:
+                    log("  [skip] %s: not version %s" % (name, version))
+                    continue
+                bins.append(p)
+            elif low.endswith(".sig"):
+                if version in name:
+                    sigs.append(p)
+            elif low.endswith((".pdb", ".pdb.zip")):
+                if version in name:
+                    pdbs.append(p)
+    return bins, sigs, pdbs
 
 
 # --------------------------------------------------------------------------
@@ -333,6 +396,57 @@ def build_notes(root, version, package_dir):
     return "\n".join(lines)
 
 
+def publish_pdb_only(args, root, package_dir):
+    """仅补传调试符号。
+
+    与默认发布的根本差异：这里允许操作**已公开**的 release（默认模式会拒绝
+    改动已发布内容）。PDB 不是运行时依赖，缺失只影响该版本崩溃的可符号化能力，
+    所以本模式失败返回 1 仅供调用方告警，调用方不得据此判定发布失败。
+    """
+    token = github_token()
+    if not token:
+        log("  [ERROR] no GitHub token available from the git credential store")
+        return 1
+
+    gh = GitHub(token, build_opener())
+    api = "%s/repos/%s" % (API, args.repo)
+
+    st, rel = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
+    if st != 200:
+        # tags 端点对草稿与「尚未公开」的 tag 可能 404，退回列表按 tag_name 找
+        rel = None
+        lst, rels = gh.call("GET", "%s/releases?per_page=100" % api)
+        if lst == 200:
+            for r in rels:
+                if r.get("tag_name") == args.tag:
+                    rel = r
+                    break
+    if not rel:
+        log("  [ERROR] no release found for tag %s" % args.tag)
+        return 1
+
+    upload_base = (rel.get("upload_url") or "").split("{")[0]
+    if not upload_base:
+        log("  [ERROR] no upload_url in the release payload")
+        return 1
+
+    existing = {a["name"] for a in rel.get("assets", [])}
+    _, _, pdbs = collect_package_assets(package_dir, args.version)
+    if not pdbs:
+        log("  [WARN] no PDB assets matching %s in %s" % (args.version, package_dir))
+        return 0
+
+    failed = False
+    for path in pdbs:
+        name = os.path.basename(path)
+        if name in existing:
+            log("  [skip] %s (already uploaded)" % name)
+            continue
+        if not upload_with_retry(gh, upload_base, path):
+            failed = True
+    return 1 if failed else 0
+
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
@@ -345,12 +459,18 @@ def main():
     ap.add_argument("--title", default=None)
     ap.add_argument("--root", default=None)
     ap.add_argument("--generate-notes-only", action="store_true")
+    ap.add_argument("--pdb-only", action="store_true",
+                    help="只补传调试符号（PDB），允许操作已公开的 release；"
+                         "不建草稿、不 PATCH、不校验；失败返回 1（调用方只应告警）")
     args = ap.parse_args()
 
     root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     package_dir = args.package
     if not os.path.isabs(package_dir):
         package_dir = os.path.join(root, package_dir)
+
+    if args.pdb_only:
+        return publish_pdb_only(args, root, package_dir)
 
     notes_path = os.path.join(package_dir, "RELEASE_NOTES.md")
     if os.path.isfile(notes_path) and not args.generate_notes_only:
@@ -426,35 +546,12 @@ def main():
         return 1
 
     existing = {a["name"] for a in rel.get("assets", [])}
-    bins = []
-    sigs = []
-    pdbs = []
-    if os.path.isdir(package_dir):
-        for name in sorted(os.listdir(package_dir)):
-            p = os.path.join(package_dir, name)
-            if not os.path.isfile(p):
-                continue
-            low = name.lower()
-            if low.endswith((".exe", ".msi")):
-                if args.version not in name:
-                    # stale bundle from an older release: never upload or checksum it
-                    log("  [skip] %s: not version %s" % (name, args.version))
-                    continue
-                bins.append(p)
-            elif low.endswith(".sig"):
-                # 签名与安装包必须同批上传：latest.json 引用的就是这些文件，
-                # 少一个就等价于给客户端一个 404 的更新源
-                if args.version in name:
-                    sigs.append(p)
-            elif low.endswith((".pdb", ".pdb.zip")):
-                # 调试符号与安装包同批上传：崩溃 dump 只有配上这一版 exe 的
-                # PDB（GUID+Age 匹配）才能精确符号化，漏发即该版本不可查。
-                # 打包产出的是压缩包（PDB 原样上百 MB，经代理上传会被重置），
-                # 原始 .pdb 也接受，便于手工补传。
-                if args.version in name:
-                    pdbs.append(p)
+    bins, sigs, pdbs = collect_package_assets(package_dir, args.version)
 
-    assets = bins + sigs + pdbs
+    # 主发布只发必需资产：安装包 + 签名（latest.json 引用的就是它们，
+    # 少一个就等价于给客户端一个 404 的更新源）。PDB（符号）不是运行时依赖，
+    # 一律走 --pdb-only 在发布后补传，绝不允许它阻断发布。
+    assets = bins + sigs
     if manifest:
         assets.append(os.path.join(package_dir, "latest.json"))
 
@@ -474,28 +571,7 @@ def main():
         if name in existing:
             log("  [skip] %s (already uploaded)" % name)
             continue
-        with open(path, "rb") as f:
-            data = f.read()
-        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
-        url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
-        st, res = None, None
-        # 大文件（PDB 上百 MB）经本地代理上传时偶发连接被远端重置，
-        # 属瞬时网络错误，多试几次再判失败；网络异常必须在这里接住，
-        # 否则未捕获的 URLError 会让整个脚本崩掉，连 fail-closed 都走不到。
-        for attempt in (1, 2, 3):
-            try:
-                st, res = gh.call("POST", url, data, ctype)
-            except (urllib.error.URLError, ssl.SSLError, OSError) as e:
-                st, res = None, e
-            if st in (200, 201):
-                break
-            if attempt < 3:
-                log("  [retry] %s failed (%s), retrying %d/3 ..." % (name, st, attempt))
-                time.sleep(2 * attempt)
-        if st in (200, 201):
-            log("  [ok] %s  %.1f MB" % (name, len(data) / 1024.0 / 1024.0))
-        else:
-            log("  [FAIL] %s HTTP %s: %s" % (name, st, res))
+        if not upload_with_retry(gh, upload_base, path):
             failed = True
 
     # 草稿在 tags 端点查不到，按 id 取最终状态（草稿/已发布均有效）。
