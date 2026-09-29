@@ -169,6 +169,16 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("--draft", batch)
         self.assertIn("--draft=false", batch)
 
+    def test_release_bat_decouples_pdb_from_publish(self):
+        # PDB 必须在发布后 best-effort 补传：ASSETS 段不得含 .pdb，
+        # 且脚本必须提供 --pdb-only 与 gh release upload 两条补传路径。
+        batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
+        assets_block = batch[batch.index('set "ASSETS="'):batch.index("where gh >nul")]
+        self.assertNotIn(".pdb", assets_block)
+        self.assertIn("--pdb-only", batch)
+        self.assertIn("gh release upload", batch)
+        self.assertIn("call :upload_pdb", batch)
+
     def test_installer_and_unsigned_portable_have_distinct_entries(self):
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)

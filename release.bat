@@ -323,10 +323,8 @@ for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do set "ASSETS=!ASSETS!
 rem 签名与 updater 清单同样是 Release 资产：客户端按 latest.json 找安装包，
 rem 少一个都会让自动更新 404
 for %%f in ("%BIN%\package\*.exe.sig" "%BIN%\package\*.msi.sig") do set "ASSETS=!ASSETS! "%%f""
-rem PDB（调试符号）同样是 Release 资产：客户端崩溃 dump 必须用「与那个 exe
-rem 同批构建」的 PDB 才能精确符号化，漏发这一版就永久查不了。
-rem 打包产出的是 .pdb.zip（压缩后才经得起代理上传），原始 .pdb 一并兼容。
-for %%f in ("%BIN%\package\*.pdb.zip" "%BIN%\package\*.pdb") do set "ASSETS=!ASSETS! "%%f""
+rem PDB（调试符号）不在发布关键路径上：它是非运行时依赖，上传失败/被网络重置
+rem 都不该拖垮整次发布。改由发布成功后 best-effort 补传（见 :upload_pdb）。
 rem Manifest and checksums are generated above, so collect them after generation.
 if exist "%BIN%\package\latest.json" set "ASSETS=!ASSETS! "%BIN%\package\latest.json""
 if exist "%BIN%\package\SHA256SUMS.txt" set "ASSETS=!ASSETS! "%BIN%\package\SHA256SUMS.txt""
@@ -356,6 +354,7 @@ if errorlevel 1 goto :release_fail
 echo     release v%VER% published
 call :verify_latest
 if errorlevel 1 goto :release_fail
+call :upload_pdb
 popd
 goto :summary
 
@@ -369,6 +368,7 @@ if errorlevel 1 (
 echo     release v%VER% published
 call :verify_latest
 if errorlevel 1 goto :release_fail
+call :upload_pdb
 popd
 goto :summary
 
@@ -394,6 +394,23 @@ if errorlevel 1 (
   exit /b 1
 )
 echo     latest.json ok
+exit /b 0
+
+:upload_pdb
+rem PDB 是发布后的 best-effort 补传：失败只告警，绝不回退已完成的发布。
+rem 优先用 python 脚本（带重试/退避，允许操作已公开 release）；无 python 时
+rem 退化为 gh release upload。两条路径都不影响本子过程的返回值。
+if defined PYEXE (
+  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --pdb-only
+  if errorlevel 1 echo   [WARN] PDB upload failed; rerun with --pdb-only to backfill.
+) else (
+  for %%f in ("%BIN%\package\*.pdb.zip" "%BIN%\package\*.pdb") do (
+    if exist "%%f" (
+      gh release upload "v%VER%" "%%f" --repo "%REPO%" --clobber
+      if errorlevel 1 echo   [WARN] PDB upload failed: %%f
+    )
+  )
+)
 exit /b 0
 
 :release_fail
