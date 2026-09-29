@@ -2150,7 +2150,7 @@ button:active {
 }
 
 /* ====== 自动更新：下载进度条（由 update-progress 事件驱动） ====== */
-/* flex 布局会压过通用 .hidden 的 visibility 类，必须显式写 display:none 覆盖 */
+/* 通用 .hidden 为 display:none!important；此处按规约对自带 display 的容器再显式兜底一层，防工具类日后调整 */
 .upd-progress { display: flex; flex-direction: column; gap: 6px; }
 .upd-progress.hidden { display: none; }
 .upd-progress-track {
