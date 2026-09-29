@@ -812,7 +812,8 @@ async fn start_update_installed(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 绿色版（Task 6 前的过渡）：保持原有「把 url 交给助手下载」的行为。
+/// 绿色版：主程序带进度下载 → SHA256 校验 → 落盘交接文件 → 起内置助手复核替换。
+/// 下载从助手提前到主程序，才能把真实进度发给前端；助手只做「复核 + 原子替换」。
 async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
     let rel = tauri::async_runtime::spawn_blocking(update::fetch_remote)
         .await
@@ -830,13 +831,76 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+    let file_name = url.rsplit('/').next().unwrap_or("");
+    if file_name.is_empty() {
+        return Err("下载地址里没有文件名".to_string());
+    }
+    let expected = update::find_hash_in_sums(&sums, file_name)
+        .ok_or_else(|| format!("SHA256SUMS.txt 里没有 {file_name} 的哈希"))?;
+
+    // 下载 + 重试都在阻塞线程里跑（不卡 async 运行时）；AppHandle 先克隆好分给各闭包
+    let progress_app = app.clone();
+    let download_url = url.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let downloading_app = progress_app.clone();
+        let retry_app = progress_app;
+        let mut last_pct: i64 = -2;
+        let mut last_at = std::time::Instant::now();
+        let fetcher = update::RealFetcher;
+        update::download_with_retry(
+            &fetcher,
+            &download_url,
+            &mut |done: u64, total: Option<u64>, attempt: u32| {
+                let pct = match total {
+                    Some(t) if t > 0 => (done as f64 / t as f64 * 100.0) as i64,
+                    _ => -1,
+                };
+                let now = std::time::Instant::now();
+                if pct != last_pct || now.duration_since(last_at) >= std::time::Duration::from_millis(120) {
+                    last_pct = pct;
+                    last_at = now;
+                    update::emit_progress(&downloading_app, "downloading", done, total, attempt);
+                }
+            },
+            &mut |attempt: u32, _err: &str| {
+                update::emit_progress(&retry_app, "retrying", 0, None, attempt);
+            },
+            &mut |attempt: u32| {
+                let secs = if attempt <= 1 { 1u64 } else { 3u64 };
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| {
+        update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
+        e
+    })?;
+
+    update::emit_progress(
+        &app,
+        "verifying",
+        bytes.len() as u64,
+        Some(bytes.len() as u64),
+        1,
+    );
+    if !update::sha256_hex(&bytes).eq_ignore_ascii_case(&expected) {
+        update::emit_progress(&app, "error", 0, None, 1);
+        return Err(format!("SHA256 校验失败：期望 {expected}"));
+    }
+
+    // 校验通过才落盘交接文件（与 exe 同目录同卷，助手改名是原子操作）
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let args = update::build_helper_args(
+    let staging = format!("{}.download", exe.to_string_lossy());
+    std::fs::write(&staging, &bytes).map_err(|e| e.to_string())?;
+
+    let args = update::build_helper_args_local(
         &exe.to_string_lossy(),
         std::process::id(),
-        &url,
-        &sums,
-    )?;
+        &staging,
+        &expected,
+    );
     let mut argv = vec![
         "--apply-update".to_string(),
         "--target".to_string(),
@@ -846,13 +910,20 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
         argv.push("--wait-pid".to_string());
         argv.push(pid.to_string());
     }
-    let update::Source::Url(url) = &args.source else {
-        return Err("内部错误：助手参数不是 url 来源".to_string());
+    let update::Source::Local(staging_path) = &args.source else {
+        return Err("内部错误：交接参数不是本地文件来源".to_string());
     };
-    argv.push("--url".to_string());
-    argv.push(url.clone());
+    argv.push("--local-file".to_string());
+    argv.push(staging_path.clone());
     argv.push("--sha256".to_string());
     argv.push(args.sha256.clone());
+    update::emit_progress(
+        &app,
+        "installing",
+        bytes.len() as u64,
+        Some(bytes.len() as u64),
+        1,
+    );
     std::process::Command::new(&exe)
         .args(&argv)
         .spawn()

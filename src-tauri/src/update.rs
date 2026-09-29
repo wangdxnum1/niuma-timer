@@ -216,7 +216,7 @@ const WAIT_MAX_POLLS: u32 = 60;
 /// 助手流程所需的最小 IO 能力。
 ///
 /// 状态机 `run_helper_flow` 只依赖本 trait，真实实现走系统调用，
-/// 单测用假实现注入「下载内容 / 重命名失败 / 进程僵死」，无需碰真实文件与网络。
+/// 单测用假实现注入「取更新包内容 / 重命名失败 / 进程僵死」，无需碰真实文件与网络。
 pub trait HelperIo {
     /// 指定 pid 的进程是否仍存活
     fn is_running(&self, pid: u32) -> bool;
@@ -668,6 +668,7 @@ pub fn download_with_retry<F: Fetcher>(
 }
 
 /// 组装助手参数：下载地址里的文件名 → 去 SHA256SUMS.txt 取期望哈希。
+#[allow(dead_code)]
 pub fn build_helper_args(
     target: &str,
     wait_pid: u32,
@@ -859,7 +860,7 @@ mod tests {
         assert_eq!(find_hash_in_sums("deadbeef  x.exe\n", "x.exe"), None);
     }
     use std::cell::{Cell, RefCell};
-    /// 假 IO：记录调用序列，可注入「下载内容 / 某次重命名失败 / 进程永不退出」。
+    /// 假 IO：记录调用序列，可注入「取更新包内容 / 某次重命名失败 / 进程永不退出」。
     /// 手写 `Default`——`Result` 没实现 `Default`，不能 derive。
     struct FakeIo {
         /// read 返回值
@@ -938,7 +939,7 @@ mod tests {
         }
     }
 
-    /// 与 FakeIo 默认下载内容 `[1, 2, 3]` 哈希对齐的助手参数
+    /// 与 FakeIo 默认取更新包内容 `[1, 2, 3]` 哈希对齐的助手参数
     fn helper_args_for_test() -> HelperArgs {
         HelperArgs {
             target: "C:\\app\\niuma-timer.exe".to_string(),
