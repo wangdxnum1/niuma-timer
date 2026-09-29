@@ -29,3 +29,12 @@ if "%CARGO_BIN%"=="cargo" (
   where cargo >nul 2>&1
   if errorlevel 1 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 )
+
+rem release builds embed version/icon resources via rc.exe (Windows Kits).
+rem Plain terminals lack it in PATH; probe the newest SDK copy and pin RC
+rem (embed_resource honors $RC before $PATH). Override: set "RC=<full path>".
+if not defined RC (
+  for /f "delims=" %%d in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
+    if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
+  )
+)
