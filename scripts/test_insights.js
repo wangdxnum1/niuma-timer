@@ -27,8 +27,10 @@ function eq(label, actual, expect) {
     console.log("  FAIL " + label + "  ->  " + actual + "  (期望 " + expect + ")");
   }
 }
+// 源码断言归一：两侧去全部空白、忽略闭符/串尾前的尾逗号——免疫 rustfmt 折行与多行化补逗号；token 序列仍须完整命中，断言强度不降。
+const norm = (s) => s.replace(/\s+/g, "").replace(/,(?=[)\]}]|$)/g, "");
 function has(label, src, needle) {
-  eq(label, src.includes(needle), true);
+  eq(label, norm(src).includes(norm(needle)), true);
 }
 
 // ---------------------------------------------------------------- 1. insights.rs 聚合核心

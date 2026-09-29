@@ -10,8 +10,10 @@ let pass = 0, fail = 0;
 const eq = (name, a, b) => {
   if (a === b) { pass++; } else { fail++; console.log("FAIL " + name + "  期望 " + JSON.stringify(b) + " 实际 " + JSON.stringify(a)); }
 };
-const has = (name, hay, needle) => eq(name, hay.includes(needle), true);
-const lacks = (name, hay, needle) => eq(name, hay.includes(needle), false);
+// 源码断言归一：两侧去全部空白、忽略闭符/串尾前的尾逗号——免疫 rustfmt 折行与多行化补逗号；token 序列仍须完整命中，断言强度不降。
+const norm = (s) => s.replace(/\s+/g, "").replace(/,(?=[)\]}]|$)/g, "");
+const has = (name, hay, needle) => eq(name, norm(hay).includes(norm(needle)), true);
+const lacks = (name, hay, needle) => eq(name, norm(hay).includes(norm(needle)), false);
 
 const rsConfig = read("src-tauri/src/config.rs");
 const rsBill = read("src-tauri/src/weekbill.rs");

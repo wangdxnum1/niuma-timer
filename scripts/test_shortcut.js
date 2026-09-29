@@ -47,7 +47,7 @@ ok("仅 Pressed 时触发（防重复）", /event\.state == ShortcutState::Press
 ok("注册失败只记日志不中断", /全局快捷键 Alt\+Shift\+N 注册失败（可能被占用）/.test(mainSrc));
 
 console.log("== Rust：接线与配置 ==");
-ok("setup 时应用快捷键", /apply_shortcuts\(app\.handle\(\),/.test(mainSrc));
+ok("setup 时应用快捷键", /apply_shortcuts\(\s*app\.handle\(\),/.test(mainSrc));
 ok("save_config 后重应用快捷键", /apply_shortcuts\(&app, &merged\);/.test(mainSrc));
 ok("global-shortcut 插件已注册", /tauri_plugin_global_shortcut::Builder::new\(\)\.build\(\)/.test(mainSrc));
 ok("config.rs 有 shortcuts_enabled 字段", /pub shortcuts_enabled: bool,/.test(configSrc));
