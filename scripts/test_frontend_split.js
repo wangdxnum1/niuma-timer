@@ -77,7 +77,7 @@ for (const name of CHUNKS.slice(0, -1)) {
   if (!fs.existsSync(p)) continue;
   const bad = [];
   fs.readFileSync(p, "utf8").split("\n").forEach((line, i) => {
-    if (line.length > 0 && !TOP_OK.test(line)) bad.push(`  L${i + 1}: ${line.trim().slice(0, 80)}`);
+    if (line.length > 0 && !/^[ \t]/.test(line) && !TOP_OK.test(line)) bad.push(`  L${i + 1}: ${line.trim().slice(0, 80)}`);
   });
   if (bad.length) failures.push(`${name} 顶层出现白名单之外的语句：\n${bad.join("\n")}`);
 }
