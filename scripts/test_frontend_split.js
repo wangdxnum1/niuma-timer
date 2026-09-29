@@ -70,8 +70,8 @@ if (!fs.existsSync(corePath)) {
 
 // -- 4. 非 boot 块顶层白名单（声明-挂载） ------------------------------------
 // 顶层（列 0）非空行仅允许：声明（function/async function/const/let/var）、
-// 纯挂载（$、document.*、window.*）、块结尾（}/)）、注释。裸业务调用即红。
-const TOP_OK = /^(function\b|async function\b|const\b|let\b|var\b|\$|document\.|window\.|\}|\)|\/\/|\/\*| \*|\*\/)/;
+// 纯挂载（$、document.*、window.*）、块/数组字面量续行（}/)/]/[）、注释。裸业务调用即红。
+const TOP_OK = /^(function\b|async function\b|const\b|let\b|var\b|\$|document\.|window\.|\}|\)|\]|\[|\/\/|\/\*| \*|\*\/)/;
 for (const name of CHUNKS.slice(0, -1)) {
   const p = path.join(JS_DIR, name);
   if (!fs.existsSync(p)) continue;
