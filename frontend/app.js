@@ -1,3 +1,4 @@
+// drift-guard-self-test
 // 牛马计时器 主界面前端逻辑
 // window.__TAURI__ 由 Rust 端 append_invoke_initialization_script 注入的垫片暴露
 const TAURI = window.__TAURI__;
