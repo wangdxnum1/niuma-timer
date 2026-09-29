@@ -774,7 +774,10 @@
         <button id="updUpdateBtn" class="primary hidden">立即更新</button>
         <button id="updSkipBtn" class="ghost">跳过此版本</button>
       </div>
-      <p id="updProgress" class="hint hidden"></p>
+      <div id="updProgress" class="upd-progress hidden" role="status" aria-live="polite">
+        <div class="upd-progress-track"><div id="updProgressFill" class="upd-progress-fill"></div></div>
+        <p id="updProgressText" class="upd-progress-text"></p>
+      </div>
     </div>
     </div>
     <!-- /右侧内容列 -->

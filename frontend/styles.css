@@ -2148,3 +2148,30 @@ button:active {
 .backup-row.broken button[disabled] {
   cursor: not-allowed;
 }
+
+/* ====== 自动更新：下载进度条（由 update-progress 事件驱动） ====== */
+/* flex 布局会压过通用 .hidden 的 visibility 类，必须显式写 display:none 覆盖 */
+.upd-progress { display: flex; flex-direction: column; gap: 6px; }
+.upd-progress.hidden { display: none; }
+.upd-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.upd-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: #ffd650;
+  transition: width 0.2s linear;
+}
+.upd-progress.indeterminate .upd-progress-fill {
+  width: 40%;
+  animation: upd-sweep 1.2s infinite linear;
+}
+@keyframes upd-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.upd-progress-text { margin: 0; font-size: 13px; color: #b8b8be; overflow-wrap: anywhere; }

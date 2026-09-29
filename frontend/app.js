@@ -1832,6 +1832,7 @@ function showView(id) {
   if (id === "viewUpdate") {
     if (updateAnnounce) paintUpdate();
     else loadUpdateInfo();
+    paintUpdateProgress();
   }
   // 懒渲染下目标视图可能从未画过（或还停留在上次的数据），立刻补一次，
   // 否则要等下一个轮询周期才出内容。
@@ -2731,6 +2732,9 @@ let updateAnnounce = null;
 let updateChecking = false;
 let updateSettingsScroll = 0;
 
+// 最近一次 update-progress 事件；null = 无进行中的更新
+let updateProgress = null;
+
 // 把 CHANGELOG 片段的 markdown 源码转成安全的 HTML：先整体转义再还原有限标记，
 // 支持 标题/列表/围栏代码块/粗体/行内代码；链接只展示文字 + title，不可点击，
 // 避免更新说明里的外链把用户带离应用。
@@ -2825,6 +2829,49 @@ function paintUpdate() {
   );
 }
 
+// 画下载进度：由 update-progress 事件驱动；retrying/error 保持上次的进度条位置
+function paintUpdateProgress() {
+  const box = $("updProgress");
+  const fill = $("updProgressFill");
+  const text = $("updProgressText");
+  if (!updateProgress || !updateProgress.phase) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const mb = (n) => (n / 1048576).toFixed(1);
+  const p = updateProgress;
+  if (p.phase === "downloading") {
+    if (p.total) {
+      const pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
+      box.classList.remove("indeterminate");
+      fill.style.width = pct + "%";
+      text.textContent = "正在下载… " + pct + "%（" + mb(p.downloaded) + " / " + mb(p.total) + " MB）";
+    } else {
+      box.classList.add("indeterminate");
+      fill.style.width = "";
+      text.textContent = "正在下载… " + mb(p.downloaded) + " MB";
+    }
+  } else if (p.phase === "retrying") {
+    text.textContent = "网络中断，正在重试（第 " + p.attempt + " 次）…";
+  } else if (p.phase === "verifying") {
+    box.classList.remove("indeterminate");
+    fill.style.width = "100%";
+    text.textContent = "下载完成，正在校验完整性…";
+  } else if (p.phase === "installing") {
+    box.classList.remove("indeterminate");
+    fill.style.width = "100%";
+    text.textContent = updateInfo && updateInfo.installed
+      ? "正在安装，安装程序将自动关闭本程序…"
+      : "正在替换程序文件，即将自动重启…";
+  } else if (p.phase === "restarting") {
+    fill.style.width = "100%";
+    text.textContent = "正在重启…";
+  } else if (p.phase === "error") {
+    text.textContent = "更新失败：" + (p.message || "未知错误");
+  }
+}
+
 async function loadUpdateInfo() {
   if (updateChecking) return;
   updateChecking = true;
@@ -2853,6 +2900,18 @@ async function watchUpdateView() {
   }
 }
 
+// 订阅后端下载进度；事件系统若不通则进度条停留在最近一次画面——不阻塞更新本身
+async function watchUpdateProgress() {
+  try {
+    await TAURI.event.listen("update-progress", (evt) => {
+      updateProgress = evt && evt.payload ? evt.payload : null;
+      if (curView === "viewUpdate") paintUpdateProgress();
+    });
+  } catch (err) {
+    flog("update progress listen failed: " + (err && err.message ? err.message : String(err)));
+  }
+}
+
 $("updCheckBtn").addEventListener("click", loadUpdateInfo);
 // 设置页「检查更新」= 进更新页；取数由 showView 收尾统一触发，这里不重复发一次请求
 $("settingsCheckUpdateBtn").addEventListener("click", () => {
@@ -2870,19 +2929,18 @@ $("updSkipBtn").addEventListener("click", async () => {
     showToast("跳过失败：" + (e && e.message ? e.message : String(e)), "err");
   }
 });
-// 立即更新：命令内部完成下载+安装并让进程退出/重启，这里只负责把状态显示出来
+// 立即更新：进度由 update-progress 事件驱动；失败时窗口不再消失，可直接看到原因并重试
 $("updUpdateBtn").addEventListener("click", async () => {
   const button = $("updUpdateBtn");
   if (button.disabled) return;
   button.disabled = true;
-  const p = $("updProgress");
-  p.classList.remove("hidden");
-  p.textContent = "正在准备下载…";
+  updateProgress = { phase: "downloading", downloaded: 0, total: 0, attempt: 1 };
+  paintUpdateProgress();
   try {
     await invoke("start_update");
-    p.textContent = "正在下载并安装，完成后程序会自动重启…";
   } catch (e) {
-    p.textContent = "更新失败：" + (e && e.message ? e.message : String(e));
+    updateProgress = { phase: "error", message: e && e.message ? e.message : String(e) };
+    paintUpdateProgress();
     button.disabled = false;
   }
 });
@@ -2890,6 +2948,7 @@ $("updUpdateBtn").addEventListener("click", async () => {
 boot();
 watchVisibility();
 watchUpdateView();
+watchUpdateProgress();
 // 以下轮询全部受 winVisible 约束：窗口 hide 到托盘时直接跳过，
 // 不再空跑「每 2 秒三次 IPC + SQLite 聚合查询 + 图标 base64 回传」。
 setInterval(() => { if (winVisible) tick(); }, 1000);

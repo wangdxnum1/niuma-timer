@@ -13,7 +13,7 @@ function fn(name) {
 }
 function element() {
   const classes = new Set();
-  return {textContent: '', disabled: false, dataset: {}, scrollTop: 0,
+  return {textContent: '', disabled: false, dataset: {}, scrollTop: 0, style: {},
     setAttribute(name, value) {this[name] = value;}, focus() {},
     classList: {toggle(c, on) {if(on) classes.add(c); else classes.delete(c);},
       add(c) {classes.add(c);}, remove(c) {classes.delete(c);}, contains(c) {return classes.has(c);}}};
@@ -24,12 +24,12 @@ function element() {
   assert(/\.upd-version-number\s*\{[^}]*font-size:\s*26px/s.test(css), 'readable version numbers');
   const els = new Map(); const $ = id => {if(!els.has(id)) els.set(id, element()); return els.get(id);};
   const pending = [];
-  const ctx = {$, updateInfo:null, updateAnnounce:null, updateChecking:false, updateSettingsScroll:0,
+  const ctx = {$, updateInfo:null, updateAnnounce:null, updateChecking:false, updateSettingsScroll:0, updateProgress:null,
     invoke: () => new Promise((resolve, reject) => pending.push({resolve, reject})),
     curView:'viewSettings', DETAIL_VIEWS:[], document:{querySelectorAll:()=>[]},
     saveIfChanged(){}, repaintCurrentView(){}, resetHistDates(){}};
   vm.createContext(ctx);
-  vm.runInContext(['renderMarkdown','paintUpdate','loadUpdateInfo','showView','returnFromUpdate'].map(fn).join('\n'), ctx);
+  vm.runInContext(['renderMarkdown','paintUpdate','paintUpdateProgress','loadUpdateInfo','showView','returnFromUpdate'].map(fn).join('\n'), ctx);
   assert.equal(ctx.renderMarkdown(''), '暂无更新说明');
   const md = ctx.renderMarkdown('## 更新日志\n\n### 修复\n\n- 修复**崩溃**问题，见 `main.rs`\n1. 第一步\n\n<script>alert(1)</script>');
   assert(md.includes('<h4>更新日志</h4>'), 'h4 heading');
@@ -61,5 +61,17 @@ function element() {
   ctx.returnFromUpdate();
   assert.equal(ctx.curView,'viewSettings');
   assert.equal($('viewSettings').scrollTop,480);
+  ctx.updateProgress = {phase:'downloading', downloaded: 5*1048576, total: 10*1048576, attempt: 1};
+  ctx.paintUpdateProgress();
+  assert.equal($('updProgressFill').style.width, '50%');
+  assert($('updProgressText').textContent.includes('50%'), 'percent in text');
+  assert(!$('updProgress').classList.contains('hidden'));
+  assert(!$('updProgress').classList.contains('indeterminate'));
+  ctx.updateProgress = {phase:'downloading', downloaded: 3*1048576, total: 0, attempt: 1};
+  ctx.paintUpdateProgress();
+  assert($('updProgress').classList.contains('indeterminate'), 'unknown total -> sweep');
+  ctx.updateProgress = null;
+  ctx.paintUpdateProgress();
+  assert($('updProgress').classList.contains('hidden'), 'no progress -> hidden');
   console.log('Update UI: navigation, scroll, versions, busy guard and retry passed');
 })().catch(e=>{console.error(e);process.exit(1);});
