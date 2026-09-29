@@ -338,17 +338,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// 真实 IO 实现：进程探测复用 `win::process_exe_path`，下载走 reqwest blocking，
-/// 日志追加写 exe 同目录 `update-helper.log`。
+/// 日志追加写用户数据目录 `%APPDATA%/niuma-timer/update-helper.log`（与 debug.log/panic.log 同处，便于排障）。
 pub struct RealHelperIo {
     log_path: PathBuf,
 }
 
 impl RealHelperIo {
     pub fn new() -> Self {
-        let dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("."));
+        let dir = crate::config::config_dir();
+        let _ = std::fs::create_dir_all(&dir);
         Self {
             log_path: dir.join("update-helper.log"),
         }
