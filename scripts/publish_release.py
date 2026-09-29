@@ -19,6 +19,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import random
 import re
 import socket
 import ssl
@@ -43,6 +44,40 @@ DEFAULT_BRANCH = os.environ.get("NIUMA_DEFAULT_BRANCH", "main")
 
 def log(msg):
     print(msg, flush=True)
+
+
+def upload_with_retry(gh, upload_base, path, attempts=4):
+    """上传单个资产；成功返回 True，仅在瞬时错误上重试。
+
+    大文件（PDB 可达数十 MB）经本地代理上传时偶发连接被远端重置（Errno 10054），
+    属瞬时网络错误，重试几次再判失败；永久错误（4xx，如 422 已存在 / 403 无权限）
+    立即放弃，避免在无意义的重试上空转。网络异常必须在这里接住，否则未捕获的
+    URLError 会让整个脚本崩掉，连 fail-closed 都走不到。
+    """
+    name = os.path.basename(path)
+    with open(path, "rb") as f:
+        data = f.read()
+    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
+    mb = len(data) / 1024.0 / 1024.0
+    st, res = None, None
+    for attempt in range(1, attempts + 1):
+        try:
+            st, res = gh.call("POST", url, data, ctype)
+        except (urllib.error.URLError, ssl.SSLError, OSError) as e:
+            st, res = None, "%s: %s" % (type(e).__name__, e)
+        if st in (200, 201):
+            log("  [ok] %s  %.1f MB" % (name, mb))
+            return True
+        if isinstance(st, int) and 400 <= st < 500:
+            break
+        if attempt < attempts:
+            delay = min(2 ** (attempt - 1) * 2, 30) + random.uniform(0, 1)
+            log("  [retry] %s  %.1f MB attempt %d/%d failed (%s), retry in %.1fs ..."
+                % (name, mb, attempt, attempts, st, delay))
+            time.sleep(delay)
+    log("  [FAIL] %s HTTP %s: %s" % (name, st, res))
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -474,28 +509,7 @@ def main():
         if name in existing:
             log("  [skip] %s (already uploaded)" % name)
             continue
-        with open(path, "rb") as f:
-            data = f.read()
-        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
-        url = "%s?name=%s" % (upload_base, urllib.parse.quote(name))
-        st, res = None, None
-        # 大文件（PDB 上百 MB）经本地代理上传时偶发连接被远端重置，
-        # 属瞬时网络错误，多试几次再判失败；网络异常必须在这里接住，
-        # 否则未捕获的 URLError 会让整个脚本崩掉，连 fail-closed 都走不到。
-        for attempt in (1, 2, 3):
-            try:
-                st, res = gh.call("POST", url, data, ctype)
-            except (urllib.error.URLError, ssl.SSLError, OSError) as e:
-                st, res = None, e
-            if st in (200, 201):
-                break
-            if attempt < 3:
-                log("  [retry] %s failed (%s), retrying %d/3 ..." % (name, st, attempt))
-                time.sleep(2 * attempt)
-        if st in (200, 201):
-            log("  [ok] %s  %.1f MB" % (name, len(data) / 1024.0 / 1024.0))
-        else:
-            log("  [FAIL] %s HTTP %s: %s" % (name, st, res))
+        if not upload_with_retry(gh, upload_base, path):
             failed = True
 
     # 草稿在 tags 端点查不到，按 id 取最终状态（草稿/已发布均有效）。

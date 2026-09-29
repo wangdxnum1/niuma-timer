@@ -59,7 +59,8 @@ class ManifestTests(unittest.TestCase):
                 gh.call.side_effect = call
                 argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0", "--package", d, "--root", d]
                 with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
-                     mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                     mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh), \
+                     mock.patch.object(release.time, "sleep"):
                     self.assertEqual(release.main(), 1 if fail_upload else 0)
                 self.assertEqual(any(c[0] == "PATCH" for c in calls), not fail_upload)
                 if not fail_upload:
@@ -225,6 +226,58 @@ class ManifestTests(unittest.TestCase):
             sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
             self.assertIn("niuma-timer-1.4.0-portable.exe", sums)
             self.assertNotIn(".pdb", sums)
+
+
+class UploadRetryTests(unittest.TestCase):
+    def _gh(self, responder):
+        gh = mock.Mock()
+        calls = []
+
+        def call(method, url, data=None, content_type=None):
+            calls.append(url)
+            return responder(len(calls))
+
+        gh.call.side_effect = call
+        return gh, calls
+
+    def test_retries_transient_then_succeeds(self):
+        # 瞬时错误（500）应重试，第 3 次成功则整体成功
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+            gh, calls = self._gh(lambda n: (500, {}) if n < 3 else (201, {}))
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 3)
+
+    def test_client_error_not_retried(self):
+        # 永久错误（422 已存在 / 403 无权限）不得重试，一次即判失败
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+            gh, calls = self._gh(lambda n: (422, {}))
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertFalse(ok)
+            self.assertEqual(len(calls), 1)
+
+    def test_network_error_is_retried(self):
+        # 连接被重置（Errno 10054）属瞬时错误，必须被接住并重试
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
+            p.write_bytes(b"x" * 32)
+
+            def responder(n):
+                if n < 4:
+                    raise ConnectionResetError(10054, "Connection reset by peer")
+                return 201, {}
+
+            gh, calls = self._gh(responder)
+            with mock.patch.object(release.time, "sleep"):
+                ok = release.upload_with_retry(gh, "https://upload.test/assets", str(p))
+            self.assertTrue(ok)
+            self.assertEqual(len(calls), 4)
 
 
 if __name__ == "__main__":
