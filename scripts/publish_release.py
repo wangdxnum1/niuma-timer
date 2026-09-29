@@ -80,6 +80,34 @@ def upload_with_retry(gh, upload_base, path, attempts=4):
     return False
 
 
+def collect_package_assets(package_dir, version):
+    """按版本筛选 package 目录下的资产，返回 (bins, sigs, pdbs)。
+
+    cargo tauri build 不会清理旧版本的 bundle，所以一律按版本号过滤，
+    避免把上一版的安装包/签名/符号混进本次 Release。PDB 单独成列，
+    因为它不是运行时依赖，不参与主发布的必需资产集合。
+    """
+    bins, sigs, pdbs = [], [], []
+    if os.path.isdir(package_dir):
+        for name in sorted(os.listdir(package_dir)):
+            p = os.path.join(package_dir, name)
+            if not os.path.isfile(p):
+                continue
+            low = name.lower()
+            if low.endswith((".exe", ".msi")):
+                if version not in name:
+                    log("  [skip] %s: not version %s" % (name, version))
+                    continue
+                bins.append(p)
+            elif low.endswith(".sig"):
+                if version in name:
+                    sigs.append(p)
+            elif low.endswith((".pdb", ".pdb.zip")):
+                if version in name:
+                    pdbs.append(p)
+    return bins, sigs, pdbs
+
+
 # --------------------------------------------------------------------------
 # network helpers
 # --------------------------------------------------------------------------
@@ -461,35 +489,12 @@ def main():
         return 1
 
     existing = {a["name"] for a in rel.get("assets", [])}
-    bins = []
-    sigs = []
-    pdbs = []
-    if os.path.isdir(package_dir):
-        for name in sorted(os.listdir(package_dir)):
-            p = os.path.join(package_dir, name)
-            if not os.path.isfile(p):
-                continue
-            low = name.lower()
-            if low.endswith((".exe", ".msi")):
-                if args.version not in name:
-                    # stale bundle from an older release: never upload or checksum it
-                    log("  [skip] %s: not version %s" % (name, args.version))
-                    continue
-                bins.append(p)
-            elif low.endswith(".sig"):
-                # 签名与安装包必须同批上传：latest.json 引用的就是这些文件，
-                # 少一个就等价于给客户端一个 404 的更新源
-                if args.version in name:
-                    sigs.append(p)
-            elif low.endswith((".pdb", ".pdb.zip")):
-                # 调试符号与安装包同批上传：崩溃 dump 只有配上这一版 exe 的
-                # PDB（GUID+Age 匹配）才能精确符号化，漏发即该版本不可查。
-                # 打包产出的是压缩包（PDB 原样上百 MB，经代理上传会被重置），
-                # 原始 .pdb 也接受，便于手工补传。
-                if args.version in name:
-                    pdbs.append(p)
+    bins, sigs, pdbs = collect_package_assets(package_dir, args.version)
 
-    assets = bins + sigs + pdbs
+    # 主发布只发必需资产：安装包 + 签名（latest.json 引用的就是它们，
+    # 少一个就等价于给客户端一个 404 的更新源）。PDB（符号）不是运行时依赖，
+    # 一律走 --pdb-only 在发布后补传，绝不允许它阻断发布。
+    assets = bins + sigs
     if manifest:
         assets.append(os.path.join(package_dir, "latest.json"))
 

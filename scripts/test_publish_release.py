@@ -187,9 +187,9 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
 
-    def test_debug_symbols_uploaded_but_not_checksummed(self):
-        # 崩溃 dump 只能靠与 exe 同批构建的 PDB（GUID+Age）符号化，所以 .pdb
-        # 必须随 Release 上传；但它不是给用户下载的安装包，不进 SHA256SUMS。
+    def test_debug_symbols_not_uploaded_in_default_flow(self):
+        # PDB 不是运行时依赖：默认发布只发必需资产，调试符号由 --pdb-only
+        # 在发布后 best-effort 补传（见 PdbOnlyTests）。PDB 失败绝不能阻断发布。
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
@@ -222,7 +222,7 @@ class ManifestTests(unittest.TestCase):
             with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"), \
                  mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
                 self.assertEqual(release.main(), 0)
-            self.assertIn("niuma-timer-1.4.0-portable.pdb", uploads)
+            self.assertNotIn("niuma-timer-1.4.0-portable.pdb", uploads)
             sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
             self.assertIn("niuma-timer-1.4.0-portable.exe", sums)
             self.assertNotIn(".pdb", sums)
