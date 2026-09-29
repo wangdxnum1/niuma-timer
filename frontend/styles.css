@@ -927,11 +927,33 @@ button:active {
   font-size: 13px;
   line-height: 1.65;
   color: #b9b9c0;
-  white-space: pre-wrap;
   word-break: break-word;
   max-height: 260px;
   overflow-y: auto;
 }
+.upd-notes h4 { margin: 10px 0 4px; font-size: 15px; color: #ececf0; }
+.upd-notes h5 { margin: 8px 0 2px; font-size: 13.5px; color: #ddd; }
+.upd-notes p { margin: 4px 0; }
+.upd-notes ul,
+.upd-notes ol { margin: 4px 0; padding-left: 20px; }
+.upd-notes li { margin: 2px 0; }
+.upd-notes code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+}
+.upd-notes pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.upd-notes pre code { padding: 0; background: none; font-size: 12px; }
+.upd-link { color: #ffd650; text-decoration: underline dotted; cursor: help; }
 
 /* ====== 设置卡内部层级：时间 2×2 网格 / 虚线分节 / 折叠长说明 ====== */
 .time-grid {

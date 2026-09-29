@@ -2731,6 +2731,53 @@ let updateAnnounce = null;
 let updateChecking = false;
 let updateSettingsScroll = 0;
 
+// 把 CHANGELOG 片段的 markdown 源码转成安全的 HTML：先整体转义再还原有限标记，
+// 支持 标题/列表/围栏代码块/粗体/行内代码；链接只展示文字 + title，不可点击，
+// 避免更新说明里的外链把用户带离应用。
+function renderMarkdown(text) {
+  if (!text || !text.trim()) return "暂无更新说明";
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const inline = (s) => esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="upd-link" title="$2">$1</span>');
+  const html = [];
+  let list = null;
+  let code = false;
+  const closeList = () => {
+    if (list) { html.push("</" + list + ">"); list = null; }
+  };
+  for (const raw of String(text).split(/\r?\n/)) {
+    if (raw.trim().startsWith("```")) {
+      if (code) { html.push("</code></pre>"); code = false; }
+      else { closeList(); html.push("<pre><code>"); code = true; }
+      continue;
+    }
+    if (code) { html.push(esc(raw)); continue; } // 围栏内容同样先转义，防止裸 HTML 成真标签
+    const t = raw.trim();
+    if (!t) { closeList(); continue; }
+    if (t.startsWith("### ")) { closeList(); html.push("<h5>" + inline(t.slice(4)) + "</h5>"); continue; }
+    if (t.startsWith("## ")) { closeList(); html.push("<h4>" + inline(t.slice(3)) + "</h4>"); continue; }
+    const ul = t.match(/^[-*] (.*)$/);
+    if (ul) {
+      if (list !== "ul") { closeList(); html.push("<ul>"); list = "ul"; }
+      html.push("<li>" + inline(ul[1]) + "</li>");
+      continue;
+    }
+    const ol = t.match(/^\d+\. (.*)$/);
+    if (ol) {
+      if (list !== "ol") { closeList(); html.push("<ol>"); list = "ol"; }
+      html.push("<li>" + inline(ol[1]) + "</li>");
+      continue;
+    }
+    closeList();
+    html.push("<p>" + inline(t) + "</p>");
+  }
+  closeList();
+  if (code) html.push("</code></pre>");
+  return html.join("\n");
+}
+
 function returnFromUpdate() {
   showView("viewSettings");
   $("viewSettings").scrollTop = updateSettingsScroll;
@@ -2762,13 +2809,13 @@ function paintUpdate() {
   } else {
     $("updStatus").textContent = "点击「检查更新」获取最新版本";
   }
-  $("updNotes").textContent = info && info.notes ? info.notes : "暂无更新说明";
+  $("updNotes").innerHTML = renderMarkdown(info && info.notes ? info.notes : "");
   $("updSkipBtn").disabled = !hasUpdate;
   $("updSkipBtn").classList.toggle("hidden", !hasUpdate);
   // 公告覆盖在检查结果之上，展示过即清空（后端也只会下发一次）
   if (updateAnnounce && !updateChecking) {
     $("updStatus").textContent = "已更新到当前版本";
-    $("updNotes").textContent = updateAnnounce;
+    $("updNotes").innerHTML = renderMarkdown(updateAnnounce);
     updateAnnounce = null;
   }
   // 仅在检查完成且有新版本时提供更新操作。

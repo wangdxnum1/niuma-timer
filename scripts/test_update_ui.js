@@ -29,7 +29,16 @@ function element() {
     curView:'viewSettings', DETAIL_VIEWS:[], document:{querySelectorAll:()=>[]},
     saveIfChanged(){}, repaintCurrentView(){}, resetHistDates(){}};
   vm.createContext(ctx);
-  vm.runInContext(['paintUpdate','loadUpdateInfo','showView','returnFromUpdate'].map(fn).join('\n'), ctx);
+  vm.runInContext(['renderMarkdown','paintUpdate','loadUpdateInfo','showView','returnFromUpdate'].map(fn).join('\n'), ctx);
+  assert.equal(ctx.renderMarkdown(''), '暂无更新说明');
+  const md = ctx.renderMarkdown('## 更新日志\n\n### 修复\n\n- 修复**崩溃**问题，见 `main.rs`\n1. 第一步\n\n<script>alert(1)</script>');
+  assert(md.includes('<h4>更新日志</h4>'), 'h4 heading');
+  assert(md.includes('<h5>修复</h5>'), 'h5 heading');
+  assert(md.includes('<li>修复<strong>崩溃</strong>问题，见 <code>main.rs</code></li>'), 'ul li + bold + code');
+  assert(md.includes('<li>第一步</li>'), 'ol li');
+  assert(md.includes('&lt;script&gt;'), 'raw html must be escaped');
+  const link = ctx.renderMarkdown('[首页](https://example.com)');
+  assert(link.includes('<span class="upd-link" title="https://example.com">首页</span>'), 'link as plain span');
   $('viewSettings').scrollTop = 480;
   ctx.showView('viewUpdate');
   assert.equal(ctx.updateSettingsScroll,480);
