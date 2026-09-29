@@ -4,10 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -516,6 +516,136 @@ pub fn find_hash_in_sums(sums: &str, file_name: &str) -> Option<String> {
     })
 }
 
+/// 前端进度事件名（payload 见 emit_progress）。
+pub const PROGRESS_EVENT: &str = "update-progress";
+
+/// 下载最大尝试次数（首次 + 2 次重试）。
+pub const DOWNLOAD_ATTEMPTS: u32 = 3;
+
+/// 向前端广播下载进度。事件发送失败直接忽略——进度只是锦上添花，
+/// 绝不能因为它打断更新。
+pub fn emit_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    downloaded: u64,
+    total: Option<u64>,
+    attempt: u32,
+) {
+    let payload = serde_json::json!({
+        "phase": phase,
+        "downloaded": downloaded,
+        "total": total,
+        "attempt": attempt,
+    });
+    let _ = app.emit(PROGRESS_EVENT, payload);
+}
+
+/// 下载能力抽象：把 url 内容取到 buf（从 buf 现有长度续传），
+/// 每收到一块数据回调 on_chunk(已下载, 总长)。真实实现走 reqwest blocking。
+pub trait Fetcher {
+    fn fetch(
+        &self,
+        url: &str,
+        buf: &mut Vec<u8>,
+        on_chunk: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String>;
+}
+
+/// 真实下载：15 秒连接超时 + 300 秒总超时 + 显式 UA（GitHub 对无 UA 请求限流）。
+/// buf 非空时带 Range 续传；服务端不支持（回 200 全量）则清空重来。
+pub struct RealFetcher;
+
+impl Fetcher for RealFetcher {
+    fn fetch(
+        &self,
+        url: &str,
+        buf: &mut Vec<u8>,
+        on_chunk: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String> {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(300))
+            .user_agent(concat!("niuma-timer/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let mut req = client.get(url);
+        if !buf.is_empty() {
+            req = req.header(reqwest::header::RANGE, format!("bytes={}-", buf.len()));
+        }
+        let mut resp = req.send().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::OK {
+            // 服务器不支持 Range（回了 200 全量）：丢掉半截，从头收
+            buf.clear();
+        } else if !status.is_success() {
+            return Err(format!("HTTP {status}"));
+        }
+        let total = resp.content_length().map(|n| buf.len() as u64 + n);
+        on_chunk(buf.len() as u64, total);
+        let mut chunk = [0u8; 65536];
+        loop {
+            let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Ok(());
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            on_chunk(buf.len() as u64, total);
+        }
+    }
+}
+
+/// 带重试的下载：最多 DOWNLOAD_ATTEMPTS 次；退避由 pause 回调执行（单测注入零等待）。
+/// buf 跨尝试保留——配合支持 Range 的 Fetcher 即为断点续传，服务端不支持时 fetch 内部清空重来。
+/// on_progress(已下载, 总长, 第几次尝试) 驱动进度；on_retry(下次尝试序号, 失败原因) 驱动提示。
+pub fn download_with_retry<F: Fetcher>(
+    fetcher: &F,
+    url: &str,
+    on_progress: &mut dyn FnMut(u64, Option<u64>, u32),
+    on_retry: &mut dyn FnMut(u32, &str),
+    pause: &mut dyn FnMut(u32),
+) -> Result<Vec<u8>, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut last_err = String::from("未知错误");
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        let mut seen_total: Option<u64> = None;
+        // 闭包同时可变借用 seen_total 与 on_progress，把 fetch 调用包进独立作用域，
+        // 让闭包在块末 drop，避免借用冲突
+        let result = {
+            let mut on_chunk = |downloaded: u64, total: Option<u64>| {
+                seen_total = total;
+                on_progress(downloaded, total, attempt);
+            };
+            fetcher.fetch(url, &mut buf, &mut on_chunk)
+        };
+        match result {
+            Ok(()) => {
+                // 流正常返回也可能被中途掐断：有总长就比长度，无总长只要非空即算完整
+                let complete = match seen_total {
+                    Some(len) => buf.len() as u64 >= len,
+                    None => !buf.is_empty(),
+                };
+                if complete {
+                    return Ok(buf);
+                }
+                last_err = if seen_total.is_some() {
+                    "传输提前中断".to_string()
+                } else {
+                    "响应内容为空".to_string()
+                };
+            }
+            Err(e) => last_err = e,
+        }
+        if attempt < DOWNLOAD_ATTEMPTS {
+            on_retry(attempt + 1, &last_err);
+            pause(attempt);
+        }
+    }
+    Err(format!(
+        "下载失败（已重试 {} 次）：{last_err}",
+        DOWNLOAD_ATTEMPTS - 1
+    ))
+}
+
 /// 组装助手参数：下载地址里的文件名 → 去 SHA256SUMS.txt 取期望哈希。
 pub fn build_helper_args(
     target: &str,
@@ -999,5 +1129,113 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(parse_helper_args(&argv).is_none());
+    }
+
+    // ---- download_with_retry：假 Fetcher 驱动断点续传 / 全量重来 / 重试耗尽 ----
+
+    struct FakeFetcher {
+        /// 完整的「服务器内容」
+        full: Vec<u8>,
+        /// 第 N 次 fetch 允许下发的字节数；None = 一次性给完
+        caps: Vec<Option<usize>>,
+        /// true = 无视 Range 从头发全量（模拟不支持续传的服务器）
+        ignore_range: bool,
+        fetch_calls: Cell<u32>,
+        /// 每次 fetch 时 buf 的既有长度（= 续传起点）
+        starts: RefCell<Vec<usize>>,
+    }
+
+    impl Fetcher for FakeFetcher {
+        fn fetch(&self, _url: &str, buf: &mut Vec<u8>, on_chunk: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+            let n = self.fetch_calls.get() + 1;
+            self.fetch_calls.set(n);
+            if self.ignore_range {
+                buf.clear();
+            }
+            self.starts.borrow_mut().push(buf.len());
+            let start = buf.len();
+            let cap = self.caps.get((n - 1) as usize).copied().flatten();
+            let end = match cap {
+                Some(k) => (start + k).min(self.full.len()),
+                None => self.full.len(),
+            };
+            buf.extend_from_slice(&self.full[start..end]);
+            on_chunk(buf.len() as u64, Some(self.full.len() as u64));
+            // 恒 Ok：把「传输不完整」的重试路径留给 download_with_retry 自己判
+            Ok(())
+        }
+    }
+
+    /// 跑一遍 download_with_retry，回收三类回调的调用记录
+    fn run_download(
+        fetcher: &FakeFetcher,
+    ) -> (
+        Result<Vec<u8>, String>,
+        Vec<(u64, Option<u64>, u32)>,
+        Vec<u32>,
+        Vec<u32>,
+    ) {
+        let mut progress = Vec::new();
+        let mut retries = Vec::new();
+        let mut pauses = Vec::new();
+        let out = download_with_retry(
+            fetcher,
+            "https://example.com/new.exe",
+            &mut |d, t, a| progress.push((d, t, a)),
+            &mut |a, _e| retries.push(a),
+            &mut |a| pauses.push(a),
+        );
+        (out, progress, retries, pauses)
+    }
+
+    #[test]
+    fn download_with_retry_resumes_from_breakpoint() {
+        // 第 1 次断在 4 字节，第 2 次从 4 续到 10：起点即证明带了 Range
+        let fetcher = FakeFetcher {
+            full: (0u8..10).collect(),
+            caps: vec![Some(4), None],
+            ignore_range: false,
+            fetch_calls: Cell::new(0),
+            starts: RefCell::new(Vec::new()),
+        };
+        let (out, progress, retries, pauses) = run_download(&fetcher);
+        assert_eq!(out.unwrap(), (0u8..10).collect::<Vec<u8>>());
+        assert_eq!(*fetcher.starts.borrow(), vec![0, 4]);
+        assert_eq!(fetcher.fetch_calls.get(), 2);
+        assert_eq!(retries, vec![2]);
+        assert_eq!(pauses, vec![1]);
+        assert_eq!(progress.last(), Some(&(10, Some(10), 2)));
+    }
+
+    #[test]
+    fn download_with_retry_restarts_when_range_ignored() {
+        // 服务端无视 Range 回全量：fetcher 内部清空重来，两次起点都是 0，结果仍完整
+        let fetcher = FakeFetcher {
+            full: (0u8..10).collect(),
+            caps: vec![Some(4), None],
+            ignore_range: true,
+            fetch_calls: Cell::new(0),
+            starts: RefCell::new(Vec::new()),
+        };
+        let (out, _progress, _retries, _pauses) = run_download(&fetcher);
+        assert_eq!(out.unwrap(), (0u8..10).collect::<Vec<u8>>());
+        assert_eq!(*fetcher.starts.borrow(), vec![0, 0]);
+    }
+
+    #[test]
+    fn download_with_retry_exhausts_attempts() {
+        // 每次都断在 3 字节：3 次全用完后报「已重试 2 次」
+        let fetcher = FakeFetcher {
+            full: (0u8..10).collect(),
+            caps: vec![Some(3), Some(3), Some(3)],
+            ignore_range: false,
+            fetch_calls: Cell::new(0),
+            starts: RefCell::new(Vec::new()),
+        };
+        let (out, _progress, retries, pauses) = run_download(&fetcher);
+        assert!(out.unwrap_err().contains("已重试 2 次"));
+        assert_eq!(fetcher.fetch_calls.get(), 3);
+        assert_eq!(retries, vec![2, 3]);
+        assert_eq!(pauses, vec![1, 2]);
     }
 }
