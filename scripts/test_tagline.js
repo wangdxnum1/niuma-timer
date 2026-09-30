@@ -1,4 +1,4 @@
-// 首页副标题文案的回归测试：从 app.js 抽出真实函数，用桩 DOM 跑所有状态分支。
+// 首页副标题文案的回归测试：从前端源码（feSource 聚合）抽出真实函数，用桩 DOM 跑所有状态分支。
 // 用法（任意目录）：node scripts/test_tagline.js
 const fs = require("fs");
 const path = require("path");

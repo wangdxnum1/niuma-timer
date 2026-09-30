@@ -1,6 +1,6 @@
 // 历史日期导航的回归测试：
-// 1) 从 app.js 抽出真实的日期工具函数跑边界（跨月、跨年、闰日、今天/昨天判定）
-// 2) 比对 app.js 里 $("id") 引用的元素在 index.html 中都存在
+// 1) 从前端源码（feSource 聚合）抽出真实的日期工具函数跑边界（跨月、跨年、闰日、今天/昨天判定）
+// 2) 比对前端源码里 $("id") 引用的元素在 index.html 中都存在
 // 运行：node scripts/test_date_nav.js
 const fs = require("fs");
 const path = require("path");
@@ -114,7 +114,7 @@ if (missing.length) {
   console.log("  FAIL html 中缺少元素 id: " + missing.join(", "));
 } else {
   pass++;
-  console.log("  PASS app.js 引用的 " + used.size + " 个 id 在 index.html 中全部存在");
+  console.log("  PASS 前端源码引用的 " + used.size + " 个 id 在 index.html 中全部存在");
 }
 
 // 本次新增的导航元素必须齐全

@@ -67,7 +67,7 @@ const invoke = appSrc.match(
 if (!invoke) throw new Error("找不到 save_overtime_record 的 input 对象");
 const jsKeys = objectKeys(invoke[1]);
 
-console.log("== ManualOvertimeInput 字段契约（overtime.rs ↔ app.js） ==");
+console.log("== ManualOvertimeInput 字段契约（overtime.rs ↔ 前端源码） ==");
 ok("解析到 ManualOvertimeInput 字段", fields.length >= 4);
 ok(
   "结构体字段为 snake_case（无大写字母）",

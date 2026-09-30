@@ -72,7 +72,7 @@ eq(
   "无"
 );
 
-// ---- 4. （反向）app.js 里 classList 切换 hidden 的目标 id 必须存在于 index.html ----
+// ---- 4. （反向）前端源码里 classList 切换 hidden 的目标 id 必须存在于 index.html ----
 const idsInHtml = new Set();
 const allIdRe = /\bid="([^"]+)"/g;
 let m;
@@ -81,7 +81,7 @@ while ((m = allIdRe.exec(html)) !== null) idsInHtml.add(m[1]);
 const toggled = new Set();
 const togRe = /\$\("([^"]+)"\)\.classList\.(?:add|remove|toggle)\(\s*"hidden"/g;
 while ((m = togRe.exec(appSrc)) !== null) toggled.add(m[1]);
-console.log("== app.js hidden 切换目标 ==");
+console.log("== 前端源码 hidden 切换目标 ==");
 eq("切换目标数 > 0", toggled.size > 0, true);
 const ghost = [...toggled].filter((id) => !idsInHtml.has(id));
 eq("切换的目标 id 在 index.html 不存在", ghost.length ? ghost.join(", ") : "无", "无");

@@ -1,4 +1,4 @@
-// 守护·暂停徽章的回归测试：从 app.js 抽出真实 renderBadge，用桩 DOM 跑全部分支。
+// 守护·暂停徽章的回归测试：从前端源码（feSource 聚合）抽出真实 renderBadge，用桩 DOM 跑全部分支。
 // 定时休息已砍（通知化改造）：徽章只剩手动暂停一种 off 态，无 rest_secs 分支。
 // 用法（任意目录）：node scripts/test_guard.js
 const fs = require("fs");

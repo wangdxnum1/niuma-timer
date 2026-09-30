@@ -34,9 +34,9 @@ function ok(label, cond) {
 
 async function main() {
   console.log("== 横幅机制已移除（前端） ==");
-  ok("app.js 不再引用 remind-banner", !/remind-banner/.test(appSrc));
-  ok("app.js 无横幅函数（showRemindBar/hideRemindBar）", !/function (show|hide)RemindBar\(/.test(appSrc));
-  ok("app.js 无旧横幅按钮接线（remindOk/remindRest）", !/\$\("remindOk"\)|\$\("remindRest"\)/.test(appSrc));
+  ok("前端源码不再引用 remind-banner", !/remind-banner/.test(appSrc));
+  ok("前端源码无横幅函数（showRemindBar/hideRemindBar）", !/function (show|hide)RemindBar\(/.test(appSrc));
+  ok("前端源码无旧横幅按钮接线（remindOk/remindRest）", !/\$\("remindOk"\)|\$\("remindRest"\)/.test(appSrc));
   ok("index.html 无横幅 DOM（remindBar/remindMsg）", !/id="remindBar"|id="remindMsg"/.test(htmlSrc));
   ok("styles.css 无 .remind-bar", !/\.remind-bar/.test(cssSrc));
 

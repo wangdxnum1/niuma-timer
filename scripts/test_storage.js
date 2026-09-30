@@ -1,5 +1,5 @@
 // 数据存储「总占用 + 分类细分」的回归测试：
-// 从 app.js 抽出真实的 fmtBytes / stgPct / renderStorageInfo，配桩 DOM 跑断言。
+// 从前端源码（feSource 聚合）抽出真实的 fmtBytes / stgPct / renderStorageInfo，配桩 DOM 跑断言。
 // 运行：node scripts/test_storage.js
 //
 // 关键约束：桩数据**不能手写字段名**。后端结构体是 snake_case 序列化，
@@ -63,7 +63,7 @@ function structFields(src, name) {
 const infoFields = structFields(rustSrc, "StorageInfo");
 const sliceFields = structFields(rustSrc, "StorageSlice");
 
-console.log("== 字段契约（maintain.rs ↔ app.js） ==");
+console.log("== 字段契约（maintain.rs ↔ 前端源码） ==");
 ok("解析到 StorageInfo 字段", infoFields.length >= 8);
 ok("字段为 snake_case（无大写字母）", !infoFields.some((f) => /[A-Z]/.test(f)));
 ok("字段为 snake_case 的 slice", !sliceFields.some((f) => /[A-Z]/.test(f)));

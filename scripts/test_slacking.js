@@ -1,6 +1,6 @@
 // 摸鱼统计回归测试（应用分类：工作/摸鱼/沟通/其他）：
 // 1) index.html：应用明细页有「今日构成」卡（catSummary 容器 + 说明文案）
-// 2) app.js：分类循环表 CAT_CYCLE（四类固定序）、catKey 配色映射、
+// 2) 前端源码：分类循环表 CAT_CYCLE（四类固定序）、catKey 配色映射、
 //    renderCategories 构成条渲染、cycleAppCategory 走 load_config→改 map→
 //    save_config 的覆盖写路径、主页监控卡摸鱼速览行（mon-slack）
 // 3) renderAppRows 支持 opts.chips 分类标签（仅明细页开启）
@@ -32,7 +32,7 @@ function has(label, src, needle) {
 eq("明细页有分类汇总容器 catSummary", html.includes('id="catSummary"'), true);
 has("构成卡说明文案（可点标签改分类）", html, "点下方应用行的分类标签可改");
 
-// ---------------------------------------------------------------- 2. app.js 分类逻辑
+// ---------------------------------------------------------------- 2. 前端源码分类逻辑
 has("分类循环表 CAT_CYCLE", appSrc, 'const CAT_CYCLE = ["工作", "摸鱼", "沟通", "其他"];');
 has("catKey 配色映射", appSrc, "function catKey(label)");
 has("构成条渲染 renderCategories", appSrc, "function renderCategories(s)");
@@ -59,7 +59,7 @@ eq("摸鱼率元素", html.includes('id="sbRate"'), true);
 eq("损味文案元素", html.includes('id="sbQuip"'), true);
 has("烧钱行位于 hero live 卡内", html, '<section class="card live">');
 
-// 3.2 app.js：纯函数与四档文案
+// 3.2 前端源码：纯函数与四档文案
 has("有四档文案表 SLACK_QUIPS", appSrc, "const SLACK_QUIPS");
 has("有纯函数 slackQuip", appSrc, "function slackQuip(pct)");
 has("文案：梦中情马", appSrc, "老板的梦中情马");
@@ -97,7 +97,7 @@ has("CSS：构成摸鱼金额红色", css, ".cat-money-slack");
 // ---------------------------------------------------------------- 4. 兜底：$() 引用存在
 const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
-eq("app.js 引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
+eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

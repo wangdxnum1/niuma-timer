@@ -2,11 +2,11 @@
 // 1) index.html：侧栏 .rail 三项（data-nav：viewMain/detail/viewSettings），
 //    主页首位、设置沉底（原生惯例）；每项含图标 + 可见文字标签（可访问名齐备）；
 //    翻页器 detailPager 默认隐藏，pgPrev/pgNext/pgName + 4 个 pg-dot 按序覆盖明细视图
-// 2) app.js：历代旧导航零残留——顶栏 tab、独立分段项、二级分段条、齿轮按钮；
+// 2) 前端源码：历代旧导航零残留——顶栏 tab、独立分段项、二级分段条、齿轮按钮；
 //    旧返回按钮等 id 同样零残留（残留 $("..") 启动即 TypeError 白屏）
-// 3) app.js：侧栏绑定、明细聚合映射 '? "detail" : id'、翻页器仅在明细视图显示、
+// 3) 前端源码：侧栏绑定、明细聚合映射 '? "detail" : id'、翻页器仅在明细视图显示、
 //    记忆 lastDetailView、滚轮翻页（wheel 监听 + 顶/底边界 + 冷却防惯性连翻）
-// 4) app.js 引用的所有 $("id") 在 index.html 中都存在（全量兜底，防删漏）
+// 4) 前端源码引用的所有 $("id") 在 index.html 中都存在（全量兜底，防删漏）
 // 运行：node scripts/test_topnav.js
 const fs = require("fs");
 const path = require("path");
@@ -43,7 +43,7 @@ eq("主页是侧栏第一项", railNavs[0], "viewMain");
 eq("设置沉底（原生惯例）", railNavs[railNavs.length - 1], "viewSettings");
 eq("翻页器圆点按序覆盖 4 个明细视图", JSON.stringify(dotNavs), JSON.stringify(DETAIL_VIEWS));
 eq(
-  "app.js DETAIL_VIEWS 与圆点顺序一致",
+  "前端源码 DETAIL_VIEWS 与圆点顺序一致",
   appSrc.includes('const DETAIL_VIEWS = ["viewOt", "viewAct", "viewApp", "viewAudio"];'),
   true
 );
@@ -76,13 +76,13 @@ const removedIds = [
 for (const id of removedIds) {
   eq("html 无残留 " + id, html.includes('id="' + id + '"'), false);
   if (!["segbar", "subbar"].includes(id)) {
-    eq("app.js 无残留 " + id, appSrc.includes('"' + id + '"'), false);
+    eq("前端源码无残留 " + id, appSrc.includes('"' + id + '"'), false);
   }
 }
 // 历代旧导航类名/结构一律不许再出现：顶栏 tab、独立分段项、二级分段条、齿轮
 for (const [name, src] of [
   ["html", html],
-  ["app.js", appSrc],
+  ["前端源码", appSrc],
 ]) {
   eq(name + " 无残留 topnav", src.includes("topnav"), false);
   eq(name + " 无残留 toolbar", src.includes("toolbar"), false);
@@ -96,16 +96,16 @@ for (const [name, src] of [
 }
 
 // ---------------------------------------------------------------- 3. 侧栏与翻页器绑定
-eq("app.js 绑定 .rail-item 点击", appSrc.includes('querySelectorAll(".rail-item")'), true);
-eq("app.js 侧栏按 railKey 同步高亮", appSrc.includes("b.dataset.nav === railKey"), true);
-eq("app.js 绑定明细 .pg-dot 直达", appSrc.includes('querySelectorAll("#detailPager .pg-dot")'), true);
-eq("app.js 绑定 pgPrev", appSrc.includes('$("pgPrev").addEventListener'), true);
-eq("app.js 绑定 pgNext", appSrc.includes('$("pgNext").addEventListener'), true);
-eq("app.js 翻页器仅在明细视图显示", appSrc.includes('classList.toggle("hidden", !isDetail)'), true);
-eq("app.js 记忆上次明细视图", appSrc.includes("lastDetailView"), true);
+eq("前端源码绑定 .rail-item 点击", appSrc.includes('querySelectorAll(".rail-item")'), true);
+eq("前端源码侧栏按 railKey 同步高亮", appSrc.includes("b.dataset.nav === railKey"), true);
+eq("前端源码绑定明细 .pg-dot 直达", appSrc.includes('querySelectorAll("#detailPager .pg-dot")'), true);
+eq("前端源码绑定 pgPrev", appSrc.includes('$("pgPrev").addEventListener'), true);
+eq("前端源码绑定 pgNext", appSrc.includes('$("pgNext").addEventListener'), true);
+eq("前端源码翻页器仅在明细视图显示", appSrc.includes('classList.toggle("hidden", !isDetail)'), true);
+eq("前端源码记忆上次明细视图", appSrc.includes("lastDetailView"), true);
 
 // 滚轮翻页：wheel 监听 + 顶/底边界 + 冷却防惯性连翻（断言容忍换行/空白）
-eq("app.js 挂载滚轮翻页监听", /addEventListener\(\s*"wheel"/.test(appSrc), true);
+eq("前端源码挂载滚轮翻页监听", /addEventListener\(\s*"wheel"/.test(appSrc), true);
 const wheelChecks = [
   ["滚轮到底才翻下一页", "atBottom"],
   ["滚轮在顶才翻上一页", "atTop"],
@@ -115,10 +115,10 @@ for (const [label, needle] of wheelChecks) {
   eq(label, appSrc.includes(needle), true);
 }
 
-// ---------------------------------------------------------------- 4. app.js 引用的元素必须存在（全量兜底）
+// ---------------------------------------------------------------- 4. 前端源码引用的元素必须存在（全量兜底）
 const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
-eq("app.js 引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
+eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

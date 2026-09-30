@@ -3,7 +3,7 @@
 // 2) main.rs：mod 注册 + get_bill 命令与 handler 登记
 // 3) config.rs：bill_style 字段 + serde 默认 receipt
 // 4) index.html：侧栏第四 tab、viewBill 骨架（周导航/空态/两风格容器）、设置风格分段
-// 5) app.js：invoke get_bill、本周封顶、四档金句、双风格渲染、监控关闭守卫、
+// 5) 前端源码：invoke get_bill、本周封顶、四档金句、双风格渲染、监控关闭守卫、
 //    设置绑定、mon-seg 类名冲突守卫
 // 运行：node scripts/test_week_bill.js
 const fs = require("fs");
@@ -92,7 +92,7 @@ has("设置风格分段容器", html, 'id="billStyleSeg"');
 has("分段：小票", html, 'data-bill="receipt"');
 has("分段：仪表盘", html, 'data-bill="dashboard"');
 
-// ---------------------------------------------------------------- 5. app.js 渲染与守卫
+// ---------------------------------------------------------------- 5. 前端渲染与守卫
 has("invoke get_bill", appSrc, 'invoke("get_bill", { span: curBillSpan, offset: weekOffset })');
 has("懒渲染：进账单页同步翻页器并拉当前页", appSrc, "setBillTabUI(curBillTab); // 翻页器页名/圆点与记忆的页保持同步");
 has("翻周状态 weekOffset", appSrc, "let weekOffset = 0;");
@@ -136,7 +136,7 @@ has("CSS：摸鱼红柱", css, ".bar-slack {");
 // ---------------------------------------------------------------- 7. 兜底：$() 引用存在
 const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
-eq("app.js 引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
+eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

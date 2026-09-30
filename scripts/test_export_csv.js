@@ -1,7 +1,7 @@
 // 导出 CSV 契约（加班明细 / 周账单）：
 // 1) index.html：两个视图各有一个导出按钮 id
 // 2) styles.css：.export-bar 工具条
-// 3) app.js：csvCell / csvRows / downloadCsv / exportOvertimeCsv / exportWeekBillCsv 真实函数存在
+// 3) 前端源码：csvCell / csvRows / downloadCsv / exportOvertimeCsv / exportWeekBillCsv 真实函数存在
 // 4) 功能：用桩 downloadCsv 跑 exportOvertimeCsv / exportWeekBillCsv，断言 CSV 行/排序/转义/汇总正确
 // 5) 反馈走现有 showToast（不再用内联状态条 / <a download>）
 // 运行：node scripts/test_export_csv.js
@@ -58,7 +58,7 @@ hasNot("已移除内联状态条 .export-status", css, ".export-status {");
 
 // ---------------------------------------------------------------- 2. 函数存在
 ["csvCell", "csvRows", "downloadCsv", "exportOvertimeCsv", "exportWeekBillCsv"].forEach(
-  (n) => has("app.js 含函数 " + n, appSrc, "function " + n + "(")
+  (n) => has("前端源码含函数 " + n, appSrc, "function " + n + "(")
 );
 
 // 2.5 反馈机制锁：downloadCsv 必须走后端命令 + 现有 showToast，不能再回到 <a download> 或内联状态条

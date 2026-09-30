@@ -35,7 +35,7 @@ has("HTML: otMonthSummary 升级为金卡类 ot-summary",
 eq("HTML: 不再用旧类 mn-summary 包裹",
   html.includes('id="otMonthSummary" class="mn-summary"'), false);
 
-// ---------------------------------------------------------------- 2. app.js 渲染逻辑
+// ---------------------------------------------------------------- 2. 前端渲染逻辑
 has("app: 渲染金额 total_all", appSrc, "ot.total_all.toFixed(0)");
 has("app: 渲染时长 total_hours", appSrc, "ot.total_hours.toFixed(1)");
 has("app: 渲染天数 days", appSrc, "ot.days");

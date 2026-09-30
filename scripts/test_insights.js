@@ -2,7 +2,7 @@
 // 1) insights.rs：三组结构体、assemble 纯函数 + with_db 入口、口径 SQL（events/clicks/周封顶）
 // 2) main.rs：mod 注册 + 三命令与 handler 登记 + get_trend 配置快照
 // 3) index.html：账单页 4-tab 分段与三视图骨架、设置页远程排除开关
-// 4) app.js：4-tab 状态机与懒加载分发、翻周联动、热力 sqrt 归一、手写 SVG 折线、
+// 4) 前端源码：4-tab 状态机与懒加载分发、翻周联动、热力 sqrt 归一、手写 SVG 折线、
 //    身体账单 96dpi 换算、远程开关三处接线（readCfg/load 回填/change 保存）
 // 5) styles.css：热力金阶 / 趋势浮层 / 身体指标卡
 // 运行：node scripts/test_insights.js
@@ -112,7 +112,7 @@ has("身体空态", html, 'id="bodyEmpty"');
 has("远程排除开关", html, 'id="overtime_exclude_remote"');
 has("远程排除 hint", html, "检测到远程桌面会话时暂停自动加班记录");
 
-// ---------------------------------------------------------------- 4. app.js 状态机与三视图
+// ---------------------------------------------------------------- 4. 前端源码状态机与三视图
 has("翻页循环 billStep", appSrc, "function billStep(delta)");
 has("翻页器圆点作用域限定", appSrc, 'querySelectorAll("#billPager .pg-dot")');
 has("账单滚轮翻页", appSrc, '$("viewBill").addEventListener(');
@@ -158,7 +158,7 @@ has("CSS：身体指标卡", css, ".body-kpi .body-v {");
 // ---------------------------------------------------------------- 6. 兜底：$() 引用存在
 const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
-eq("app.js 引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
+eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

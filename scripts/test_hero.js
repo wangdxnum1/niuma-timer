@@ -4,13 +4,13 @@
 //    样式有金色填充与 width 过渡
 // 2) 监控三合一：mon-seg 3 项与 3 个预览面板一一对应；「查看明细」跟随分段；
 //    旧的三张卡按钮（actDetailBtn/appuDetailBtn/audioDetailBtn）从 html 与
-//    app.js 双侧移除——残留 $("..") 会拿到 null，启动即 TypeError 白屏
+//    前端源码双侧移除——残留 $("..") 会拿到 null，启动即 TypeError 白屏
 // 3) v5 主页新元素：品牌行（🐎 + 状态徽章 statusBadge）、赚钱走势 sparkline
 //    （earnedSpark/sparkLine/sparkFill）、今日时间轴（dayTimeline）、辛苦数据条
 //    （stDist/stClicks/stKeys/stHours）、本月战果单行（otCard/otMonthTotal/
 //    otMonthDays/otMonthAvg，沿用 otCard 供 applyOvertimeVisibility 开关显隐）
 // 4) 动效与排版：viewIn 动画 + prefers-reduced-motion；数据数字 tabular-nums
-// 5) app.js 引用的所有 $("id") 在 index.html 中都存在（全量兜底，防删漏）
+// 5) 前端源码引用的所有 $("id") 在 index.html 中都存在（全量兜底，防删漏）
 // 运行：node scripts/test_hero.js
 const fs = require("fs");
 const path = require("path");
@@ -80,7 +80,7 @@ has("查看明细跟随当前分段", appSrc, "MON_VIEWS[curMon]");
 // 旧按钮双侧移除
 for (const id of ["actDetailBtn", "appuDetailBtn", "audioDetailBtn"]) {
   eq("html 无残留 " + id, html.includes('id="' + id + '"'), false);
-  eq("app.js 无残留 " + id, appSrc.includes('"' + id + '"'), false);
+  eq("前端源码无残留 " + id, appSrc.includes('"' + id + '"'), false);
 }
 
 // ---------------------------------------------------------------- 3. v5 主页新元素
@@ -124,7 +124,7 @@ has("战果卡大金额样式", css, ".otc-amount");
 // 旧的四格/大数字卡元素双侧移除（被 v5 单行战果与 hero 取代）
 for (const id of ["ot_total", "ot_hours", "ot_days", "ot_meal_total", "ot_avg", "rate", "pay"]) {
   eq("html 无残留 " + id, html.includes('id="' + id + '"'), false);
-  eq("app.js 无残留 " + id, appSrc.includes('"' + id + '"'), false);
+  eq("前端源码无残留 " + id, appSrc.includes('"' + id + '"'), false);
 }
 
 // ---------------------------------------------------------------- 4. 动效与排版
@@ -143,7 +143,7 @@ eq("数字排版 tabular-nums", css.split("tabular-nums").length >= 3, true);
 // ---------------------------------------------------------------- 5. $() 引用兜底
 const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
-eq("app.js 引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
+eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
