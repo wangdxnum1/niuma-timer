@@ -839,7 +839,7 @@ mod tests {
                 "total_bytes",
                 "wal_bytes",
             ],
-            "字段名变了就必须同步 frontend/app.js"
+            "字段名变了就必须同步 frontend/js/ 相关块"
         );
 
         // 细分项字段同样不能被改名：前端读 s.key / s.bytes / s.rows / s.unit

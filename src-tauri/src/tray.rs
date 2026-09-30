@@ -560,7 +560,7 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
     let created = WebviewWindowBuilder::new(
         app,
         "hover_card",
-        WebviewUrl::App("hover_card.html?v=3c970508".into()),
+        WebviewUrl::App("hover_card.html?v=f94d1679".into()),
     )
     .title("牛马计时器 · 悬停卡片")
     .decorations(false)

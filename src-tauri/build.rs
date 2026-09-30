@@ -10,7 +10,7 @@
 //! # 为什么必须有缓存戳
 //! WebView2 会缓存 `tauri.localhost` 下的 HTML/CSS/JS。即使 exe 里嵌入的是新资源，
 //! 运行中的 WebView 仍可能拿旧的，必须让资源 **URL** 变化才能穿透缓存。因此
-//! `index.html` / `styles.css` / `app.js` 三处引用都带 `?v=<指纹>`。
+//! `index.html` / `styles.css` / `js/*.js` 三处引用都带 `?v=<指纹>`。
 //!
 //! # 关键：哈希前必须先归一化
 //! 本脚本会把算出的指纹**回写**到源码里。若直接哈希原始内容，就会形成
@@ -25,7 +25,7 @@ const FE_VER_PREFIX: &str = "const FE_VER = \"";
 /// 需要同步缓存戳的文件（路径相对 build.rs 的工作目录，即 src-tauri/）
 const TARGETS: &[&str] = &[
     "../frontend/index.html",
-    "../frontend/app.js",
+    "../frontend/js/core.js",
     "tauri.conf.json",
     "src/tray.rs",
 ];
@@ -294,7 +294,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend");
     println!("cargo:rerun-if-changed=../frontend/hover_card.html");
     println!("cargo:rerun-if-changed=../frontend/index.html");
-    println!("cargo:rerun-if-changed=../frontend/app.js");
     println!("cargo:rerun-if-changed=../frontend/styles.css");
     // 提交后让构建信息里的 git 短号跟着刷新（否则同一份 exe 会一直报旧提交号）
     println!("cargo:rerun-if-changed=../.git/logs/HEAD");
