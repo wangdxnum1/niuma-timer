@@ -16,10 +16,10 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=3c970508" />
+    <link rel="stylesheet" href="styles.css?v=18a56773" />
   </head>
   <body>
-    <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 app.js 淡出 -->
+    <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
     <div id="splash">
       <div class="splash-inner">
         <div class="splash-logo">
@@ -37,7 +37,7 @@
       </div>
     </div>
     <script>
-      // 兜底：极端情况下 app.js 未执行时，8 秒后强制收起启动页，避免永久遮挡
+      // 兜底：极端情况下 js/boot.js 未执行时，8 秒后强制收起启动页，避免永久遮挡
       setTimeout(function(){var s=document.getElementById('splash');if(s&&!s.classList.contains('hide')){s.classList.add('hide');setTimeout(function(){s.style.display='none';},500);}},8000);
     </script>
 
@@ -103,7 +103,7 @@
       </div>
 
       <!-- 全页唯一视觉焦点：今日已赚大数字 + 全天进度 + 赚钱走势曲线。
-           进度与走势全部来自 get_status_cmd 现成字段与配置时段推算，见 app.js tick() -->
+           进度与走势全部来自 get_status_cmd 现成字段与配置时段推算，见 js/hero.js tick() -->
       <section class="card live">
         <div class="big" id="earned">¥0.00</div>
         <div class="live-progress hidden" id="liveProgress">
@@ -814,7 +814,16 @@
       </div>
     </div>
 
-    <script src="app.js?v=3c970508"></script>
+    <script src="js/core.js?v=18a56773"></script>
+    <script src="js/settings.js?v=18a56773"></script>
+    <script src="js/hero.js?v=18a56773"></script>
+    <script src="js/overtime.js?v=18a56773"></script>
+    <script src="js/monitor.js?v=18a56773"></script>
+    <script src="js/bill.js?v=18a56773"></script>
+    <script src="js/insights.js?v=18a56773"></script>
+    <script src="js/storage.js?v=18a56773"></script>
+    <script src="js/update.js?v=18a56773"></script>
+    <script src="js/boot.js?v=18a56773"></script>
       <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

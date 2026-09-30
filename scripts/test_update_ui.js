@@ -3,7 +3,7 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 const root = path.join(__dirname, '..');
-const app = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8');
+const app = require('./lib/fe_sources').feSource();
 const html = fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'frontend/styles.css'), 'utf8');
 function fn(name) {

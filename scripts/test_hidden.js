@@ -16,7 +16,7 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const css = fs.readFileSync(path.join(ROOT, "frontend", "styles.css"), "utf8");
 const html = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
-const appSrc = fs.readFileSync(path.join(ROOT, "frontend", "app.js"), "utf8");
+const appSrc = require("./lib/fe_sources").feSource();
 
 let pass = 0;
 let fail = 0;

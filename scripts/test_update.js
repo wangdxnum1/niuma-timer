@@ -100,7 +100,7 @@ has("update.rs 默认端点与 tauri.conf 同值", rsUpd7, mEp ? mEp[1] : "___no
 
 // ---- 区块 7：更新视图 + 设置页开关 + 升级公告（A8）----
 const htmlA8 = read("frontend/index.html");
-const appA8 = read("frontend/app.js");
+const appA8 = require("./lib/fe_sources").feSource();
 const cssA8 = read("frontend/styles.css");
 has("index.html 有更新视图", htmlA8, 'id="viewUpdate"');
 lacks("更新视图不占侧栏位（rail 无 viewUpdate）", htmlA8, 'data-nav="viewUpdate"');

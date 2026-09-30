@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
-const src = fs.readFileSync(path.join(__dirname, '../frontend/app.js'), 'utf8');
+const src = require('./lib/fe_sources').feSource();
 function fn(name) {
   const start = src.search(new RegExp('(?:async )?function ' + name + '\\('));
   assert(start >= 0, name);

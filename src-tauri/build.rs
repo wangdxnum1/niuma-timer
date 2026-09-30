@@ -10,13 +10,14 @@
 //! # 为什么必须有缓存戳
 //! WebView2 会缓存 `tauri.localhost` 下的 HTML/CSS/JS。即使 exe 里嵌入的是新资源，
 //! 运行中的 WebView 仍可能拿旧的，必须让资源 **URL** 变化才能穿透缓存。因此
-//! `index.html` / `styles.css` / `app.js` 三处引用都带 `?v=<指纹>`。
+//! `index.html` / `styles.css` / `js/*.js` 三处引用都带 `?v=<指纹>`。
 //!
 //! # 关键：哈希前必须先归一化
 //! 本脚本会把算出的指纹**回写**到源码里。若直接哈希原始内容，就会形成
 //! 「回写版本号 → 文件内容变化 → 指纹变化 → 再次回写」的死循环，
 //! 结果是每次编译都改版本号、每次都强制重编整个 crate。
 //! 故哈希前先剔除缓存戳本身（见 [`normalize`]），使「仅改版本号」不影响指纹。
+//! 同时剔除 `\r`：本地 autocrlf 检出 CRLF、CI 检出 LF，行尾不属于内容语义，不进入指纹。
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +26,7 @@ const FE_VER_PREFIX: &str = "const FE_VER = \"";
 /// 需要同步缓存戳的文件（路径相对 build.rs 的工作目录，即 src-tauri/）
 const TARGETS: &[&str] = &[
     "../frontend/index.html",
-    "../frontend/app.js",
+    "../frontend/js/core.js",
     "tauri.conf.json",
     "src/tray.rs",
 ];
@@ -35,8 +36,10 @@ const CAPABILITIES: &str = "capabilities/default.json";
 /// 剔除内容里的缓存戳，保证「仅改版本号」不改变指纹。
 ///
 /// 覆盖两种写法：资源引用的 `?v=<hex>` 与日志标记的 `const FE_VER = "v<hex>"`。
+/// 并剔除 `\r`：检出行尾差异（CRLF/LF）不影响指纹。
 fn normalize(s: &str) -> String {
-    let mut s = strip_query_ver(s);
+    let mut s = s.replace('\r', "");
+    s = strip_query_ver(&s);
     if let Some(p) = s.find(FE_VER_PREFIX) {
         let start = p + FE_VER_PREFIX.len();
         if let Some(off) = s[start..].find('"') {
@@ -294,7 +297,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend");
     println!("cargo:rerun-if-changed=../frontend/hover_card.html");
     println!("cargo:rerun-if-changed=../frontend/index.html");
-    println!("cargo:rerun-if-changed=../frontend/app.js");
     println!("cargo:rerun-if-changed=../frontend/styles.css");
     // 提交后让构建信息里的 git 短号跟着刷新（否则同一份 exe 会一直报旧提交号）
     println!("cargo:rerun-if-changed=../.git/logs/HEAD");

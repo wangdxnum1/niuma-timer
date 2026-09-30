@@ -21,7 +21,7 @@ const rsInsights = read("src-tauri/src/insights.rs");
 const rsRemind = read("src-tauri/src/remind.rs");
 const rsMain = read("src-tauri/src/main.rs");
 const html = read("frontend/index.html");
-const appSrc = read("frontend/app.js");
+const appSrc = require("./lib/fe_sources").feSource();
 const caps = read("src-tauri/capabilities/default.json");
 
 // ---- 区块 1：配置字段（B1）----

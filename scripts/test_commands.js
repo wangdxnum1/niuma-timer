@@ -60,7 +60,7 @@ eq("已无对应命令的残留权限", stale.length ? stale.join(", ") : "无",
 
 console.log("== 前端 invoke 的命令名 ==");
 // 前端 invoke("xxx") 必须都能在后端找到（含同步 / 异步）
-const appSrc = fs.readFileSync(path.join(ROOT, "frontend", "app.js"), "utf8");
+const appSrc = require("./lib/fe_sources").feSource();
 const inv = new Set();
 const ire = /invoke\(\s*"([^"]+)"/g;
 while ((m = ire.exec(appSrc)) !== null) inv.add(m[1]);
