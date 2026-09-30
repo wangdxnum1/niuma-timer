@@ -579,6 +579,7 @@ function paintAudioUsage() {
 // 文本/数字/时间控件：失去焦点时自动保存
 [
   "monthly_salary",
+  "hourly_wage",
   "am_start",
   "am_end",
   "pm_start",
@@ -589,6 +590,13 @@ function paintAudioUsage() {
   "overtime_rate_weekend",
   "overtime_rate_holiday",
 ].forEach((id) => $(id).addEventListener("blur", saveIfChanged));
+// 计薪方式分段（v1.6.0）：切换即保存并显隐月聘/时薪字段
+document.querySelectorAll("#salaryModeSeg .mon-seg-item").forEach((b) => {
+  b.addEventListener("click", () => {
+    setSalaryModeUI(b.dataset.salaryMode);
+    saveNow();
+  });
+});
 // 下拉框：选择即保存
 $("duration_format").addEventListener("change", saveIfChanged);
 // 副标题风格：立即保存，并用最近一次状态重画（不发 IPC）

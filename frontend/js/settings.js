@@ -3,6 +3,9 @@ async function load() {
   try {
     const cfg = await invoke("load_config");
     $("monthly_salary").value = cfg.monthly_salary;
+    setSalaryModeUI(cfg.salary_mode || "monthly");
+    // 0/缺省显示为空串：空值保存时不传字段，不会把用户已配的时薪抹成 0
+    $("hourly_wage").value = cfg.hourly_wage ? cfg.hourly_wage : "";
     $("am_start").value = cfg.am_start;
     $("am_end").value = cfg.am_end;
     $("pm_start").value = cfg.pm_start;
@@ -165,9 +168,11 @@ function currentYearMonth() {
 
 function readCfg() {
   const salaryRaw = $("monthly_salary").value.trim();
+  const wageRaw = $("hourly_wage").value.trim();
   const paydayRaw = $("payday").value.trim();
   const overrideRaw = $("workdays_override").value.trim();
   const cfg = {
+    salary_mode: readSalaryMode(),
     am_start: $("am_start").value,
     am_end: $("am_end").value,
     pm_start: $("pm_start").value,
@@ -208,6 +213,7 @@ function readCfg() {
   };
   // 月薪/发薪日留空：不传该字段，后端合并时保留旧值，避免误存 0/1，也不挡住其它开关保存
   if (salaryRaw !== "") cfg.monthly_salary = parseFloat(salaryRaw) || 0;
+  if (wageRaw !== "") cfg.hourly_wage = parseFloat(wageRaw) || 0;
   if (paydayRaw !== "") cfg.payday = parseInt(paydayRaw) || 1;
   if (overrideRaw) {
     cfg.workdays_override = parseInt(overrideRaw);
@@ -225,6 +231,31 @@ function numOrNull(v) {
   if (s === "") return null;
   const n = parseFloat(s);
   return isNaN(n) ? null : n;
+}
+
+// ---- 计薪方式（v1.6.0）：monthly 月聘 / hourly 时薪 ----
+function readSalaryMode() {
+  const active = document.querySelector("#salaryModeSeg .mon-seg-item.active");
+  return active ? active.dataset.salaryMode : "monthly";
+}
+
+function setSalaryModeUI(mode) {
+  const m = mode === "hourly" ? "hourly" : "monthly";
+  document.querySelectorAll("#salaryModeSeg .mon-seg-item").forEach((b) => {
+    b.classList.toggle("active", b.dataset.salaryMode === m);
+  });
+  applySalaryModeVisibility();
+}
+
+// 时薪模式下月聘三件套（月薪/工作日覆盖/刷新按钮）无意义，整组隐藏；
+// 控件值不清空——切回月聘时原配置原样回来
+function applySalaryModeVisibility() {
+  const hourly = readSalaryMode() === "hourly";
+  $("hourlyWageRow").classList.toggle("hidden", !hourly);
+  $("monthlySalaryRow").classList.toggle("hidden", hourly);
+  $("workdaysOverrideRow").classList.toggle("hidden", hourly);
+  $("refreshBtn").classList.toggle("hidden", hourly);
+  $("workdaysInfo").classList.toggle("hidden", hourly);
 }
 
 // 控件失焦时调用：配置无变化则不写盘（去重）

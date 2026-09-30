@@ -93,6 +93,40 @@ pub fn daily_hours(cfg: &Config) -> f64 {
     ((am + pm).max(0.0)) / 60.0
 }
 
+/// 实时计时用的时薪（元/小时），两种计薪方式的唯一收口：
+/// - "hourly"：直接取 hourly_wage（时薪工 / 日结工 / 兼职）；
+/// - 其余（含未知值）：月薪 ÷ 当月工作日 ÷ 日工时。
+pub fn effective_hourly_rate(cfg: &Config, monthly_workdays: u32) -> f64 {
+    if cfg.salary_mode == "hourly" {
+        return cfg.hourly_wage.max(0.0);
+    }
+    let daily_h = daily_hours(cfg);
+    if monthly_workdays > 0 && daily_h > 0.0 {
+        cfg.monthly_salary / (monthly_workdays as f64 * daily_h)
+    } else {
+        0.0
+    }
+}
+
+/// 满勤日薪（元）：过去工作日的应赚口径，两种计薪方式的唯一收口。
+/// - "monthly"：月薪 ÷ 当月工作日；
+/// - "hourly"：时薪 × 日工时（满勤假设与月聘模式一致——过去工作日按整日工时计）。
+///
+/// 返回的值除以 daily_hours(cfg) 恒等于 effective_hourly_rate，账单侧的
+/// day_rate（摸鱼成本折算）公式因此对两种模式通用。
+pub fn full_day_salary(cfg: &Config, monthly_workdays: u32) -> f64 {
+    match cfg.salary_mode.as_str() {
+        "hourly" => cfg.hourly_wage.max(0.0) * daily_hours(cfg),
+        _ => {
+            if monthly_workdays > 0 {
+                cfg.monthly_salary / monthly_workdays as f64
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 fn days_in_month(y: i32, m: u32) -> u32 {
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
     NaiveDate::from_ymd_opt(ny, nm, 1)
@@ -130,11 +164,7 @@ pub fn compute(
     now: DateTime<Local>,
 ) -> DayStatus {
     let daily_h = daily_hours(cfg);
-    let hourly_rate = if monthly_workdays > 0 && daily_h > 0.0 {
-        cfg.monthly_salary / (monthly_workdays as f64 * daily_h)
-    } else {
-        0.0
-    };
+    let hourly_rate = effective_hourly_rate(cfg, monthly_workdays);
     let rate_per_min = hourly_rate / 60.0;
 
     let now_min = now.hour() as f64 * 60.0 + now.minute() as f64 + now.second() as f64 / 60.0;
@@ -265,6 +295,65 @@ mod tests {
             ..Default::default()
         };
         assert!(approx(daily_hours(&cfg), 6.5));
+    }
+
+    #[test]
+    fn hourly_rate_monthly_mode_regression() {
+        // 月聘模式：满勤推算，与原公式逐位一致
+        let cfg = Config::default(); // 月薪 10000、日工时 8
+        assert!(approx(
+            effective_hourly_rate(&cfg, 22),
+            10000.0 / (22.0 * 8.0)
+        ));
+        assert!(approx(full_day_salary(&cfg, 22), 10000.0 / 22.0));
+        // 分母为 0 → 0，不得除零
+        assert!(approx(effective_hourly_rate(&cfg, 0), 0.0));
+        assert!(approx(full_day_salary(&cfg, 0), 0.0));
+    }
+
+    #[test]
+    fn hourly_rate_hourly_mode() {
+        let cfg = Config {
+            salary_mode: "hourly".into(),
+            hourly_wage: 35.5,
+            monthly_salary: 0.0, // 时薪工可以不填月薪
+            ..Default::default()
+        };
+        // 时薪直接生效，与工作日分母无关
+        assert!(approx(effective_hourly_rate(&cfg, 22), 35.5));
+        assert!(approx(effective_hourly_rate(&cfg, 0), 35.5));
+        // 满勤日薪 = 时薪 × 日工时；÷ 日工时 还原时薪（day_rate 公式通用性的依据）
+        assert!(approx(full_day_salary(&cfg, 22), 35.5 * 8.0));
+        assert!(approx(full_day_salary(&cfg, 22) / daily_hours(&cfg), 35.5));
+        // compute 全链路：工作 1 小时赚 35.5
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        let now = Local
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(10, 0, 0).unwrap()))
+            .single()
+            .unwrap();
+        let st = compute(&cfg, true, 22, now);
+        assert!(approx(st.hourly_rate, 35.5));
+        assert!(approx(st.earned, 35.5));
+    }
+
+    #[test]
+    fn hourly_rate_unknown_mode_falls_back_to_monthly() {
+        // 未知 salary_mode 按月聘处理（老配置手工改坏时不至于显示 0）
+        let cfg = Config {
+            salary_mode: "weekly".into(),
+            ..Default::default()
+        };
+        assert!(approx(
+            effective_hourly_rate(&cfg, 22),
+            10000.0 / (22.0 * 8.0)
+        ));
+        // 负时薪钳 0
+        let neg = Config {
+            salary_mode: "hourly".into(),
+            hourly_wage: -5.0,
+            ..Default::default()
+        };
+        assert!(approx(effective_hourly_rate(&neg, 22), 0.0));
     }
 
     #[test]

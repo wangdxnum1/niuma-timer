@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=1cd92733" />
+    <link rel="stylesheet" href="styles.css?v=a544a81c" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -92,6 +92,7 @@
         <button class="pg-dot" data-btab="heat" title="时段热力"></button>
         <button class="pg-dot" data-btab="trend" title="趋势"></button>
         <button class="pg-dot" data-btab="body" title="身体账单"></button>
+        <button class="pg-dot" data-btab="timeline" title="时间线"></button>
       </div>
     </div>
 
@@ -238,7 +239,7 @@
 
       <!-- tab 1：本周账单（原有双风格内容原样保留，导出 CSV 只对本 tab 有意义） -->
       <div id="billTabBill">
-        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button></div>
+        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button><button id="billImageBtn" class="ghost">存为图片</button></div>
 
         <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
         <div id="billEmpty" class="bill-empty hidden">
@@ -358,6 +359,27 @@
           <div class="bill-empty-txt">这一周还没有键鼠记录</div>
         </div>
       </div>
+      <div id="billTabTimeline" class="hidden">
+        <div class="timeline-nav">
+          <button class="pg-btn" id="tlPrevDay" aria-label="前一天">‹</button>
+          <span class="pg-name" id="tlDayLabel">今天</span>
+          <button class="pg-btn" id="tlNextDay" aria-label="后一天">›</button>
+          <span class="tl-summary" id="tlSummary"></span>
+        </div>
+        <section class="card">
+          <div class="tl-legend">
+            <i class="tl-seg-work"></i>工作
+            <i class="tl-seg-slack"></i>摸鱼
+            <i class="tl-seg-comm"></i>沟通
+            <i class="tl-seg-other"></i>其他
+          </div>
+          <div id="tlRows"></div>
+        </section>
+        <div id="tlEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">这一天没有任何监控记录</div>
+        </div>
+      </div>
     </div>
 
     <!-- 二级页面：设置（六卡：薪资与作息 → 加班 → 守护 → 数据监控 → 外观 → 系统与数据） -->
@@ -371,6 +393,19 @@
         <h2>薪资与作息</h2>
         <div class="row">
           <label>
+            <span>计薪方式</span>
+            <div class="mon-seg" id="salaryModeSeg" role="tablist" aria-label="计薪方式切换">
+              <button class="mon-seg-item" data-salary-mode="monthly">月薪</button>
+              <button class="mon-seg-item" data-salary-mode="hourly">时薪</button>
+            </div>
+          </label>
+          <label id="hourlyWageRow" class="hidden">
+            <span>时薪（元/小时）</span>
+            <input id="hourly_wage" type="number" min="0" step="0.5" />
+          </label>
+        </div>
+        <div class="row" id="monthlySalaryRow">
+          <label>
             <span>月薪（元）</span>
             <input id="monthly_salary" type="number" min="0" step="100" />
           </label>
@@ -379,7 +414,7 @@
             <input id="payday" type="number" min="1" max="31" />
           </label>
         </div>
-        <label>
+        <label id="workdaysOverrideRow">
           <span>当月实际上班天数（留空=自动）</span>
           <input id="workdays_override" type="number" min="1" max="31" placeholder="自动获取" />
         </label>
@@ -814,16 +849,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=1cd92733"></script>
-    <script src="js/settings.js?v=1cd92733"></script>
-    <script src="js/hero.js?v=1cd92733"></script>
-    <script src="js/overtime.js?v=1cd92733"></script>
-    <script src="js/monitor.js?v=1cd92733"></script>
-    <script src="js/bill.js?v=1cd92733"></script>
-    <script src="js/insights.js?v=1cd92733"></script>
-    <script src="js/storage.js?v=1cd92733"></script>
-    <script src="js/update.js?v=1cd92733"></script>
-    <script src="js/boot.js?v=1cd92733"></script>
+    <script src="js/core.js?v=a544a81c"></script>
+    <script src="js/settings.js?v=a544a81c"></script>
+    <script src="js/hero.js?v=a544a81c"></script>
+    <script src="js/overtime.js?v=a544a81c"></script>
+    <script src="js/monitor.js?v=a544a81c"></script>
+    <script src="js/bill.js?v=a544a81c"></script>
+    <script src="js/insights.js?v=a544a81c"></script>
+    <script src="js/storage.js?v=a544a81c"></script>
+    <script src="js/update.js?v=a544a81c"></script>
+    <script src="js/boot.js?v=a544a81c"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

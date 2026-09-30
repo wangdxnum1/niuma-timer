@@ -77,6 +77,7 @@ global.$ = (id) => ({
 global.readWhitelist = () => [];
 global.readBillStyle = () => "receipt";
 global.readBillSpan = () => "week";
+global.readSalaryMode = () => "monthly"; // v1.6.0 计薪方式分段读取（沙盒固定月聘）
 
 const api = new Function(
   "return (function(){\n" + code + "\n; return { bucketEvents, readCfg, currentYearMonth };\n})();"
@@ -166,6 +167,55 @@ ok(
 ok(
   "备份列表只在启动拉一次、不进 tick（无 setInterval 备份轮询）",
   !/setInterval\([^)]*loadBackups/.test(appSrc)
+);
+
+console.log("== 计薪方式（v1.6.0 时薪模式） ==");
+// 1) 结构：分段控件 + 时薪输入行（默认隐藏）+ 月聘行有 id 供显隐（markup 在 index.html，
+//    复用 L143 已读入的 htmlSrc）
+ok(
+  "薪资卡有计薪方式分段（monthly/hourly 两项）",
+  /id="salaryModeSeg"[\s\S]{0,200}data-salary-mode="monthly"[\s\S]{0,120}data-salary-mode="hourly"/.test(
+    htmlSrc
+  )
+);
+ok(
+  "时薪输入行存在且默认隐藏",
+  /id="hourlyWageRow" class="hidden"/.test(htmlSrc) && /id="hourly_wage" type="number"/.test(htmlSrc)
+);
+ok(
+  "月聘行/工作日行有 id 供模式显隐",
+  /id="monthlySalaryRow"/.test(htmlSrc) && /id="workdaysOverrideRow"/.test(htmlSrc)
+);
+// 2) load 回填：setSalaryModeUI + 空值显示空串
+ok(
+  "load 回填计薪方式并应用显隐",
+  /setSalaryModeUI\(cfg\.salary_mode \|\| "monthly"\)/.test(appSrc)
+);
+ok(
+  "load 回填时薪：0/缺省显示空串（避免把已配时薪抹成 0）",
+  /hourly_wage"\)\.value = cfg\.hourly_wage \? cfg\.hourly_wage : ""/.test(appSrc)
+);
+// 3) readCfg 采集：salary_mode 必传，时薪留空不传（保旧值）
+ok(
+  "readCfg 采集 salary_mode 与 hourly_wage",
+  /salary_mode: readSalaryMode\(\)/.test(appSrc) &&
+    /wageRaw !== ""\) cfg\.hourly_wage = parseFloat\(wageRaw\) \|\| 0/.test(appSrc)
+);
+// 4) 绑定：时薪失焦存，分段点击即存
+ok(
+  "时薪输入失焦自动保存",
+  /"hourly_wage",\s*\n\s*"am_start"/.test(appSrc)
+);
+ok(
+  "计薪分段点击即存并应用显隐",
+  /setSalaryModeUI\(b\.dataset\.salaryMode\);\s*\n\s*saveNow\(\)/.test(appSrc)
+);
+// 5) 金额守卫统一口径：时薪模式看时薪输入框
+ok(
+  "moneyConfigured 时薪分支（有效时薪 > 0）",
+  /moneyConfigured\(\) \{[\s\S]{0,120}salaryMode === "hourly"[\s\S]{0,160}monthly_salary/.test(
+    appSrc
+  )
 );
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

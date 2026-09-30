@@ -1,10 +1,11 @@
-//! 加班与账单命令：加班明细增删改查、周/月/年账单聚合、数据洞察三视图。
+//! 加班与账单命令：加班明细增删改查、周/月/年账单聚合、数据洞察三视图与时间线回顾。
 //!
 //! 二期自 main.rs 切出（纯移动）。
 
-use chrono::{Datelike, Local};
+use chrono::{Datelike, Duration, Local};
 use tauri::State;
 
+use crate::db;
 use crate::insights;
 use crate::overtime;
 use crate::state::AppState;
@@ -90,4 +91,21 @@ pub(crate) fn get_trend(
 pub(crate) fn get_body_bill(span: String, offset: i64) -> Result<insights::BodyBill, String> {
     let s = weekbill::parse_span(&span)?;
     insights::body_bill(s, offset)
+}
+
+/// 时间线回顾（v1.6.0）：某天 24 小时的前台构成 / 键鼠 / 媒体。
+/// offset 0=今天，正数往过去翻，未来封顶今天（与账单 offset 同向语义）。
+/// 锁内取 config/holiday 快照，DB 查询在锁外（同 get_bill 的 ABBA 规避）。
+#[tauri::command(async)]
+pub(crate) fn get_day_timeline(
+    state: State<'_, AppState>,
+    offset: i64,
+) -> Result<insights::DayTimeline, String> {
+    let off = offset.max(0);
+    let today = Local::now().date_naive();
+    let date = today - Duration::days(off);
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
+    db::with_db(|conn| insights::day_timeline_assemble(date, &cfg, &hol, conn))
+        .map_err(|e| e.to_string())
 }

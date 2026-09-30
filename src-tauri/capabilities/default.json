@@ -46,6 +46,8 @@
     "allow-take-update-announcement",
     "allow-backup-now",
     "allow-list-backups",
-    "allow-restore-backup"
+    "allow-restore-backup",
+    "allow-get-day-timeline",
+    "allow-export-image"
   ]
 }

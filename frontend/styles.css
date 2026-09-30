@@ -2175,3 +2175,89 @@ button:active {
   100% { transform: translateX(250%); }
 }
 .upd-progress-text { margin: 0; font-size: 13px; color: #b8b8be; overflow-wrap: anywhere; }
+
+/* ====== 时间线回顾（v1.6.0）：逐小时前台构成条 ====== */
+.timeline-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tl-summary {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(242, 242, 244, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(242, 242, 244, 0.55);
+  margin-bottom: 10px;
+}
+.tl-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-left: 8px;
+}
+.tl-legend i:first-child {
+  margin-left: 0;
+}
+.tl-seg-work {
+  background: linear-gradient(90deg, #ff9f0a, #ffd650);
+}
+.tl-seg-slack {
+  background: #ff6b6b;
+}
+.tl-seg-comm {
+  background: #5aa9e6;
+}
+.tl-seg-other {
+  background: rgba(255, 255, 255, 0.24);
+}
+.tl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  min-height: 22px;
+}
+.tl-row + .tl-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.tl-hour {
+  width: 26px;
+  flex: none;
+  font-size: 11px;
+  color: rgba(242, 242, 244, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+.tl-bar {
+  width: 46%;
+  flex: none;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  display: flex;
+}
+.tl-bar i {
+  height: 100%;
+  min-width: 0;
+}
+.tl-bar i + i {
+  box-shadow: -1px 0 0 rgba(26, 26, 28, 0.9);
+}
+.tl-note {
+  font-size: 11px;
+  color: rgba(242, 242, 244, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
