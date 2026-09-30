@@ -2,7 +2,7 @@
 // 用法（任意目录）：node scripts/test_tagline.js
 const fs = require("fs");
 const path = require("path");
-const src = fs.readFileSync(path.join(__dirname, "..", "frontend", "app.js"), "utf8");
+const src = require("./lib/fe_sources").feSource();
 
 // 固定「现在」为 2026-09-10 15:30。
 // dynamicTagline 内部用 `new Date().getHours()` 取**当前时刻**判断是否午休，

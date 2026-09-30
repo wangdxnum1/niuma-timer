@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const appSrc = fs.readFileSync(path.join(ROOT, "frontend", "app.js"), "utf8");
+const appSrc = require("./lib/fe_sources").feSource();
 const rustSrc = fs.readFileSync(
   path.join(ROOT, "src-tauri", "src", "overtime.rs"),
   "utf8"
