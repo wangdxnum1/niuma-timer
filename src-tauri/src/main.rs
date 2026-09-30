@@ -1,12 +1,28 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! 应用入口与接线层：插件装配、启动序列、托盘/调度器的业务钩子、命令注册。
+//!
+//! 二期模块化后，main.rs 只保留三类内容：入口与启动序列（main() + setup 闭包 +
+//! run loop）；scheduler / tray 回调的接线函数（refresh_tray / 跨天 / 加班检测 /
+//! 暂停切换）；各域命令模块的挂载（cmds_*：#[tauri::command] 定义见各模块，
+//! 经 use 引入后 generate_handler 仍以裸名登记）。
+//! 共享状态 AppState 与状态快照 get_status 在 state.rs，经根模块 re-export 供
+//! remind / tray 以 `crate::` 路径引用（调用点零改动）。
+
 mod activity;
 mod app_usage;
 mod audio_usage;
 mod backup;
 mod calc;
+mod cmds_bill;
+mod cmds_core;
+mod cmds_debug;
+mod cmds_monitor;
+mod cmds_storage;
+mod cmds_update;
 mod config;
 mod db;
+mod diag;
 mod holiday;
 mod icon_render;
 mod insights;
@@ -17,139 +33,38 @@ mod pause;
 mod remind;
 mod remote;
 mod scheduler;
+mod state;
 mod sync;
 mod tray;
 mod update;
 mod weekbill;
 mod win;
 
-use std::io::Write;
-use std::panic;
-use std::sync::Mutex;
+use chrono::{Datelike, Local, TimeZone};
+use tauri::Manager;
+use tauri_plugin_autostart::MacosLauncher;
 
-use chrono::{Datelike, Local, NaiveDate, TimeZone};
-use serde_json::Value;
-use tauri::{Manager, State};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use crate::diag::{build_info, install_crash_log, show_fatal, trace_startup};
+// 共享状态与状态快照的根模块 re-export：remind.rs / tray.rs 以 crate::AppState /
+// crate::get_status 引用，scheduler.rs 调用的三个接线函数本就在本文件。
+pub(crate) use crate::state::{get_status, AppState};
 
-struct AppState {
-    config: Mutex<config::Config>,
-    holiday: Mutex<holiday::HolidayCache>,
-    last_date: Mutex<NaiveDate>,
-    /// 最近一次已处理的锁屏时间戳，用于检测新锁屏事件
-    last_lock_seen: Mutex<Option<i64>>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        AppState {
-            config: Mutex::new(config::load()),
-            holiday: Mutex::new(holiday::HolidayCache::default()),
-            last_date: Mutex::new(Local::now().date_naive()),
-            last_lock_seen: Mutex::new(None),
-        }
-    }
-}
-
-/// 启动崩溃诊断：进程早期（webview 未起）崩溃时前端 debug.log 无效，
-/// 故把 panic 与启动阶段痕迹单独写到 %APPDATA%/niuma-timer/panic.log。
-/// release 无控制台窗口，panic 会静默退出，此文件是排查「双击无反应」的唯一线索。
-fn panic_log_path() -> std::path::PathBuf {
-    config::config_dir().join("panic.log")
-}
-
-/// 追加一行启动阶段痕迹到 panic.log（每次启动先由 install_crash_log 清空重写）。
-fn trace_startup(stage: &str) {
-    let _ = std::fs::create_dir_all(config::config_dir());
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(panic_log_path())
-    {
-        let line = format!(
-            "[{}] {stage}\n",
-            Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
-        );
-        let _ = f.write_all(line.as_bytes());
-    }
-}
-
-/// 安装 panic hook：捕获 main() 启动期任何 panic，写 message + backtrace 到 panic.log，
-/// 让「进程起来又退出」的场景可定位。必须在 main() 最开头调用。
-fn install_crash_log() {
-    let _ = std::fs::create_dir_all(config::config_dir());
-    let _ = std::fs::write(
-        panic_log_path(),
-        format!("[start] {}\n", Local::now().format("%Y-%m-%d %H:%M:%S%.3f")),
-    );
-    panic::set_hook(Box::new(|info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        let line = format!("[panic] {info}\n{bt:?}\n");
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(panic_log_path())
-            .and_then(|mut f| f.write_all(line.as_bytes()));
-    }));
-}
-
-/// 构建信息：版本 / 编译时间 / git 提交 / 前端指纹。
-///
-/// 同版本号可以构建很多次，光看 `v1.2.0` 分不清用户装的是哪一次构建、哪个提交、
-/// 哪份前端资源。这四项由 build.rs 在编译期注入，用户报问题先看启动日志这一行即可对号入座。
-/// 用 `option_env!` 兜底 `unknown`：源码包（无 .git / 无注入）也要能正常启动。
-fn build_info() -> String {
-    format!(
-        "v{} build={} git={} fe={}",
-        env!("CARGO_PKG_VERSION"),
-        option_env!("BUILD_TIME").unwrap_or("unknown"),
-        option_env!("BUILD_GIT").unwrap_or("unknown"),
-        option_env!("BUILD_FE_VER").unwrap_or("unknown"),
-    )
-}
-
-/// 启动致命错误：弹系统消息框（release 无控制台，必须给可见反馈），同时写 panic.log。
-/// 把「双击无反应 / 静默退出」转成可操作的错误提示（尤其是缺 WebView2 的场景）。
-#[cfg(windows)]
-fn show_fatal(msg: &str) {
-    let _ = std::fs::create_dir_all(config::config_dir());
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(panic_log_path())
-    {
-        let _ = f.write_all(format!("[fatal] {msg}\n").as_bytes());
-    }
-    crate::win::message_box("牛马计时器", msg);
-}
-
-/// 计算当月实际上班天数（手动覆盖 > 缓存 > 兜底周末数）
-fn current_monthly_workdays(cfg: &config::Config, hol: &holiday::HolidayCache) -> u32 {
-    let now = Local::now();
-    if let Some(n) = config::effective_workdays_override(cfg, now.year(), now.month()) {
-        return n;
-    }
-    if let Some(n) = hol.month_workdays(now.year(), now.month()) {
-        return n;
-    }
-    holiday::weekday_count(now.year(), now.month())
-}
-
-/// 计算当天状态快照
-pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    let now = Local::now();
-    let is_workday = hol.is_workday(now.date_naive()).unwrap_or_else(|| {
-        let wd = now.weekday().num_days_from_monday();
-        wd < 5
-    });
-    let mw = current_monthly_workdays(&cfg, &hol);
-    let mut st = calc::compute(&cfg, is_workday, mw, now);
-    // v1.3.0 守护：暂停状态随每秒状态快照广播（托盘文案 / 前端徽章 / 悬停卡片共用）
-    st.paused = pause::is_paused();
-    st
-}
+use cmds_bill::{
+    delete_overtime_record, get_bill, get_body_bill, get_heatmap, get_overtime_records, get_trend,
+    save_overtime_record,
+};
+use cmds_core::{
+    apply_monitor_switches, apply_shortcuts, export_csv, focus_window, get_autostart,
+    get_status_cmd, hide_window, load_config, refresh_holidays, save_config, set_autostart,
+    show_window, write_debug_log,
+};
+use cmds_debug::{
+    reset_remind_state, run_remind_tick, test_offwork_notify, test_sedentary_notify,
+    test_sedentary_trigger,
+};
+use cmds_monitor::{get_activity_summary, get_app_usage_summary, get_audio_usage_summary};
+use cmds_storage::{backup_now, get_storage_info, list_backups, restore_backup, run_maintenance};
+use cmds_update::{check_update, skip_update_version, start_update, take_update_announcement};
 
 /// 装载节假日数据并刷新托盘。
 /// `persist=true` 表示数据来自网络，落本地缓存供下次启动直接用；
@@ -204,89 +119,6 @@ pub fn spawn_holiday_refresh(app: tauri::AppHandle) {
             }
         }
     });
-}
-
-#[tauri::command]
-fn load_config(state: State<AppState>) -> config::Config {
-    sync::lock(&state.config, "state.config").clone()
-}
-
-#[tauri::command]
-fn save_config(state: State<AppState>, app: tauri::AppHandle, cfg: Value) -> Result<(), String> {
-    // 合并保存：以现有配置为基底，仅用前端传来的字段覆盖，保留前端未管理的字段
-    // （如未来新增的后端字段），避免整份替换把未传字段重置成默认值。
-    let merged = {
-        let mut existing = sync::lock(&state.config, "state.config");
-        let merged = config::merge_from_value(&existing, &cfg)?;
-        config::save(&merged);
-        *existing = merged.clone();
-        merged
-    };
-    // 监控开关即时生效（关闭前先结算已累计的应用使用时长）
-    apply_monitor_switches(&merged);
-    // 全局快捷键即时生效（开关关闭 → 解注册；开启 → 重新注册）
-    apply_shortcuts(&app, &merged);
-    let st = get_status(state.inner());
-    tray::update_tray(&app, &st);
-    Ok(())
-}
-
-/// 把配置里的三个监控开关同步到各监控模块（启动时与保存配置后调用）。
-/// app_usage 在关闭前先 tick() 结算一次，避免丢掉最后一段已使用时长。
-fn apply_monitor_switches(cfg: &config::Config) {
-    if !cfg.monitor_app_usage {
-        app_usage::shutdown();
-    }
-    activity::set_enabled(cfg.monitor_activity);
-    app_usage::set_enabled(cfg.monitor_app_usage);
-    audio_usage::set_enabled(cfg.monitor_audio);
-    // 应用使用白名单（开启后只统计名单内应用）
-    app_usage::set_whitelist(cfg.app_whitelist_enabled, cfg.app_whitelist.clone());
-    // 重开时把当前前台窗口立即纳入统计
-    if cfg.monitor_app_usage {
-        app_usage::refresh_foreground();
-    }
-}
-
-/// 把配置里的快捷键开关同步到 global-shortcut 插件（启动时与保存配置后调用）。
-/// 先全量解注册再按需注册，保证开关切换后状态一致。
-/// 单个快捷键注册失败（被其他软件占用）只记日志、不中断——快捷键是锦上添花，
-/// 不能因为冲突让设置保存或启动失败。
-fn apply_shortcuts(app: &tauri::AppHandle, cfg: &config::Config) {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let mgr = app.global_shortcut();
-    let _ = mgr.unregister_all();
-    if !cfg.shortcuts_enabled {
-        return;
-    }
-    // Alt+Shift+N：显隐主窗（可见 → 隐藏；否则还原 + 显示 + 抢焦点）
-    if let Err(e) = mgr.on_shortcut("Alt+Shift+N", |app, _sc, event| {
-        if event.state == ShortcutState::Pressed {
-            if let Some(w) = app.get_webview_window("main") {
-                if w.is_visible().unwrap_or(false) {
-                    let _ = w.hide();
-                } else {
-                    let _ = w.unminimize();
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }
-        }
-    }) {
-        db::debug_log(&format!(
-            "全局快捷键 Alt+Shift+N 注册失败（可能被占用）: {e:?}"
-        ));
-    }
-    // Alt+Shift+P：切换手动暂停（与托盘菜单同款：暂停前先结算应用使用时长）
-    if let Err(e) = mgr.on_shortcut("Alt+Shift+P", |app, _sc, event| {
-        if event.state == ShortcutState::Pressed {
-            toggle_pause(app);
-        }
-    }) {
-        db::debug_log(&format!(
-            "全局快捷键 Alt+Shift+P 注册失败（可能被占用）: {e:?}"
-        ));
-    }
 }
 
 /// 每秒刷新托盘实时状态（已赚¥ / 距下班 / 距发薪日）。仅 UI 刷新，无副作用，
@@ -364,49 +196,6 @@ fn maybe_record_overtime_lock(state: &AppState) {
     }
 }
 
-#[tauri::command]
-async fn refresh_holidays(
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<u32, String> {
-    let year = Local::now().year();
-    match holiday::fetch_year(year).await {
-        Ok(days) => {
-            let c = holiday::HolidayCache {
-                year,
-                fetched_at: 0,
-                days,
-            };
-            let mw = current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
-            apply_holiday_cache(&app, c, true);
-            Ok(mw)
-        }
-        Err(e) => {
-            // 手动刷新失败也让数字先准起来：内置表已收录的年份直接兜底，
-            // 未收录才把错误抛给前端（此时确实给不出可信的工作日数）。
-            db::debug_log(&format!("手动刷新节假日失败: {}", e));
-            match holiday::builtin_cache(year) {
-                Some(c) => {
-                    db::debug_log(&format!("节假日：改用内置 {year} 年法定节假日表"));
-                    let mw =
-                        current_monthly_workdays(&sync::lock(&state.config, "state.config"), &c);
-                    apply_holiday_cache(&app, c, false);
-                    Ok(mw)
-                }
-                None => Err(format!(
-                    "节假日数据获取失败，且内置表未收录 {year} 年：{}",
-                    e
-                )),
-            }
-        }
-    }
-}
-
-#[tauri::command]
-fn get_status_cmd(state: State<AppState>) -> calc::DayStatus {
-    get_status(state.inner())
-}
-
 /// 切换手动暂停（托盘菜单 / 全局快捷键 / 前端共用入口）。返回切换后的暂停状态。
 ///
 /// 暂停前先结算一段应用使用时长（tick_now）——此刻 is_paused() 仍为 false，
@@ -424,262 +213,6 @@ pub fn toggle_pause(app: &tauri::AppHandle) -> bool {
     pause::is_paused()
 }
 
-/// 调试卡「下班提醒」：直发一条真实文案的系统通知，点一下即可验证通知通道
-#[tauri::command]
-fn test_offwork_notify(app: tauri::AppHandle) {
-    let st = get_status(app.state::<AppState>().inner());
-    let (title, body) = remind::offwork_texts(st.earned);
-    remind::notify(&app, &title, &body);
-}
-
-/// 调试卡「休息提醒」：直发久坐提醒文案（分钟数取当前配置阈值），验证通知通道
-#[tauri::command]
-fn test_sedentary_notify(app: tauri::AppHandle) {
-    let cfg = load_config(app.state::<AppState>());
-    let (title, body) = remind::sedentary_texts(cfg.remind_sedentary_minutes as i64);
-    remind::notify(&app, &title, &body);
-}
-
-/// 调试卡「重置提醒状态」：清空下班「今天已提醒」标记与久坐冷却/连续计时。
-/// 下班提醒每天只触发一次，不重置当天就没法再复测真实触发链路。
-#[tauri::command]
-fn reset_remind_state() {
-    remind::reset_state();
-}
-
-/// 调试卡「立即调度」：按真实规则跑一次提醒判定（久坐 + 下班），与后台每 60 秒
-/// 的自动调度走同一函数，用来验证触发条件而不必干等下一拍。
-#[tauri::command]
-fn run_remind_tick(app: tauri::AppHandle) {
-    remind::tick(&app);
-}
-
-/// 调试卡「模拟久坐」：把连续活跃起点前拨到阈值之前，再跑一次真实调度，
-/// 秒级复现「久坐满阈值」的触发链路（判定 / 文案 / 通知 / 状态重置全走真实代码）。
-/// 真实链路阈值最小 1 分钟、tick 又是 60 秒一拍，手工复测至少要等一拍。
-#[tauri::command]
-fn test_sedentary_trigger(app: tauri::AppHandle) {
-    let cfg = load_config(app.state::<AppState>());
-    remind::force_sedentary_since(cfg.remind_sedentary_minutes as i64);
-    remind::tick(&app);
-}
-
-/// 隐藏主窗口（点关闭按钮时调用）
-#[tauri::command]
-fn hide_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
-}
-
-/// 显示主窗口：还原最小化 + 显示 + 抢焦点
-/// （最小化状态下 show() 是无效操作，必须先 unminimize）
-#[tauri::command]
-fn show_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
-}
-
-/// 仅把主窗口提到前台
-#[tauri::command]
-fn focus_window(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
-}
-
-/// 获取指定月份的加班记录（含预计算汇总字段）。
-/// year / month 省略时取当前月——老调用方不传参也能正常工作。
-#[tauri::command]
-fn get_overtime_records(year: Option<i32>, month: Option<u32>) -> overtime::MonthlyOvertimeView {
-    let now = Local::now();
-    let y = year.unwrap_or_else(|| now.year());
-    let m = month.unwrap_or_else(|| now.month());
-    overtime::get_month(y, m).to_view(y, m)
-}
-
-/// 手动添加/修改某天加班记录（可补录历史月份，但不能是未来日期）。
-/// 返回该记录**所属月份**的视图：补录 8 月时界面不会莫名跳回当月。
-#[tauri::command]
-fn save_overtime_record(
-    state: State<AppState>,
-    input: overtime::ManualOvertimeInput,
-) -> Result<overtime::MonthlyOvertimeView, String> {
-    let now = Local::now();
-    let (y, m) = overtime::month_of(&input.date).unwrap_or_else(|| (now.year(), now.month()));
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    overtime::save_manual(input, &cfg, Some(&hol))?;
-    Ok(overtime::get_month(y, m).to_view(y, m))
-}
-
-/// 手动删除某天加班记录（历史月份同样可删）。返回该记录**所属月份**的视图。
-#[tauri::command]
-fn delete_overtime_record(date: String) -> Result<overtime::MonthlyOvertimeView, String> {
-    let now = Local::now();
-    let (y, m) = overtime::month_of(&date).unwrap_or_else(|| (now.year(), now.month()));
-    overtime::delete_manual(&date)?;
-    Ok(overtime::get_month(y, m).to_view(y, m))
-}
-
-/// 获取今日鼠标/键盘活动统计（逐小时 + 汇总 + 高频按键）
-/// `(async)`：前端每 2 秒轮询的三个 summary 都不该占主线程，理由同 get_storage_info
-#[tauri::command(async)]
-fn get_activity_summary(date: Option<String>) -> activity::ActivitySummary {
-    activity::summary_for(date.as_deref())
-}
-
-/// 获取今日应用使用时长统计（各应用累计 + 24 小时分布）
-///
-/// `known_icons`：前端已缓存图标的应用名，命中者不再回传 base64（图标是几 KB~几十 KB
-/// 的 data URL，每 2 秒轮询整批搬运纯属浪费，只有新应用才需要传一次）。
-#[tauri::command(async)]
-fn get_app_usage_summary(
-    state: State<'_, AppState>,
-    known_icons: Vec<String>,
-    date: Option<String>,
-) -> app_usage::AppUsageSummary {
-    // 摸鱼统计需要用户分类（config.app_categories）参与归类，取配置副本传入
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    app_usage::summary(&known_icons, date.as_deref(), &cfg)
-}
-
-/// 获取今日媒体播放时长统计（各应用累计 + 24 小时分布）
-#[tauri::command(async)]
-fn get_audio_usage_summary(
-    known_icons: Vec<String>,
-    date: Option<String>,
-) -> audio_usage::AudioUsageSummary {
-    audio_usage::summary(&known_icons, date.as_deref())
-}
-
-/// 账单聚合（span = week/month/year；offset：0=本期，正数往前翻历史期，负数封顶本期）
-///
-/// 锁内只取 config/holiday 快照，DB 查询全部在锁外（ABBA 死锁规避，见 weekbill 模块注释）。
-#[tauri::command(async)]
-fn get_bill(
-    state: State<'_, AppState>,
-    span: String,
-    offset: i64,
-) -> Result<weekbill::PeriodBill, String> {
-    let s = weekbill::parse_span(&span)?;
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    weekbill::period_bill(&cfg, &hol, s, offset)
-}
-
-/// 时段热力图（7×24 键鼠/前台/音频小时代格；月/年坍缩为星期×小时矩阵）。纯 act/app/audio 表聚合，无需快照。
-#[tauri::command(async)]
-fn get_heatmap(span: String, offset: i64) -> Result<insights::HourHeatmap, String> {
-    let s = weekbill::parse_span(&span)?;
-    insights::hour_heatmap(s, offset)
-}
-
-/// 多周期趋势（最近 8 个周期，入账复用账单口径）——快照模式同 get_bill。
-#[tauri::command(async)]
-fn get_trend(
-    state: State<'_, AppState>,
-    span: String,
-    offset: i64,
-) -> Result<insights::WeekTrend, String> {
-    let s = weekbill::parse_span(&span)?;
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    let hol = sync::lock(&state.holiday, "state.holiday").clone();
-    insights::period_trend(&cfg, &hol, s, offset)
-}
-
-/// 身体账单（键鼠损耗五指标 + 按期分布）。纯 act_hourly 聚合，无需快照。
-#[tauri::command(async)]
-fn get_body_bill(span: String, offset: i64) -> Result<insights::BodyBill, String> {
-    let s = weekbill::parse_span(&span)?;
-    insights::body_bill(s, offset)
-}
-
-/// 前端调试日志落盘（写入 %APPDATA%/niuma-timer/debug.log，排查用户桌面环境用）
-#[tauri::command]
-fn write_debug_log(msg: String) {
-    crate::db::debug_log(&msg);
-}
-
-/// 开机自启是否已开启。底层走 tauri-plugin-autostart（Windows 即 HKCU Run 键），
-/// 用户在任务管理器里手工禁用后这里如实反映——注册表是唯一真相源。
-#[tauri::command]
-fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
-    app.autolaunch()
-        .is_enabled()
-        .map_err(|e| format!("读取开机自启状态失败: {e:?}"))
-}
-
-/// 开启 / 关闭开机自启（经官方插件写 HKCU Run 键，无需管理员权限）。
-/// 失败时把错误回给前端弹提示，避免开关显示成功、实际没写上。
-#[tauri::command]
-fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<String, String> {
-    let mgr = app.autolaunch();
-    if enabled {
-        mgr.enable()
-            .map(|_| "已开启开机自启".to_string())
-            .map_err(|e| format!("开启开机自启失败: {e:?}"))
-    } else {
-        mgr.disable()
-            .map(|_| "已关闭开机自启".to_string())
-            .map_err(|e| format!("关闭开机自启失败: {e:?}"))
-    }
-}
-
-/// 存储占用快照：设置页「数据存储」卡片展示用
-///
-/// `(async)`：同步 command 默认在**主线程**执行，而本命令要做 dbstat 全库扫描、
-/// 7 张表 COUNT 与目录遍历；下面的 run_maintenance 更是持全局 DB 锁做 WAL
-/// TRUNCATE + 数据清理，最坏秒级——期间托盘 1s 刷新与窗口/托盘事件全部冻结。
-/// 标 async 后函数体改在异步运行时线程执行，主线程只管立即响应。
-#[tauri::command(async)]
-fn get_storage_info(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    Ok(maintain::storage_info(&cfg))
-}
-
-/// 立即执行一次维护（WAL 收缩 + 过期图标 + 过期数据），返回执行后的占用快照。
-/// 与调度器每日自动跑的是同一套逻辑，用户点按钮只是提前触发。
-/// `(async)` 理由同 get_storage_info：持 DB 锁的重活不能占主线程。
-#[tauri::command(async)]
-fn run_maintenance(state: State<'_, AppState>) -> Result<maintain::StorageInfo, String> {
-    let cfg = sync::lock(&state.config, "state.config").clone();
-    maintain::run_daily(&cfg);
-    Ok(maintain::storage_info(&cfg))
-}
-
-/// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，文件名做安全清洗
-/// （只取 basename、剔除 Windows 非法字符），返回最终保存路径供前端提示文件位置。
-/// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
-#[tauri::command]
-fn export_csv(filename: String, content: String) -> Result<String, String> {
-    let base = std::path::Path::new(&filename)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "export.csv".to_string());
-    let safe: String = base
-        .chars()
-        .filter(|c| !"/\\:*?\"<>|".contains(*c))
-        .collect();
-    let safe = if safe.trim().is_empty() {
-        "export.csv".to_string()
-    } else {
-        safe
-    };
-    let dir = dirs::download_dir()
-        .or_else(dirs::document_dir)
-        .unwrap_or_else(std::env::temp_dir);
-    let path = dir.join(&safe);
-    // 写 UTF-8 + BOM，Excel 双击中文不乱码
-    let mut bytes = b"\xef\xbb\xbf".to_vec();
-    bytes.extend_from_slice(content.as_bytes());
-    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{}", e))?;
-    Ok(path.to_string_lossy().into_owned())
-}
 /// 注入到 webview 的轻量 Tauri API 垫片。
 /// 本版本未启用全局 window.__TAURI__，这里基于始终存在的
 /// window.__TAURI_INTERNALS__.invoke 自行暴露 core.invoke 与 window 控制，
@@ -716,280 +249,6 @@ if (!window.__TAURI__) {
   };
 }
 "#;
-
-/// 检查更新（手动入口）。网络 IO 交给 spawn_blocking，不占主线程；
-/// 返回原始真相、不受「跳过此版本」影响（手动检查不该被 skip 掩盖）。
-#[tauri::command]
-async fn check_update(app: tauri::AppHandle) -> Result<update::UpdateInfo, String> {
-    let info = tauri::async_runtime::spawn_blocking(update::check_now)
-        .await
-        .map_err(|e| e.to_string())?;
-    if info.error.is_none() {
-        let state = app.state::<AppState>();
-        let mut cfg = sync::lock(&state.config, "state.config");
-        cfg.update_last_check = Some(chrono::Local::now().to_rfc3339());
-        config::save(&cfg);
-    }
-    Ok(info)
-}
-
-/// 立即更新：按安装形态分发；两条路径都把进度经 `update-progress` 事件推给前端。
-#[tauri::command]
-async fn start_update(app: tauri::AppHandle) -> Result<(), String> {
-    let _operation = update::UpdateOperation::begin()?;
-    if update::installed_kind().is_some() {
-        start_update_installed(app).await
-    } else {
-        start_update_portable(app).await
-    }
-}
-
-/// 安装版：官方 updater 分步下载（带进度与重试）→ 交给安装器静默安装。
-/// 成功后进程由安装器接管，`install` 返回即到头——这里不也不该再 restart。
-async fn start_update_installed(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let Some(target) = update::installed_kind() else {
-        return Err("当前不是安装版".to_string());
-    };
-    let updater = app
-        .updater_builder()
-        .target(target)
-        .build()
-        .map_err(|e| e.to_string())?;
-    let Some(pending) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Err("已是最新版本".to_string());
-    };
-    update::emit_progress(&app, "downloading", 0, None, 1);
-    let mut bytes: Option<Vec<u8>> = None;
-    let mut last_err = String::from("未知错误");
-    for attempt in 1..=update::DOWNLOAD_ATTEMPTS {
-        // Cell 不是 Send：跨 await 的闭包只能捕获 owned 局部量
-        let mut seen: u64 = 0;
-        let mut last_pct: i64 = -2;
-        let mut last_at = std::time::Instant::now();
-        let chunk_app = app.clone();
-        let on_chunk = move |len: usize, total: Option<u64>| {
-            seen += len as u64;
-            let pct = match total {
-                Some(t) if t > 0 => (seen as f64 / t as f64 * 100.0) as i64,
-                _ => -1,
-            };
-            let now = std::time::Instant::now();
-            // 节流：百分比变化或距上次 ≥120ms 才发；total 未知时只按时间节流
-            if pct != last_pct
-                || now.duration_since(last_at) >= std::time::Duration::from_millis(120)
-            {
-                last_pct = pct;
-                last_at = now;
-                update::emit_progress(&chunk_app, "downloading", seen, total, attempt);
-            }
-        };
-        let finish_app = app.clone();
-        let on_finish = move || update::emit_progress(&finish_app, "verifying", 0, None, attempt);
-        match pending.download(on_chunk, on_finish).await {
-            Ok(b) => {
-                bytes = Some(b);
-                break;
-            }
-            Err(e) => last_err = e.to_string(),
-        }
-        if attempt < update::DOWNLOAD_ATTEMPTS {
-            update::emit_progress(&app, "retrying", 0, None, attempt + 1);
-            // async 环境里的退避等待：丢到阻塞线程再 sleep
-            let secs = if attempt <= 1 { 1u64 } else { 3u64 };
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                std::thread::sleep(std::time::Duration::from_secs(secs))
-            })
-            .await;
-        }
-    }
-    let Some(bytes) = bytes else {
-        update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
-        return Err(format!(
-            "下载失败（已重试 {} 次）：{last_err}",
-            update::DOWNLOAD_ATTEMPTS - 1
-        ));
-    };
-    update::emit_progress(
-        &app,
-        "installing",
-        bytes.len() as u64,
-        Some(bytes.len() as u64),
-        1,
-    );
-    pending.install(&bytes).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// 绿色版：主程序带进度下载 → SHA256 校验 → 落盘交接文件 → 起内置助手复核替换。
-/// 下载从助手提前到主程序，才能把真实进度发给前端；助手只做「复核 + 原子替换」。
-async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
-    let rel = tauri::async_runtime::spawn_blocking(update::fetch_remote)
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let url = rel
-        .platform_url(update::PORTABLE_KEY)
-        .ok_or_else(|| "远端清单里没有便携包条目".to_string())?
-        .to_string();
-    if update::compare_versions(&rel.version, env!("CARGO_PKG_VERSION"))
-        != std::cmp::Ordering::Greater
-    {
-        return Err("已是最新版本".to_string());
-    }
-    let sums_url = update::sums_url_for(&url);
-    let sums = tauri::async_runtime::spawn_blocking(move || update::fetch_text(&sums_url))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let file_name = url.rsplit('/').next().unwrap_or("");
-    if file_name.is_empty() {
-        return Err("下载地址里没有文件名".to_string());
-    }
-    let expected = update::find_hash_in_sums(&sums, file_name)
-        .ok_or_else(|| format!("SHA256SUMS.txt 里没有 {file_name} 的哈希"))?;
-
-    // 下载 + 重试都在阻塞线程里跑（不卡 async 运行时）；AppHandle 先克隆好分给各闭包
-    let progress_app = app.clone();
-    let download_url = url.clone();
-    let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let downloading_app = progress_app.clone();
-        let retry_app = progress_app;
-        let mut last_pct: i64 = -2;
-        let mut last_at = std::time::Instant::now();
-        let fetcher = update::RealFetcher;
-        update::download_with_retry(
-            &fetcher,
-            &download_url,
-            &mut |done: u64, total: Option<u64>, attempt: u32| {
-                let pct = match total {
-                    Some(t) if t > 0 => (done as f64 / t as f64 * 100.0) as i64,
-                    _ => -1,
-                };
-                let now = std::time::Instant::now();
-                if pct != last_pct
-                    || now.duration_since(last_at) >= std::time::Duration::from_millis(120)
-                {
-                    last_pct = pct;
-                    last_at = now;
-                    update::emit_progress(&downloading_app, "downloading", done, total, attempt);
-                }
-            },
-            &mut |attempt: u32, _err: &str| {
-                update::emit_progress(&retry_app, "retrying", 0, None, attempt);
-            },
-            &mut |attempt: u32| {
-                let secs = if attempt <= 1 { 1u64 } else { 3u64 };
-                std::thread::sleep(std::time::Duration::from_secs(secs));
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .inspect_err(|_| {
-        update::emit_progress(&app, "error", 0, None, update::DOWNLOAD_ATTEMPTS);
-    })?;
-
-    update::emit_progress(
-        &app,
-        "verifying",
-        bytes.len() as u64,
-        Some(bytes.len() as u64),
-        1,
-    );
-    if !update::sha256_hex(&bytes).eq_ignore_ascii_case(&expected) {
-        update::emit_progress(&app, "error", 0, None, 1);
-        return Err(format!("SHA256 校验失败：期望 {expected}"));
-    }
-
-    // 校验通过才落盘交接文件（与 exe 同目录同卷，助手改名是原子操作）
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let staging = format!("{}.download", exe.to_string_lossy());
-    std::fs::write(&staging, &bytes).map_err(|e| e.to_string())?;
-
-    let args = update::build_helper_args_local(
-        &exe.to_string_lossy(),
-        std::process::id(),
-        &staging,
-        &expected,
-    );
-    let mut argv = vec![
-        "--apply-update".to_string(),
-        "--target".to_string(),
-        args.target.clone(),
-    ];
-    if let Some(pid) = args.wait_pid {
-        argv.push("--wait-pid".to_string());
-        argv.push(pid.to_string());
-    }
-    let update::Source::Local(staging_path) = &args.source else {
-        return Err("内部错误：交接参数不是本地文件来源".to_string());
-    };
-    argv.push("--local-file".to_string());
-    argv.push(staging_path.clone());
-    argv.push("--sha256".to_string());
-    argv.push(args.sha256.clone());
-    update::emit_progress(
-        &app,
-        "installing",
-        bytes.len() as u64,
-        Some(bytes.len() as u64),
-        1,
-    );
-    std::process::Command::new(&exe)
-        .args(&argv)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    app.exit(0);
-    Ok(())
-}
-
-/// 跳过某版本：之后不再提示该版本，直到远端出现更高的版本。
-/// 只写配置不清托盘（重启后托盘项自然消失）—— spec §11.3 的验收口径。
-#[tauri::command(async)]
-fn skip_update_version(app: tauri::AppHandle, version: String) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let mut cfg = sync::lock(&state.config, "state.config");
-    cfg.update_skipped_version = Some(version);
-    config::save(&cfg);
-    Ok(())
-}
-
-/// 取本次更新公告：仅「升级后的首次启动」返回 CHANGELOG 段落，其余返回 None。
-#[tauri::command(async)]
-fn take_update_announcement(app: tauri::AppHandle) -> Option<String> {
-    update::take_announcement(&app)
-}
-
-#[tauri::command(async)]
-fn backup_now(app: tauri::AppHandle) -> Result<backup::BackupEntry, String> {
-    let state = app.state::<AppState>();
-    let _cfg = sync::lock(&state.config, "state.config");
-    backup::create_backup(env!("CARGO_PKG_VERSION"))
-}
-
-#[tauri::command(async)]
-fn list_backups() -> Vec<backup::BackupEntry> {
-    backup::list_backups()
-}
-
-#[tauri::command(async)]
-fn restore_backup(app: tauri::AppHandle, name: String) -> Result<String, String> {
-    let summary = {
-        let state = app.state::<AppState>();
-        let _cfg = sync::lock(&state.config, "state.config");
-        backup::stage_restore(&name, env!("CARGO_PKG_VERSION"))?
-    };
-    let handle = app.clone();
-    std::thread::Builder::new()
-        .name("niuma-restore-restart".to_string())
-        .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            handle.restart();
-        })
-        .map_err(|e| format!("还原已准备好，请手动重启（自动重启失败：{e}）"))?;
-    Ok(summary)
-}
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();

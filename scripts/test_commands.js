@@ -30,8 +30,9 @@ function eq(label, actual, expect) {
   }
 }
 
-// 跨行匹配：属性与 fn 之间可能夹着别的属性（如 #[allow(...)]）
-const re = /#\[(?:tauri::)?command[^\]]*\]\s*(?:(?:#\[[^\]]*\]\s*)|(?:\/\/[^\n]*\n\s*))*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g;
+// 跨行匹配：属性与 fn 之间可能夹着别的属性（如 #[allow(...)]）；
+// 可见性支持 pub / pub(crate)（命令模块化后统一 pub(crate)）
+const re = /#\[(?:tauri::)?command[^\]]*\]\s*(?:(?:#\[[^\]]*\]\s*)|(?:\/\/[^\n]*\n\s*))*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)/g;
 const commands = [];
 let m;
 while ((m = re.exec(rsSrc)) !== null) commands.push(m[1]);
