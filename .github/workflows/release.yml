@@ -1,0 +1,178 @@
+name: Release
+
+# 二期「发布流水线上云」：推送 v* tag 即云端构建 + 打包 + 创建并公开 GitHub Release，
+# 本机 release.bat 只负责 测试/构建/打包预演/commit/tag/push（见该脚本头注释）。
+# 发布引擎与本地共用 scripts/publish_release.py（草稿 → 必需资产 → fail-closed 校验 →
+# 公开 → 发布后验证，幂等可重跑），token 用 Actions 内置 GITHUB_TOKEN。
+#
+# dry_run（仅 workflow_dispatch，默认开）：完整走一遍构建与元数据生成，
+# 产物只挂到本次运行的工件上，不创建/修改任何 Release——发布链路的安全演练位。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只构建并上传运行工件，不创建 Release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# 发布跑一半被取消比排队更糟：不取消进行中的运行
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # runner 直连 GitHub，跳过脚本里的本地 Clash 探测
+      NIUMA_PROXY: off
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # tauri-cli 用预编译安装（秒级）；上游不可用时改回：
+      #   cargo install tauri-cli --locked --version "^2"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli
+
+      - name: Resolve & check version
+        id: ver
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $conf = (Get-Content -Raw -Encoding UTF8 src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          if ($cargo -ne $conf) {
+            throw "版本不一致：Cargo.toml ($cargo) vs tauri.conf.json ($conf)"
+          }
+          "version=$cargo" >> $env:GITHUB_OUTPUT
+          # tag 触发时 tag 必须与代码版本一致（本机 release.bat 负责同步，这里兜底）
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $tag = $env:GITHUB_REF_NAME
+            if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+              throw "tag 须为 vX.Y.Z 形式，当前：$tag"
+            }
+            if ($tag -ne "v$cargo") {
+              throw "tag ($tag) 与 Cargo.toml 版本 (v$cargo) 不一致：先提交版本号改动并重打 tag"
+            }
+          }
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Frontend assert tests
+        run: node scripts/run_all.js
+
+      # 打包（NSIS + MSI + 便携 exe + 更新器 .sig）。缺签名密钥时构建仍会过、
+      # 但没有 .sig → 下一步 latest.json 生成 fail-closed 拦住，错误信息会指明原因。
+      - name: Build bundles
+        working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: cargo tauri build
+
+      # 对齐 build.bat :do_package：按版本号收集（防旧版本 bundle 混入）、
+      # 便携 exe 重命名并补 .sig、PDB 压成 pdb.zip。结尾三条守卫与 release.bat 一致。
+      - name: Collect artifacts into bin/package
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.version }}'
+          $triple = (rustc -vV | Select-String '^host:\s*(\S+)').Matches[0].Groups[1].Value
+          $rel = "src-tauri/target/$triple/release"
+          if (-not (Test-Path "$rel/bundle")) { $rel = 'src-tauri/target/release' }
+          $bundle = "$rel/bundle"
+          New-Item -ItemType Directory -Force bin/package | Out-Null
+
+          Copy-Item "$bundle/nsis/*$ver*.exe" bin/package/
+          Copy-Item "$bundle/msi/*$ver*.msi" bin/package/
+          Get-ChildItem "$bundle/nsis/*$ver*.exe.sig", "$bundle/msi/*$ver*.msi.sig" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination bin/package/
+          Copy-Item "$rel/niuma-timer.exe" "bin/package/niuma-timer-$ver-portable.exe"
+          if (Test-Path "$rel/niuma-timer.exe.sig") {
+            Copy-Item "$rel/niuma-timer.exe.sig" "bin/package/niuma-timer-$ver-portable.exe.sig"
+          }
+          if (Test-Path "$rel/niuma_timer.pdb") {
+            tar -a -c -f "bin/package/niuma-timer-$ver-portable.pdb.zip" -C $rel niuma_timer.pdb
+          }
+
+          Write-Host 'bin/package:'
+          Get-ChildItem bin/package | ForEach-Object { Write-Host "  $($_.Name)  $([math]::Round($_.Length/1MB,1)) MB" }
+          if (-not (Get-ChildItem bin/package -Filter *.exe.sig)) {
+            throw '没有 .exe.sig——更新器产物未签名：检查 secret TAURI_SIGNING_PRIVATE_KEY（及可选 PASSWORD）'
+          }
+          if (-not (Get-ChildItem bin/package -Filter *.pdb.zip) -and -not (Get-ChildItem bin/package -Filter *.pdb)) {
+            throw '没有 PDB——线上崩溃将无法符号化：确认 release 目录下有 niuma_timer.pdb'
+          }
+
+      # 生成 RELEASE_NOTES.md / latest.json / SHA256SUMS.txt（缺 .sig 或平台键
+      # 解析失败都会在这里 fail-closed，等价于本地 release.bat 的 :verify_latest 预演）
+      - name: Generate release metadata
+        run: >
+          python scripts/publish_release.py
+          --tag "v${{ steps.ver.outputs.version }}"
+          --version "${{ steps.ver.outputs.version }}"
+          --package bin/package
+          --repo "${{ github.repository }}"
+          --generate-notes-only
+
+      - name: Verify latest.json
+        shell: pwsh
+        run: |
+          $j = Get-Content -Raw -Encoding UTF8 bin/package/latest.json | ConvertFrom-Json
+          if (@($j.platforms.PSObject.Properties).Count -lt 1) {
+            throw 'latest.json 的 platforms 为空——没有任何客户端能更新'
+          }
+
+      # 演练位：产物只挂运行工件，绝不触碰 Release
+      - name: Dry-run upload (workflow artifacts only)
+        if: inputs.dry_run == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-dry-run
+          path: bin/package
+
+      # 正式发布：草稿 → 必需资产 → 校验 → 公开 → 发布后验证（脚本内建）
+      - name: Publish GitHub Release
+        if: inputs.dry_run != true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python scripts/publish_release.py
+          --tag "v${{ steps.ver.outputs.version }}"
+          --version "${{ steps.ver.outputs.version }}"
+          --package bin/package
+          --repo "${{ github.repository }}"
+
+      # PDB 非运行时依赖：发布后 best-effort 补传，失败只告警不回退发布（与本地一致）
+      - name: Upload PDB (best-effort)
+        if: inputs.dry_run != true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python scripts/publish_release.py
+          --tag "v${{ steps.ver.outputs.version }}"
+          --version "${{ steps.ver.outputs.version }}"
+          --package bin/package
+          --repo "${{ github.repository }}"
+          --pdb-only
