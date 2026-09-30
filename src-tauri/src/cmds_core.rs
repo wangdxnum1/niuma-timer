@@ -209,12 +209,10 @@ pub(crate) fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<Stri
     }
 }
 
-/// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，文件名做安全清洗
-/// （只取 basename、剔除 Windows 非法字符），返回最终保存路径供前端提示文件位置。
-/// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
-#[tauri::command]
-pub(crate) fn export_csv(filename: String, content: String) -> Result<String, String> {
-    let base = std::path::Path::new(&filename)
+/// 导出文件名清洗 + 落盘目录（export_csv / export_image 共用）：
+/// 只取 basename、剔除 Windows 非法字符；目录回退链：下载 → 文档 → 临时目录。
+fn safe_download_path(filename: &str) -> std::path::PathBuf {
+    let base = std::path::Path::new(filename)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "export.csv".to_string());
@@ -230,10 +228,34 @@ pub(crate) fn export_csv(filename: String, content: String) -> Result<String, St
     let dir = dirs::download_dir()
         .or_else(dirs::document_dir)
         .unwrap_or_else(std::env::temp_dir);
-    let path = dir.join(&safe);
+    dir.join(&safe)
+}
+
+/// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，返回最终保存路径。
+/// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
+#[tauri::command]
+pub(crate) fn export_csv(filename: String, content: String) -> Result<String, String> {
+    let path = safe_download_path(&filename);
     // 写 UTF-8 + BOM，Excel 双击中文不乱码
     let mut bytes = b"\xef\xbb\xbf".to_vec();
     bytes.extend_from_slice(content.as_bytes());
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{}", e))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// 存图片（v1.6.0 周报图片）：前端 canvas 出 PNG 后 base64 传回落盘下载目录。
+/// 下载被 WebView 取消的背景同 export_csv；base64 走 IPC 而非直接传二进制，
+/// 与现有命令参数形态保持一致。
+#[tauri::command]
+pub(crate) fn export_image(filename: String, content_base64: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    let bytes = BASE64
+        .decode(content_base64.trim())
+        .map_err(|e| format!("图片数据解码失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("图片数据为空".to_string());
+    }
+    let path = safe_download_path(&filename);
     std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{}", e))?;
     Ok(path.to_string_lossy().into_owned())
 }

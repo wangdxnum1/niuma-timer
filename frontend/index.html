@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=f68812de" />
+    <link rel="stylesheet" href="styles.css?v=a544a81c" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -239,7 +239,7 @@
 
       <!-- tab 1：本周账单（原有双风格内容原样保留，导出 CSV 只对本 tab 有意义） -->
       <div id="billTabBill">
-        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button></div>
+        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button><button id="billImageBtn" class="ghost">存为图片</button></div>
 
         <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
         <div id="billEmpty" class="bill-empty hidden">
@@ -849,16 +849,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=f68812de"></script>
-    <script src="js/settings.js?v=f68812de"></script>
-    <script src="js/hero.js?v=f68812de"></script>
-    <script src="js/overtime.js?v=f68812de"></script>
-    <script src="js/monitor.js?v=f68812de"></script>
-    <script src="js/bill.js?v=f68812de"></script>
-    <script src="js/insights.js?v=f68812de"></script>
-    <script src="js/storage.js?v=f68812de"></script>
-    <script src="js/update.js?v=f68812de"></script>
-    <script src="js/boot.js?v=f68812de"></script>
+    <script src="js/core.js?v=a544a81c"></script>
+    <script src="js/settings.js?v=a544a81c"></script>
+    <script src="js/hero.js?v=a544a81c"></script>
+    <script src="js/overtime.js?v=a544a81c"></script>
+    <script src="js/monitor.js?v=a544a81c"></script>
+    <script src="js/bill.js?v=a544a81c"></script>
+    <script src="js/insights.js?v=a544a81c"></script>
+    <script src="js/storage.js?v=a544a81c"></script>
+    <script src="js/update.js?v=a544a81c"></script>
+    <script src="js/boot.js?v=a544a81c"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

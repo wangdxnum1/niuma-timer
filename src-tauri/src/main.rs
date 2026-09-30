@@ -54,7 +54,7 @@ use cmds_bill::{
     get_overtime_records, get_trend, save_overtime_record,
 };
 use cmds_core::{
-    apply_monitor_switches, apply_shortcuts, export_csv, focus_window, get_autostart,
+    apply_monitor_switches, apply_shortcuts, export_csv, export_image, focus_window, get_autostart,
     get_status_cmd, hide_window, load_config, refresh_holidays, save_config, set_autostart,
     show_window, write_debug_log,
 };
@@ -460,6 +460,7 @@ fn main() {
             get_storage_info,
             run_maintenance,
             export_csv,
+            export_image,
             check_update,
             start_update,
             skip_update_version,

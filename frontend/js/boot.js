@@ -102,6 +102,7 @@ $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudi
 // 周损味金句四档，按周摸鱼率降序取档；未配月薪时过滤掉提钱的 ≥40% 档（纯摸鱼率版）
 $("billPrevWeek").addEventListener("click", () => shiftWeek(1));
 $("billExportBtn").addEventListener("click", exportWeekBillCsv);
+$("billImageBtn").addEventListener("click", saveBillImage);
 $("billNextWeek").addEventListener("click", () => shiftWeek(-1));
 // 时间线日导航（v1.6.0）：‹ 往过去翻无上限，› 往未来翻封顶今天
 $("tlPrevDay").addEventListener("click", () => tlShift(1));

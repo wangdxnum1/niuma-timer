@@ -247,3 +247,187 @@ function paintDash(bill) {
 // events = 键鼠全量（滚轮格数不计入）、clicks = 双击折算 1 次、
 // slack_rate = 摸鱼秒 ÷ 前台秒（前台 0 → null，前端断线不画 0）
 
+
+// ---- 周报图片（v1.6.0）：把当前周期账单画成一张 PNG ----
+
+// PeriodBill → 图片模型（纯函数，测试直接断言折算口径）
+function buildReportModel(bill) {
+  const ratePct = (bill.slack_rate || 0) * 100;
+  return {
+    label: bill.period_label || "",
+    range: fmtDateRange(bill.period_start, bill.period_end),
+    income: bill.total_income || 0,
+    base: bill.base_salary || 0,
+    ot: bill.ot_fee || 0,
+    otHours: bill.ot_hours || 0,
+    slackCost: bill.slack_cost || 0,
+    slackPct: ratePct,
+    workDays: bill.work_days,
+    workHours: bill.work_hours || 0,
+    bars: (bill.buckets || []).map((b) => ({
+      label: b.label,
+      salary: b.salary || 0,
+      isWorkday: b.is_workday !== false,
+    })),
+    hardest: bill.hardest || null,
+    slackiest: bill.slackiest || null,
+    quip: weekBillQuip(ratePct, moneyConfigured()),
+  };
+}
+
+// canvas 手绘报告卡：750×1050 逻辑尺寸、2x 物理密度保证文字锐利
+function drawReport(model, scale) {
+  const s = scale || 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = 750 * s;
+  canvas.height = 1050 * s;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(s, s);
+  const GOLD = "#ffd650";
+  const GRAY = "rgba(242,242,244,0.55)";
+  const HAIR = "rgba(255,255,255,0.09)";
+  ctx.fillStyle = "#1a1a1c";
+  ctx.fillRect(0, 0, 750, 1050);
+  // 顶部品牌金条
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(0, 0, 750, 6);
+
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = GOLD;
+  ctx.font = '600 26px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText("牛马计时器 · 周账单", 55, 92);
+  ctx.fillStyle = "#f2f2f4";
+  ctx.font = '400 21px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText(model.label + " · " + model.range, 55, 130);
+
+  ctx.fillStyle = GRAY;
+  ctx.font = '400 18px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText("本期进账", 55, 185);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = '700 62px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText(fmtMoney(model.income), 55, 248);
+
+  // 四行明细（基础 / 加班 / 摸鱼 / 摸鱼率）
+  const rows = [
+    ["基础工资", fmtMoney(model.base)],
+    ["加班费", model.ot > 0 ? fmtMoney(model.ot) + "（" + model.otHours.toFixed(1) + "h）" : "—"],
+    ["摸鱼成本", fmtMoney(model.slackCost)],
+    ["摸鱼率", model.slackPct.toFixed(1) + "%"],
+  ];
+  let y = 305;
+  rows.forEach(([k, v]) => {
+    ctx.fillStyle = HAIR;
+    ctx.fillRect(55, y - 26, 640, 1);
+    ctx.fillStyle = GRAY;
+    ctx.font = '400 19px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillText(k, 55, y);
+    ctx.fillStyle = "#f2f2f4";
+    ctx.font = '600 19px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillText(v, 695 - ctx.measureText(v).width, y);
+    y += 46;
+  });
+  ctx.fillStyle = GRAY;
+  ctx.font = '400 15px "Segoe UI", "Microsoft YaHei", sans-serif';
+  const wd = model.workDays == null ? "" : "工作日 " + model.workDays + " 天 · ";
+  ctx.fillText(wd + "工时 " + model.workHours.toFixed(1) + "h", 55, y - 12);
+
+  // 每日进账金条：salary 归一，休息日细半透明柱
+  ctx.fillStyle = GRAY;
+  ctx.font = '400 18px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText("每日进账", 55, 545);
+  const bars = model.bars || [];
+  const n = Math.max(1, bars.length);
+  const areaL = 55,
+    areaR = 695,
+    baseY = 760,
+    maxH = 170;
+  const gap = Math.min(14, Math.max(2, (areaR - areaL) / n * 0.25));
+  const barW = Math.min(52, (areaR - areaL - gap * (n - 1)) / n);
+  const maxSal = Math.max(0.01, ...bars.map((b) => b.salary));
+  bars.forEach((b, i) => {
+    const x = areaL + i * ((areaR - areaL - gap * (n - 1)) / n) + gap / 2;
+    const h = (b.salary / maxSal) * maxH;
+    if (h > 0) {
+      if (b.isWorkday) {
+        const g = ctx.createLinearGradient(0, baseY - h, 0, baseY);
+        g.addColorStop(0, "#ffd650");
+        g.addColorStop(1, "#ff9f0a");
+        ctx.fillStyle = g;
+        ctx.fillRect(x, baseY - h, barW, h);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.22)";
+        ctx.fillRect(x, baseY - h, barW, h);
+      }
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x, baseY - 3, barW, 3);
+    }
+    // 桶标签：≤12 桶直接标（周 7 / 年 12），月视图 30 桶密度太高不标
+    if (n <= 12) {
+      ctx.fillStyle = "rgba(242,242,244,0.45)";
+      ctx.font = '400 12px "Segoe UI", "Microsoft YaHei", sans-serif';
+      const t = b.label || "";
+      ctx.fillText(t, x + barW / 2 - ctx.measureText(t).width / 2, baseY + 20);
+    }
+  });
+  ctx.fillStyle = HAIR;
+  ctx.fillRect(areaL, baseY, areaR - areaL, 1);
+
+  // 极值两行 + 金句 + 页脚
+  ctx.font = '400 17px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillStyle = GRAY;
+  ctx.fillText(
+    model.hardest ? "最累 " + model.hardest.weekday + " · 加班 " + model.hardest.ot_hours.toFixed(1) + "h" : "",
+    55,
+    830
+  );
+  ctx.fillText(
+    model.slackiest ? "最摸 " + model.slackiest.weekday + " · 摸鱼率 " + (model.slackiest.rate * 100).toFixed(1) + "%" : "",
+    55,
+    862
+  );
+  ctx.fillStyle = GOLD;
+  ctx.font = 'italic 600 24px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText(model.quip, 55, 930);
+  ctx.fillStyle = "rgba(242,242,244,0.35)";
+  ctx.font = '400 14px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText("由牛马计时器生成", 55, 1010);
+  return canvas;
+}
+
+// 保存链路：toBlob → 剪贴板（可用则复制）→ base64 → 后端落盘下载目录
+async function saveBillImage() {
+  if (!billData) {
+    showToast("先看一眼本期账单，再来生成图片", "err");
+    return;
+  }
+  const model = buildReportModel(billData);
+  const canvas = drawReport(model);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) {
+    showToast("图片生成失败", "err");
+    return;
+  }
+  // 剪贴板不可用属预期（旧 WebView/权限）：静默降级为仅保存
+  let copied = false;
+  try {
+    if (typeof ClipboardItem === "function") {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      copied = true;
+    }
+  } catch (e) {
+    /* fallthrough */
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  try {
+    const path = await invoke("export_image", {
+      filename: "niuma-账单-" + (model.label || billData.period_start) + ".png",
+      contentBase64: btoa(bin),
+    });
+    showToast(copied ? "已复制剪贴板，并保存到 " + path : "已保存到 " + path, "ok");
+  } catch (e) {
+    showToast("保存失败：" + e, "err");
+  }
+}
