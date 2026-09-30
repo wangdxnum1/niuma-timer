@@ -316,11 +316,8 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
         let key = d.format("%Y-%m-%d").to_string();
         let is_wd = is_workday_of(d, input.cur_hol);
         let mw = monthly_workdays_of(d.year(), d.month(), input.cfg, input.cur_hol);
-        let full_salary = if input.cfg.monthly_salary > 0.0 && mw > 0 {
-            input.cfg.monthly_salary / mw as f64
-        } else {
-            0.0
-        };
+        // 满勤日薪：两种计薪方式的统一收口（monthly=月薪÷工作日；hourly=时薪×日工时）
+        let full_salary = calc::full_day_salary(input.cfg, mw);
 
         // 工资：休息日 0；今天实时；过去工作日满勤；未来不预支
         let salary = if !is_wd {
@@ -693,6 +690,49 @@ mod tests {
         );
         // 总入账 = base + ot（无加班）
         assert_eq!(f(bill.total_income), f(bill.base_salary));
+    }
+
+    #[test]
+    fn hourly_mode_week_aggregation() {
+        // 时薪模式：过去工作日满勤 = 时薪 × 日工时；摸鱼成本日时薪 = 时薪本身
+        let c = Config {
+            salary_mode: "hourly".into(),
+            hourly_wage: 30.0,
+            monthly_salary: 0.0,
+            app_categories: HashMap::from([("摸鱼网".to_string(), "摸鱼".to_string())]),
+            ..Default::default()
+        };
+        let conn = mem_conn();
+        // 2026-09-07(周一)..09-11(周五) 各一条 act 记录（有记录不影响工资口径，仅 work_days）
+        for i in 0..5 {
+            conn.execute(
+                "INSERT INTO act_hourly (date, hour, moves, pixels, `left`, dbl, `right`, wheel, wheel_ticks, mid, xbtn, keys) \
+                 VALUES (?1, 10, 100, 0, 10, 2, 3, 50, 5, 1, 0, 200)",
+                rusqlite::params![(NaiveDate::from_ymd_opt(2026, 9, 7).unwrap() + Duration::days(i)).to_string()],
+            )
+            .unwrap();
+        }
+        // 周二 3.5h 摸鱼秒 → 摸鱼成本 = 3.5/3600 × 30（日时薪 = 30×8/8 = 30）
+        conn.execute(
+            "INSERT INTO app_usage (date, app, seconds) VALUES ('2026-09-08', '摸鱼网', 12600)",
+            [],
+        )
+        .unwrap();
+        let bill = assemble(
+            &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
+
+        // 5 个工作日 × 30×8 满勤
+        assert_eq!(f(bill.base_salary), f(30.0 * 8.0 * 5.0));
+        assert_eq!(f(bill.total_income), f(bill.base_salary));
+        // 工作日分母（月工作日数）不进 hourly 口径
+        assert_eq!(f(bill.buckets[0].salary), f(240.0));
+        // 周末 0
+        assert_eq!(f(bill.buckets[5].salary), 0.0);
+        // 摸鱼成本按日时薪（= 时薪 30）折算
+        assert_eq!(f(bill.slack_cost), f(12600.0 / 3600.0 * 30.0));
     }
 
     #[test]

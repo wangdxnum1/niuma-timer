@@ -7,8 +7,15 @@ use std::path::{Path, PathBuf};
 /// 应用配置（持久化到 AppData/niuma-timer/config.json）
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-    /// 月薪（元）
+    /// 月薪（元）。salary_mode == "hourly" 时不参与计薪，仅作展示兼容保留
     pub monthly_salary: f64,
+    /// 计薪方式："monthly" 月薪÷当月工作日÷日工时（默认）；"hourly" 直接按 hourly_wage × 工时
+    /// 覆盖时薪工 / 日结工 / 兼职人群。未知值按 monthly 处理（calc::effective_hourly_rate 统一收口）
+    #[serde(default = "default_salary_mode")]
+    pub salary_mode: String,
+    /// 时薪（元/小时）——salary_mode == "hourly" 时的时薪唯一真源
+    #[serde(default)]
+    pub hourly_wage: f64,
     /// 上午上班  "HH:MM"
     pub am_start: String,
     /// 上午下班  "HH:MM"
@@ -196,10 +203,16 @@ fn default_remind_sedentary_minutes() -> u32 {
     50
 }
 
+fn default_salary_mode() -> String {
+    "monthly".into()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             monthly_salary: 10000.0,
+            salary_mode: "monthly".into(),
+            hourly_wage: 0.0,
             am_start: "09:00".into(),
             am_end: "12:00".into(),
             pm_start: "13:00".into(),
@@ -416,6 +429,19 @@ mod tests {
         let merged = merge_from_value(&cfg, &incoming).unwrap();
         assert_eq!(merged.monthly_salary, 15000.0);
         assert!(!merged.monitor_activity);
+    }
+
+    #[test]
+    fn merge_accepts_hourly_mode_fields() {
+        // 旧配置（无 salary_mode / hourly_wage）合并新字段：serde default 兜底，零迁移
+        let cfg = Config::default();
+        assert_eq!(cfg.salary_mode, "monthly");
+        assert_eq!(cfg.hourly_wage, 0.0);
+        let incoming = serde_json::json!({"salary_mode": "hourly", "hourly_wage": 35.5});
+        let merged = merge_from_value(&cfg, &incoming).unwrap();
+        assert_eq!(merged.salary_mode, "hourly");
+        assert_eq!(merged.hourly_wage, 35.5);
+        assert_eq!(merged.monthly_salary, 10000.0, "未传字段不得被重置");
     }
 
     #[test]
