@@ -8,6 +8,8 @@
 
 - **发布流水线上云**——推送 `v*` tag 触发 GitHub Actions（`release.yml`）：云端重新编译、打包（NSIS / MSI / 便携版 + 更新器签名 + PDB 符号）并复用 `scripts/publish_release.py` 创建与公开 GitHub Release（草稿 → 必需资产 → fail-closed 校验 → 公开 → 发布后验证，幂等可重跑）；`workflow_dispatch` 的 `dry_run` 输入可全链路演练，产物只挂本次运行工件、不创建 Release。发布引擎与本地共用同一脚本，其 token 取值新增环境变量优先（`GITHUB_TOKEN` / `NIUMA_GITHUB_TOKEN`），本机凭据管理器路径保留为应急手动发布通道。
 - **release.bat 瘦身**——本地只负责 测试 / 构建 / 打包 / 元数据预演校验 / commit / tag / push，删除 gh / API / 浏览器三条本机发布路径与 PDB 补传；本机发版不再依赖 GitHub 令牌、gh CLI 与代理，任何机器推 tag 都能发版。
+- **main.rs 模块化**——1241 行的接线层按域切出 8 个模块（纯移动不改逻辑）：`diag.rs`（panic.log / 启动痕迹 / 构建信息）、`state.rs`（AppState + 状态快照）、`cmds_core.rs`（配置 / 节假日 / 窗口 / 自启 / CSV + 监控开关与快捷键）、`cmds_bill.rs`（加班 + 账单 + 洞察）、`cmds_monitor.rs`（键鼠 / 应用 / 媒体查询）、`cmds_storage.rs`（存储 / 维护 / 备份还原）、`cmds_update.rs`（更新四命令与两条安装路径）、`cmds_debug.rs`（调试卡五命令）；main.rs 收敛到 500 行入口 + 启动序列。scheduler / tray / remind 的跨模块调用经根模块 re-export 保持零改动。
+- **build.rs 命令名单升级**——`command_names()` 从只解析 `src/main.rs` 扩大到扫描全部 `src/**/*.rs`，命令可以合法地住进任何模块；新增 `cargo:rerun-if-changed=src`，本地改任意 .rs 也触发 capabilities 自动补齐（此前只有 CI 漂移守卫能兜住这面）。测试侧新增 `scripts/lib/rs_sources.js` 聚合器与「命令 ↔ generate_handler ↔ capabilities」三方互查守卫。
 
 ## [1.5.0] - 2026-09-29
 

@@ -11,7 +11,9 @@ const capSrc = fs.readFileSync(
   path.join(ROOT, "src-tauri", "capabilities", "default.json"),
   "utf8"
 );
-const mainSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
+// main.rs 模块化拆分后，「死命令不得在任何文件复活」改扫聚合源
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 
 let pass = 0;
 let fail = 0;
@@ -142,7 +144,7 @@ console.log("== DOM / 后端契约 ==");
 ok("守护设置卡存在", /<h2>守护<\/h2>/.test(htmlSrc));
 ok("阈值输入 1–120", /id="remind_sedentary_minutes" type="number" min="1" max="120"/.test(htmlSrc));
 ok("capabilities 已无 allow-pause-monitor", !/"allow-pause-monitor"/.test(capSrc));
-ok("pause_monitor 死命令已删", !/fn pause_monitor\(/.test(mainSrc));
+ok("pause_monitor 死命令已删（全 Rust 源）", !/fn pause_monitor\(/.test(rsSrc));
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

@@ -159,6 +159,8 @@ the GitHub Release (watch progress on the Actions page).
 Run `build.bat test` (cargo test plus `node scripts/run_all.js`) for the full suite; the
 frontend assert scripts read the frontend source via `scripts/lib/fe_sources.js`, which
 concatenates the 10 blocks under `frontend/js/` in load order before any assertions.
+Rust-side source assertions go through `scripts/lib/rs_sources.js` the same way (commands
+live in the `cmds_*.rs` modules since main.rs was modularized).
 
 
 ## Usage
@@ -220,7 +222,15 @@ concatenates the 10 blocks under `frontend/js/` in load order before any asserti
 niuma-timer/
 ├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs         # App bootstrap, invoke shim, tray & business tasks (via scheduler)
+│   │   ├── main.rs         # Entry & wiring: plugin setup, boot sequence, scheduler/tray hooks, command registration
+│   │   ├── state.rs        # Shared AppState + today's status snapshot
+│   │   ├── diag.rs         # Startup diagnostics: panic.log / boot traces / build info / fatal-error dialog
+│   │   ├── cmds_core.rs    # Commands: config / holidays / window / autostart / CSV + monitor switches & shortcuts
+│   │   ├── cmds_bill.rs    # Commands: overtime records + week/month/year billing + insights
+│   │   ├── cmds_monitor.rs # Commands: mouse-keyboard / app / media summary queries
+│   │   ├── cmds_storage.rs # Commands: storage usage / manual maintenance / backup & restore
+│   │   ├── cmds_update.rs  # Commands: check update / one-click update (installed & portable) / skip / announcement
+│   │   ├── cmds_debug.rs   # Commands: debug card (notify test / instant tick / simulated sedentary)
 │   │   ├── config.rs       # Config struct + load/save
 │   │   ├── calc.rs         # Earnings calc + duration formatting + tooltip
 │   │   ├── holiday.rs      # Holiday data fetch + parse + cache + built-in fallback table
@@ -228,10 +238,17 @@ niuma-timer/
 │   │   ├── tray.rs         # Tray icon, menu, hover card (debounce/watchdog/click-cooldown)
 │   │   ├── db.rs           # SQLite layer (WAL), schema init
 │   │   ├── overtime.rs     # Overtime records: calc + persistence
+│   │   ├── weekbill.rs     # Week/month/year bill aggregation
+│   │   ├── insights.rs     # Insights aggregation (heatmap / trend / body bill)
 │   │   ├── lock_monitor.rs # Windows lock-screen listener (WTS session change)
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
 │   │   ├── audio_usage.rs  # Audio-session media playback tracking
+│   │   ├── remind.rs       # Sedentary / end-of-work reminders via system notifications
+│   │   ├── pause.rs        # Manual pause state machine
+│   │   ├── remote.rs       # Remote-session detection (RDP / Sunlogin / ToDesk / UU)
+│   │   ├── backup.rs       # Backup & restore (VACUUM INTO snapshot + startup swap)
+│   │   ├── update.rs       # Auto-update (check / download / verify / built-in helper swap)
 │   │   ├── win.rs          # Win32 platform layer (RAII guards: window/hooks/COM/GDI, process & icon, raw-input parsing)
 │   │   ├── scheduler.rs    # Unified periodic scheduler (1s beat -> 1s/5s/10s tasks)
 │   │   ├── sync.rs         # Lock access gateway (poison recovery; no bare .lock().unwrap())

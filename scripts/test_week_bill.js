@@ -14,6 +14,9 @@ const appSrc = require("./lib/fe_sources").feSource();
 const html = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(ROOT, "frontend", "styles.css"), "utf8");
 const rsBill = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "weekbill.rs"), "utf8");
+// main.rs 模块化后命令定义在 cmds_bill.rs：定义/命令体断言走聚合源，mod 与 handler 登记仍读 main.rs
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 const rsMain = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
 const rsConfig = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "config.rs"), "utf8");
 
@@ -59,9 +62,9 @@ has("单测：空周全零", rsBill, "fn empty_week_all_zero");
 
 // ---------------------------------------------------------------- 2. main.rs 接线
 has("mod 注册 weekbill", rsMain, "mod weekbill;");
-has("命令 get_bill", rsMain, "fn get_bill");
+has("命令 get_bill", rsSrc, "fn get_bill");
 has("handler 登记 get_bill", rsMain, "get_bill,");
-has("命令锁外查询：clone 配置快照", rsMain, "sync::lock(&state.config, \"state.config\").clone()");
+has("命令锁外查询：clone 配置快照", rsSrc, "sync::lock(&state.config, \"state.config\").clone()");
 
 // ---------------------------------------------------------------- 3. config.rs bill_style
 has("Config 新增 bill_style 字段", rsConfig, "pub bill_style: String");

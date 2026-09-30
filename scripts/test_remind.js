@@ -15,6 +15,10 @@ const capSrc = fs.readFileSync(
 const remindSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "remind.rs"), "utf8");
 const schedSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "scheduler.rs"), "utf8");
 const configSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "config.rs"), "utf8");
+// main.rs 模块化拆分后调试命令定义在 cmds_debug.rs：定义类断言走聚合源，
+// generate_handler 注册表断言仍读 main.rs（名单物理留在 main()）。
+const { rsSource, RS_FILES, rsRead } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 const mainSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
 
 let pass = 0;
@@ -46,16 +50,16 @@ async function main() {
   ok("remind.rs notify 走 notification 插件", /notification\(\)/.test(remindSrc));
   ok("remind.rs ack 已删（触发瞬间已重置，ack 冗余）", !/pub fn ack\(\)/.test(remindSrc));
 
-  console.log("== 命令增删（main.rs） ==");
-  ok("remind_ack 命令已删", !/remind_ack/.test(mainSrc));
-  ok("pause_rest 命令已删", !/pause_rest/.test(mainSrc));
-  ok("test_offwork_notify 命令已定义", /fn test_offwork_notify\(app: tauri::AppHandle\)/.test(mainSrc));
-  ok("test_sedentary_notify 命令已定义", /fn test_sedentary_notify\(app: tauri::AppHandle\)/.test(mainSrc));
-  ok("reset_remind_state 命令已定义", /fn reset_remind_state\(\)/.test(mainSrc));
-  ok("run_remind_tick 命令已定义", /fn run_remind_tick\(app: tauri::AppHandle\)/.test(mainSrc));
+  console.log("== 命令增删（调试命令定义 + main.rs 注册表） ==");
+  ok("remind_ack 命令已删", !/remind_ack/.test(rsSrc));
+  ok("pause_rest 命令已删", !/pause_rest/.test(rsSrc));
+  ok("test_offwork_notify 命令已定义", /fn test_offwork_notify\(app: tauri::AppHandle\)/.test(rsSrc));
+  ok("test_sedentary_notify 命令已定义", /fn test_sedentary_notify\(app: tauri::AppHandle\)/.test(rsSrc));
+  ok("reset_remind_state 命令已定义", /fn reset_remind_state\(\)/.test(rsSrc));
+  ok("run_remind_tick 命令已定义", /fn run_remind_tick\(app: tauri::AppHandle\)/.test(rsSrc));
   ok(
     "test_sedentary_trigger 命令已定义",
-    /fn test_sedentary_trigger\(app: tauri::AppHandle\)/.test(mainSrc)
+    /fn test_sedentary_trigger\(app: tauri::AppHandle\)/.test(rsSrc)
   );
   ok("注册表含 test_offwork_notify", /^\s*test_offwork_notify,$/m.test(mainSrc));
   ok("注册表含 test_sedentary_notify", /^\s*test_sedentary_notify,$/m.test(mainSrc));
@@ -147,10 +151,13 @@ async function main() {
   ok(
     "命令先伪造起点再跑真实 tick",
     /fn test_sedentary_trigger\(app: tauri::AppHandle\)[\s\S]{0,400}force_sedentary_since[\s\S]{0,200}remind::tick\(&app\)/.test(
-      mainSrc
+      rsSrc
     )
   );
-  ok("模拟久坐取当前配置阈值（文案里的分钟数才真实）", /fn test_sedentary_trigger[\s\S]{0,200}load_config/.test(mainSrc));
+  // 拆分后 test_sedentary_trigger 与 load_config 调用必须仍同文件（同域就近）：
+  // 找到定义命令的那个文件，断言该文件内也出现 load_config 调用
+  const trigFile = RS_FILES.find((f) => /fn test_sedentary_trigger\(/.test(rsRead(f)));
+  ok("模拟久坐取当前配置阈值（文案里的分钟数才真实）", !!trigFile && /load_config\(/.test(rsRead(trigFile)));
 
   console.log("== 后端触发契约（不变） ==");
   ok("scheduler 60s 拍挂 remind::tick", /remind::tick\(&?app\)/.test(schedSrc));

@@ -77,13 +77,17 @@ has("tray.rs 托盘项通知前端", rsTray, '"update-view-requested"');
 lacks("tray.rs 不再持有托盘菜单句柄", rsTray, "static TRAY_MENU");
 
 // ---- 区块 6：检查更新四命令 + 安装版判定 + 自动检查调度（A7）----
+// 拆分后四个命令定义在 cmds_update.rs：定义断言走聚合源，
+// 注册表 / 插件注册 / setup 接线断言仍读 main.rs（物理位置不变）。
 const rsMain7 = read("src-tauri/src/main.rs");
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc7 = rsSource().replace(/\r\n/g, "\n");
 const rsUpd7 = read("src-tauri/src/update.rs");
 const conf7 = read("src-tauri/tauri.conf.json");
-has("main.rs 定义 check_update 命令", rsMain7, "fn check_update(");
-has("main.rs 定义 start_update 命令", rsMain7, "fn start_update(");
-has("main.rs 定义 skip_update_version 命令", rsMain7, "fn skip_update_version(");
-has("main.rs 定义 take_update_announcement 命令", rsMain7, "fn take_update_announcement(");
+has("定义 check_update 命令（cmds_update.rs）", rsSrc7, "fn check_update(");
+has("定义 start_update 命令（cmds_update.rs）", rsSrc7, "fn start_update(");
+has("定义 skip_update_version 命令（cmds_update.rs）", rsSrc7, "fn skip_update_version(");
+has("定义 take_update_announcement 命令（cmds_update.rs）", rsSrc7, "fn take_update_announcement(");
 has("四命令已注册进 invoke_handler", rsMain7, "check_update,\n            start_update,\n            skip_update_version,\n            take_update_announcement");
 has("main.rs 注册 updater 插件", rsMain7, "tauri_plugin_updater::Builder::new().build()");
 has("setup 启动自动检查线程", rsMain7, "update::spawn_update_checker(app.handle().clone())");

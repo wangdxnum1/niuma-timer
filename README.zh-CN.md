@@ -153,6 +153,7 @@ runner 上重新编译打包并创建 GitHub Release（进度见 Actions 页）�
 
 跑 `build.bat test`（等价于 cargo test 加 `node scripts/run_all.js`）执行全部测试；前端断言脚本
 经 `scripts/lib/fe_sources.js` 读取前端源码——它把 `frontend/js/` 下 10 个块按加载序拼接后再断言。
+Rust 侧源码断言同理走 `scripts/lib/rs_sources.js`（main.rs 模块化后命令分布在 `cmds_*.rs`）。
 
 
 ## 使用方法
@@ -214,7 +215,15 @@ runner 上重新编译打包并创建 GitHub Release（进度见 Actions 页）�
 niuma-timer/
 ├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs         # 应用入口、invoke 垫片、托盘与业务任务（交给 scheduler）
+│   │   ├── main.rs         # 应用入口与接线层：插件装配、启动序列、调度/托盘钩子、命令注册
+│   │   ├── state.rs        # AppState 共享状态 + 当日状态快照
+│   │   ├── diag.rs         # 启动诊断：panic.log / 启动痕迹 / 构建信息 / 致命错误弹窗
+│   │   ├── cmds_core.rs    # 命令：配置 / 节假日 / 窗口 / 自启 / CSV + 监控开关与快捷键
+│   │   ├── cmds_bill.rs    # 命令：加班明细 + 周/月/年账单 + 数据洞察
+│   │   ├── cmds_monitor.rs # 命令：键鼠 / 应用 / 媒体三个 summary 查询
+│   │   ├── cmds_storage.rs # 命令：存储占用 / 手动维护 / 备份还原
+│   │   ├── cmds_update.rs  # 命令：检查更新 / 一键更新（安装版+绿色版）/ 跳过版本 / 更新公告
+│   │   ├── cmds_debug.rs   # 命令：调试卡（通知验证 / 立即调度 / 模拟久坐）
 │   │   ├── config.rs       # 配置结构体 + 读写
 │   │   ├── calc.rs         # 赚钱计算 + 时长格式化 + tooltip
 │   │   ├── holiday.rs      # 节假日数据拉取/解析/缓存 + 内置兜底表
@@ -222,10 +231,17 @@ niuma-timer/
 │   │   ├── tray.rs         # 托盘图标、菜单、悬停卡片（防抖/看门狗/点击冷却）
 │   │   ├── db.rs           # SQLite 层（WAL），建表初始化
 │   │   ├── overtime.rs     # 加班记录：计算 + 持久化
+│   │   ├── weekbill.rs     # 周/月/年账单聚合
+│   │   ├── insights.rs     # 数据洞察聚合（热力 / 趋势 / 身体账单）
 │   │   ├── lock_monitor.rs # Windows 锁屏监听（WTS 会话变更）
 │   │   ├── activity.rs     # Raw Input 键鼠采集 + 逐小时桶 + 高频按键榜
 │   │   ├── app_usage.rs    # 前台窗口应用使用时长监控（白名单）
 │   │   ├── audio_usage.rs  # 音频会话媒体播放监控
+│   │   ├── remind.rs       # 久坐/下班提醒（系统通知通道）
+│   │   ├── pause.rs        # 手动暂停状态机
+│   │   ├── remote.rs       # 远程会话识别（RDP / 向日葵 / ToDesk / UU）
+│   │   ├── backup.rs       # 备份与还原（VACUUM INTO 快照 + 启动交换）
+│   │   ├── update.rs       # 自动更新（检查 / 下载 / 校验 / 内置助手替换）
 │   │   ├── win.rs          # Win32 平台层（窗口/钩子/COM/GDI 的 RAII 守卫、进程与图标、Raw Input 解析）
 │   │   ├── scheduler.rs    # 统一周期调度（1 秒节拍 → 1/5/10 秒任务）
 │   │   ├── sync.rs         # 锁访问收口（中毒自愈，禁止裸 .lock().unwrap()）
