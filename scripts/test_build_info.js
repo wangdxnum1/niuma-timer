@@ -15,6 +15,10 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const buildSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "build.rs"), "utf8");
+// main.rs 模块化后 build_info() 定义在 diag.rs：定义类断言走聚合源，
+// 调用点与顺序断言仍读 main.rs（两条日志的落点在 main() 里）。
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 const mainSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
 const cargoSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "Cargo.toml"), "utf8");
 
@@ -68,21 +72,21 @@ function main() {
   const buildDeps = (cargoSrc.match(/\[build-dependencies\]([\s\S]*?)(?=\n\[|$)/) || ["", ""])[1];
   ok("build-dependencies 段内有 chrono（build.rs 才用得上）", /chrono/.test(buildDeps));
 
-  console.log("== main.rs 启动落日志 ==");
-  ok("定义 build_info() 组装四要素", /fn build_info\(\) -> String/.test(mainSrc));
+  console.log("== build_info 定义（diag.rs，聚合源检索） ==");
+  ok("定义 build_info() 组装四要素", /fn build_info\(\) -> String/.test(rsSrc));
   ok(
     "版本号取自 CARGO_PKG_VERSION（不硬编码）",
-    /env!\("CARGO_PKG_VERSION"\)/.test(mainSrc)
+    /env!\("CARGO_PKG_VERSION"\)/.test(rsSrc)
   );
   ok(
     "BUILD_TIME / BUILD_GIT / BUILD_FE_VER 三处都读",
-    /BUILD_TIME/.test(mainSrc) && /BUILD_GIT/.test(mainSrc) && /BUILD_FE_VER/.test(mainSrc)
+    /BUILD_TIME/.test(rsSrc) && /BUILD_GIT/.test(rsSrc) && /BUILD_FE_VER/.test(rsSrc)
   );
   ok(
     "用 option_env! 兜底 unknown（缺注入也不 panic）",
-    /option_env!\("BUILD_TIME"\)/.test(mainSrc) &&
-      /option_env!\("BUILD_GIT"\)/.test(mainSrc) &&
-      /option_env!\("BUILD_FE_VER"\)/.test(mainSrc)
+    /option_env!\("BUILD_TIME"\)/.test(rsSrc) &&
+      /option_env!\("BUILD_GIT"\)/.test(rsSrc) &&
+      /option_env!\("BUILD_FE_VER"\)/.test(rsSrc)
   );
   ok(
     "启动写 debug.log（日常排查入口）",

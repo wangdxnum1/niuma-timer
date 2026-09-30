@@ -14,6 +14,9 @@ const appSrc = require("./lib/fe_sources").feSource();
 const html = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(ROOT, "frontend", "styles.css"), "utf8");
 const rsInsights = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "insights.rs"), "utf8");
+// main.rs 模块化后命令定义在 cmds_bill.rs：定义/命令体断言走聚合源，mod 与 handler 登记仍读 main.rs
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 const rsMain = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
 
 let pass = 0;
@@ -69,13 +72,13 @@ eq("只测纯函数不碰真实文件库（无 with_db 调用进测试）", /mod
 
 // ---------------------------------------------------------------- 2. main.rs 接线
 has("mod 注册 insights", rsMain, "mod insights;");
-has("命令 get_heatmap", rsMain, "fn get_heatmap");
-has("命令 get_trend", rsMain, "fn get_trend");
-has("命令 get_body_bill", rsMain, "fn get_body_bill(span");
+has("命令 get_heatmap", rsSrc, "fn get_heatmap");
+has("命令 get_trend", rsSrc, "fn get_trend");
+has("命令 get_body_bill", rsSrc, "fn get_body_bill(span");
 has("handler 登记 get_heatmap", rsMain, "get_heatmap,");
 has("handler 登记 get_trend", rsMain, "get_trend,");
 has("handler 登记 get_body_bill", rsMain, "get_body_bill,");
-has("趋势命令锁内取配置快照", rsMain, 'sync::lock(&state.config, "state.config").clone()');
+has("趋势命令锁内取配置快照", rsSrc, 'sync::lock(&state.config, "state.config").clone()');
 
 // ---------------------------------------------------------------- 3. index.html 结构
 has("洞察翻页器", html, 'id="billPager"');

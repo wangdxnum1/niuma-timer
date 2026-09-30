@@ -7,6 +7,10 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const appSrc = require("./lib/fe_sources").feSource();
 const htmlSrc = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
+// main.rs 模块化后 apply_shortcuts 定义在 cmds_core.rs、调用点在 main.rs 与 save_config：
+// 定义/函数体断言走聚合源，setup 接线与插件注册断言仍读 main.rs。
+const { rsSource } = require("./lib/rs_sources");
+const rsSrc = rsSource();
 const mainSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
 const configSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "src", "config.rs"), "utf8");
 const cargoSrc = fs.readFileSync(path.join(ROOT, "src-tauri", "Cargo.toml"), "utf8");
@@ -34,21 +38,21 @@ ok("load 回填快捷键开关（!== false 缺省 true）", /shortcuts_enabled"\
 ok("readCfg 采集快捷键开关", /shortcuts_enabled: \$\("shortcuts_enabled"\)\.checked/.test(appSrc));
 ok("开关 change 即存（改完 Rust 端即时生效）", /\$\("shortcuts_enabled"\)\.addEventListener\("change", saveNow\)/.test(appSrc));
 
-console.log("== Rust：注册与注销 ==");
-ok("apply_shortcuts 函数存在", /fn apply_shortcuts\(app: &tauri::AppHandle, cfg: &config::Config\)/.test(mainSrc));
-ok("注册前先 unregister_all", /let _ = mgr\.unregister_all\(\);/.test(mainSrc));
-ok("开关关闭直接返回（不注册）", /if !cfg\.shortcuts_enabled \{\s*\n\s*return;/ .test(mainSrc));
-ok("注册 Alt+Shift+N", /on_shortcut\("Alt\+Shift\+N"/.test(mainSrc));
-ok("注册 Alt+Shift+P", /on_shortcut\("Alt\+Shift\+P"/.test(mainSrc));
-ok("N：显→hide", /is_visible\(\)\.unwrap_or\(false\)\s*\{\s*\n\s*let _ = w\.hide\(\);/.test(mainSrc));
-ok("N：隐→show+set_focus", /let _ = w\.show\(\);\s*\n\s*let _ = w\.set_focus\(\);/.test(mainSrc));
-ok("P：切 toggle_pause", /on_shortcut\("Alt\+Shift\+P"[\s\S]{0,200}toggle_pause\(app\);/.test(mainSrc));
-ok("仅 Pressed 时触发（防重复）", /event\.state == ShortcutState::Pressed/.test(mainSrc));
-ok("注册失败只记日志不中断", /全局快捷键 Alt\+Shift\+N 注册失败（可能被占用）/.test(mainSrc));
+console.log("== Rust：注册与注销（函数体在 cmds_core.rs，聚合源检索） ==");
+ok("apply_shortcuts 函数存在", /fn apply_shortcuts\(app: &tauri::AppHandle, cfg: &config::Config\)/.test(rsSrc));
+ok("注册前先 unregister_all", /let _ = mgr\.unregister_all\(\);/.test(rsSrc));
+ok("开关关闭直接返回（不注册）", /if !cfg\.shortcuts_enabled \{\s*\n\s*return;/ .test(rsSrc));
+ok("注册 Alt+Shift+N", /on_shortcut\("Alt\+Shift\+N"/.test(rsSrc));
+ok("注册 Alt+Shift+P", /on_shortcut\("Alt\+Shift\+P"/.test(rsSrc));
+ok("N：显→hide", /is_visible\(\)\.unwrap_or\(false\)\s*\{\s*\n\s*let _ = w\.hide\(\);/.test(rsSrc));
+ok("N：隐→show+set_focus", /let _ = w\.show\(\);\s*\n\s*let _ = w\.set_focus\(\);/.test(rsSrc));
+ok("P：切 toggle_pause", /on_shortcut\("Alt\+Shift\+P"[\s\S]{0,200}toggle_pause\(app\);/.test(rsSrc));
+ok("仅 Pressed 时触发（防重复）", /event\.state == ShortcutState::Pressed/.test(rsSrc));
+ok("注册失败只记日志不中断", /全局快捷键 Alt\+Shift\+N 注册失败（可能被占用）/.test(rsSrc));
 
 console.log("== Rust：接线与配置 ==");
 ok("setup 时应用快捷键", /apply_shortcuts\(\s*app\.handle\(\),/.test(mainSrc));
-ok("save_config 后重应用快捷键", /apply_shortcuts\(&app, &merged\);/.test(mainSrc));
+ok("save_config 后重应用快捷键", /apply_shortcuts\(&app, &merged\);/.test(rsSrc));
 ok("global-shortcut 插件已注册", /tauri_plugin_global_shortcut::Builder::new\(\)\.build\(\)/.test(mainSrc));
 ok("config.rs 有 shortcuts_enabled 字段", /pub shortcuts_enabled: bool,/.test(configSrc));
 ok("config.rs serde 默认 true", /#\[serde\(default = "default_true"\)\]\s*\n\s*pub shortcuts_enabled: bool,/.test(configSrc));

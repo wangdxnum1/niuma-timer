@@ -11,10 +11,10 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const mainSrc = fs.readFileSync(
-  path.join(ROOT, "src-tauri", "src", "main.rs"),
-  "utf8"
-);
+// main.rs 模块化拆分后命令分布在 cmds_*.rs，改走聚合源提取
+const { rsSource, rsRead } = require("./lib/rs_sources");
+const rsSrc = rsSource();
+const mainSrc = rsRead("main.rs");
 const capPath = path.join(ROOT, "src-tauri", "capabilities", "default.json");
 const cap = JSON.parse(fs.readFileSync(capPath, "utf8"));
 
@@ -34,7 +34,7 @@ function eq(label, actual, expect) {
 const re = /#\[(?:tauri::)?command[^\]]*\]\s*(?:(?:#\[[^\]]*\]\s*)|(?:\/\/[^\n]*\n\s*))*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g;
 const commands = [];
 let m;
-while ((m = re.exec(mainSrc)) !== null) commands.push(m[1]);
+while ((m = re.exec(rsSrc)) !== null) commands.push(m[1]);
 
 // Rust snake_case -> Tauri 权限名是 kebab-case
 const kebab = (s) => s.replace(/_/g, "-");
@@ -57,6 +57,30 @@ const stale = [...allowed].filter(
   (a) => !commands.includes(a.replace(/-/g, "_"))
 );
 eq("已无对应命令的残留权限", stale.length ? stale.join(", ") : "无", "无");
+
+console.log("== generate_handler 注册完整性 ==");
+// 定义了命令却忘登记进 invoke_handler：编译照过、capabilities 也照写，
+// 只有前端 invoke 时报「命令不存在」。拆分后这是新的事故面，必须三方互查。
+const handlerBlock = mainSrc.match(/generate_handler!\[([\s\S]*?)\]/);
+const handlerNames = handlerBlock
+  ? handlerBlock[1]
+      .split(",")
+      .map((s) => s.trim().split("::").pop().trim())
+      .filter((n) => /^[a-z_][a-z0-9_]*$/.test(n))
+  : [];
+const uniqHandler = [...new Set(handlerNames)];
+const unregistered = commands.filter((c) => !uniqHandler.includes(c));
+eq(
+  "定义了但未注册进 generate_handler 的命令",
+  unregistered.length ? unregistered.join(", ") : "无",
+  "无"
+);
+const ghostHandler = uniqHandler.filter((n) => !commands.includes(n));
+eq(
+  "handler 里没有对应 #[tauri::command] 的幽灵项",
+  ghostHandler.length ? ghostHandler.join(", ") : "无",
+  "无"
+);
 
 console.log("== 前端 invoke 的命令名 ==");
 // 前端 invoke("xxx") 必须都能在后端找到（含同步 / 异步）
