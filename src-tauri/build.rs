@@ -242,8 +242,8 @@ fn command_names() -> Vec<String> {
     rust_sources(Path::new("src"), &mut files);
     let mut names: Vec<String> = Vec::new();
     for f in &files {
-        let src = std::fs::read_to_string(f)
-            .unwrap_or_else(|e| panic!("读不到 {}: {e}", f.display()));
+        let src =
+            std::fs::read_to_string(f).unwrap_or_else(|e| panic!("读不到 {}: {e}", f.display()));
         names.extend(parse_commands_in(&src));
     }
     names.sort();
