@@ -1,4 +1,5 @@
 """Offline updater manifest regression tests; never publish or access credentials."""
+import os
 import pathlib
 import tempfile
 import unittest
@@ -370,6 +371,47 @@ class PdbOnlyTests(unittest.TestCase):
                 return 404, {}
 
             self.assertEqual(self._run(d, call), 0)
+
+
+class TokenTests(unittest.TestCase):
+    """github_token 取值顺序：env GITHUB_TOKEN → env NIUMA_GITHUB_TOKEN → 凭据管理器。"""
+
+    @staticmethod
+    def _cred_run(password):
+        """构造一个返回 wincred 令牌的 git credential fill mock。"""
+        done = mock.Mock()
+        done.stdout = password
+        return mock.Mock(return_value=done)
+
+    def test_env_github_token_wins(self):
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "env-github-tok"}, clear=True), \
+             mock.patch("subprocess.run", self._cred_run(b"password=cred-tok\n")):
+            self.assertEqual(release.github_token(), "env-github-tok")
+
+    def test_niuma_env_used_when_github_token_empty(self):
+        # GITHUB_TOKEN 置空串视为未设置，轮到 NIUMA_GITHUB_TOKEN
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "", "NIUMA_GITHUB_TOKEN": "env-niuma-tok"}, clear=True), \
+             mock.patch("subprocess.run", self._cred_run(b"password=cred-tok\n")):
+            self.assertEqual(release.github_token(), "env-niuma-tok")
+
+    def test_env_beats_credential_store(self):
+        # env 命中时凭据管理器不该被碰
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "env-github-tok",
+                                          "NIUMA_GITHUB_TOKEN": "env-niuma-tok"}, clear=True), \
+             mock.patch("subprocess.run", self._cred_run(b"password=cred-tok\n")) as run:
+            self.assertEqual(release.github_token(), "env-github-tok")
+            run.assert_not_called()
+
+    def test_falls_back_to_credential_store(self):
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "", "NIUMA_GITHUB_TOKEN": ""}, clear=True), \
+             mock.patch("subprocess.run", self._cred_run(b"password=cred-tok\n")):
+            self.assertEqual(release.github_token(), "cred-tok")
+
+    def test_none_when_no_env_and_no_credential(self):
+        # 凭据管理器也没令牌 → None（调用方按无 token 处理）
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "", "NIUMA_GITHUB_TOKEN": ""}, clear=True), \
+             mock.patch("subprocess.run", self._cred_run(b"")):
+            self.assertIsNone(release.github_token())
 
 
 if __name__ == "__main__":

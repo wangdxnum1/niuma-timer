@@ -2,14 +2,19 @@
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 rem ============================================================
-rem  Niuma Timer - one-click build / package / release
+rem  Niuma Timer - one-click build / package / tag / push
 rem
 rem  Usage:
 rem    release.bat              use current version from Cargo.toml
 rem    release.bat 1.1.0        bump to 1.1.0 (syncs Cargo.toml + tauri.conf.json)
 rem    release.bat 1.1.0 /y     no prompts (fully automatic)
-rem  Publishing needs no gh CLI: it reuses the GitHub token already
-rem  stored by Git Credential Manager (scripts/publish_release.py).
+rem
+rem  Publishing lives in CI (二期): pushing tag vX.Y.Z triggers
+rem  .github/workflows/release.yml, which rebuilds, packages, and
+rem  creates the GitHub Release. Watch progress at:
+rem    https://github.com/wangdxnum1/niuma-timer/actions
+rem  Emergency manual publish (reuses Git credential manager):
+rem    python scripts\publish_release.py --tag vX.Y.Z --version X.Y.Z --package bin\package
 rem ============================================================
 
 rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat
@@ -138,7 +143,7 @@ echo     1. cargo build --release
 echo     2. cargo tauri build   (NSIS installer + MSI + portable exe)
 echo     3. git commit / tag v%VER%
 echo     4. git push origin %BRANCH%  +  push tag
-echo     5. create GitHub Release and upload artifacts
+echo     5. GitHub Actions builds and publishes the Release (watch the Actions page)
 echo.
 if not "%BRANCH%"=="main" (
   echo   [WARN] current branch is "%BRANCH%", not main - the tag would point
@@ -312,75 +317,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo     pushed %BRANCH% and tag v%VER%
-
-rem ---------------- 11. GitHub Release ----------------
-echo.
-echo =========================================
-echo   [5/5] Creating GitHub Release ...
-echo =========================================
-set "ASSETS="
-for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do set "ASSETS=!ASSETS! "%%f""
-rem 签名与 updater 清单同样是 Release 资产：客户端按 latest.json 找安装包，
-rem 少一个都会让自动更新 404
-for %%f in ("%BIN%\package\*.exe.sig" "%BIN%\package\*.msi.sig") do set "ASSETS=!ASSETS! "%%f""
-rem PDB（调试符号）不在发布关键路径上：它是非运行时依赖，上传失败/被网络重置
-rem 都不该拖垮整次发布。改由发布成功后 best-effort 补传（见 :upload_pdb）。
-rem Manifest and checksums are generated above, so collect them after generation.
-if exist "%BIN%\package\latest.json" set "ASSETS=!ASSETS! "%BIN%\package\latest.json""
-if exist "%BIN%\package\SHA256SUMS.txt" set "ASSETS=!ASSETS! "%BIN%\package\SHA256SUMS.txt""
-
-where gh >nul 2>&1
-if not errorlevel 1 (
-  gh auth status >nul 2>&1
-  if not errorlevel 1 goto :publish_gh
-)
-
-if defined PYEXE goto :publish_py
-goto :publish_browser
-
-:publish_gh
-echo   publishing with gh CLI ...
-if exist "%BIN%\package\RELEASE_NOTES.md" (
-  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --notes-file "%BIN%\package\RELEASE_NOTES.md" --draft !ASSETS!
-) else (
-  gh release create "v%VER%" --repo "%REPO%" --title "Niuma Timer %VER%" --generate-notes --draft !ASSETS!
-)
-if errorlevel 1 (
-  echo [ERROR] gh release create failed; falling back to browser.
-  goto :publish_browser
-)
-gh release edit "v%VER%" --repo "%REPO%" --draft=false --latest
-if errorlevel 1 goto :release_fail
-echo     release v%VER% published
-call :verify_latest
-if errorlevel 1 goto :release_fail
-call :upload_pdb
-popd
-goto :summary
-
-:publish_py
-echo   gh not available - publishing via GitHub API with the stored git credential ...
-%PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%"
-if errorlevel 1 (
-  echo [ERROR] API publish failed; falling back to browser.
-  goto :publish_browser
-)
-echo     release v%VER% published
-call :verify_latest
-if errorlevel 1 goto :release_fail
-call :upload_pdb
-popd
-goto :summary
-
-:publish_browser
-echo   Create the release manually and drag these files in:
-for %%f in ("%BIN%\package\*.exe" "%BIN%\package\*.msi") do echo     %%f
-if exist "%BIN%\package\*.pdb.zip" for %%f in ("%BIN%\package\*.pdb.zip") do echo     %%f
-if exist "%BIN%\package\*.pdb" for %%f in ("%BIN%\package\*.pdb") do echo     %%f
-if exist "%BIN%\package\latest.json" echo     %BIN%\package\latest.json
-start "" "https://github.com/%REPO%/releases/new?tag=v%VER%"
-popd
-goto :summary
+goto :done
 
 :verify_latest
 echo   verifying latest.json ...
@@ -396,35 +333,17 @@ if errorlevel 1 (
 echo     latest.json ok
 exit /b 0
 
-:upload_pdb
-rem PDB 是发布后的 best-effort 补传：失败只告警，绝不回退已完成的发布。
-rem 优先用 python 脚本（带重试/退避，允许操作已公开 release）；无 python 时
-rem 退化为 gh release upload。两条路径都不影响本子过程的返回值。
-if defined PYEXE (
-  %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --pdb-only
-  if errorlevel 1 echo   [WARN] PDB upload failed; rerun with --pdb-only to backfill.
-) else (
-  for %%f in ("%BIN%\package\*.pdb.zip" "%BIN%\package\*.pdb") do (
-    if exist "%%f" (
-      gh release upload "v%VER%" "%%f" --repo "%REPO%" --clobber
-      if errorlevel 1 echo   [WARN] PDB upload failed: %%f
-    )
-  )
-)
-exit /b 0
-
-:release_fail
-echo [ERROR] release v%VER% was published but latest.json verification failed.
-echo         Fix bin\package and rerun scripts\publish_release.py for this tag.
-endlocal
-exit /b 1
-
-:summary
+:done
+rem ---------------- 11. done - the Release itself is built & published by CI ----------------
+rem 发布已上云：tag 触发 .github/workflows/release.yml，云端重编译并创建 GitHub Release。
+rem 应急通道（CI 不可用且急需发布时，本机手动跑发布引擎，走 wincred 令牌）：
+rem   python scripts\publish_release.py --tag v%VER% --version %VER% --package bin\package
 echo.
 echo =========================================
-echo   Done.
-echo   Version  : %VER%
-echo   Artifacts: %BIN%\package
-echo   Release  : https://github.com/%REPO%/releases/tag/v%VER%
+echo   Done locally. Branch %BRANCH% and tag v%VER% pushed.
+echo   GitHub Actions will now rebuild, package and publish:
+echo     https://github.com/%REPO%/actions
+echo   Pre-flight artifacts kept in: %BIN%\package
 echo =========================================
+popd
 endlocal

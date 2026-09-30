@@ -130,7 +130,7 @@ build.bat package
 
 > 首次打包会自动下载 NSIS；打出 MSI 还需要 [WiX 3](https://wixtoolset.org/) 工具链。
 
-### 一键发布（编译 + 打包 + Release）
+### 一键发布（编译 + 打包 + 打 tag，发布由 CI 完成）
 
 ```bat
 release.bat             使用 Cargo.toml 中的当前版本
@@ -138,14 +138,15 @@ release.bat 1.1.0       顺便把版本号改为 1.1.0（自动同步 Cargo.toml
 release.bat 1.1.0 /y    全程不询问
 ```
 
-按序执行：编译 release → 打包三种产物 → 提交并打 tag → 推送 → 创建 GitHub Release 并上传产物。
+本机按序执行：测试 → 编译 release → 打包三种产物 → 提交并打 tag → 推送。
+**发布在云端完成**：推送 `vX.Y.Z` tag 会触发 `.github/workflows/release.yml`，在 GitHub
+runner 上重新编译打包并创建 GitHub Release（进度见 Actions 页）。
 
-- 依赖 `tauri-cli`，脚本检测到未安装会询问是否立即安装
-- 发布**不需要** `gh` CLI：脚本复用 Git 凭据管理器里已有的 GitHub 令牌
-  （`scripts/publish_release.py`，走 GitHub API 创建 Release 并上传附件）
-- 推送强制使用系统 Git + `wincred` + `openssl` 后端（WorkBuddy 自带 Git 的凭据管理器会崩溃）；
-  检测到本机 7890 端口有代理时自动走代理
-- 未安装或未登录 `gh` 时，自动打开浏览器由你手动创建 Release 并上传 `bin\package\` 里的产物
+- 本机预演打包仍需 `tauri-cli`，脚本检测到未安装会询问是否立即安装
+- 一次性配置：把更新器签名私钥配到仓库 **Secrets** 的 `TAURI_SIGNING_PRIVATE_KEY`
+  （可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），缺失时发布任务会在更新器清单检查处失败
+- 应急手动发布（CI 不可用时），复用 Git 凭据管理器里已有的 GitHub 令牌：
+  `python scripts/publish_release.py --tag vX.Y.Z --version X.Y.Z --package bin/package`
 - 版本号变更会改写 `Cargo.toml` 与 `tauri.conf.json`；若改写失败按提示用 `git checkout --` 还原
 
 ### 测试

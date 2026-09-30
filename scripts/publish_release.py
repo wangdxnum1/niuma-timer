@@ -172,7 +172,19 @@ class GitHub:
 # token
 # --------------------------------------------------------------------------
 def github_token():
-    """Reuse the credential Git Credential Manager already stored for github.com."""
+    """Resolve the GitHub token: env first, then the Git credential store.
+
+    CI 的内置 GITHUB_TOKEN 只存在于环境变量、不进凭据管理器，所以 env 优先；
+    本机两个变量都没设时维持原路径（复用 Git Credential Manager 已存的令牌）。
+    GITHUB_TOKEN 是 Actions 的标准名；NIUMA_GITHUB_TOKEN 留给「机器上已有同名
+    变量但不是给本仓库用的令牌」的场合显式指定。
+    """
+    for var in ("GITHUB_TOKEN", "NIUMA_GITHUB_TOKEN"):
+        tok = os.environ.get(var, "").strip()
+        if tok:
+            log("  token: reused from env %s (%s...)" % (var, tok[:3]))
+            return tok
+    log("  token: no env token, falling back to git credential store")
     candidates = [r"C:\Program Files\Git\cmd\git.exe", "git"]
     for git in candidates:
         try:
