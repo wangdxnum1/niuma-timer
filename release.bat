@@ -291,13 +291,17 @@ echo =========================================
 echo   [4/5] Pushing to GitHub ...
 echo =========================================
 rem Detect Clash proxy on 7890; schannel breaks through proxy, so force openssl.
+rem 探测判定「直连」时必须显式清空 http/https 代理：全局 gitconfig 可能残留
+rem socks5://127.0.0.1:7890，代理软件没开时它会静默接管连接，推送报
+rem "Failed to connect over proxy 127.0.0.1"，与探测结论自相矛盾。
 set "PROXYARG="
 netstat -an | findstr /C:"127.0.0.1:7890" | findstr /C:"LISTENING" >nul
 if not errorlevel 1 (
   set "PROXYARG=-c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890"
   echo     proxy 127.0.0.1:7890 detected, pushing through it
 ) else (
-  echo     no local proxy detected, pushing directly
+  set "PROXYARG=-c http.proxy= -c https.proxy="
+  echo     no local proxy detected, pushing directly (overriding global git proxy config)
 )
 set "GITCFG=-c credential.helper=wincred -c http.sslBackend=openssl %PROXYARG%"
 
