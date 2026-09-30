@@ -132,7 +132,7 @@ Artifacts land in `bin\package\`:
 
 > NSIS is downloaded automatically on first run; MSI additionally needs [WiX 3](https://wixtoolset.org/).
 
-### One-click release (build + package + publish)
+### One-click release (build + package + tag; CI publishes)
 
 ```bat
 release.bat             use the current version from Cargo.toml
@@ -140,15 +140,17 @@ release.bat 1.1.0       also bump the version to 1.1.0 (syncs Cargo.toml + tauri
 release.bat 1.1.0 /y    no prompts at all
 ```
 
-It runs: release build -> package all three artifacts -> commit and tag -> push -> create a
-GitHub Release and upload the artifacts.
+It runs: tests -> release build -> package all three artifacts -> commit and tag -> push.
+**Publishing happens in the cloud**: pushing the `vX.Y.Z` tag triggers
+`.github/workflows/release.yml`, which rebuilds on GitHub's runners, packages, and creates
+the GitHub Release (watch progress on the Actions page).
 
-- Requires `tauri-cli`; the script offers to install it when missing
-- Pushing always uses system Git with `wincred` + the `openssl` TLS backend (WorkBuddy's bundled
-  Git has a broken credential manager); a local proxy on port 7890 is picked up automatically
-- Publishing does **not** need the `gh` CLI: it reuses the GitHub token already stored by
-  Git Credential Manager (`scripts/publish_release.py` calls the GitHub API to create the
-  release and upload assets). The browser fallback is only used if that fails too
+- Requires `tauri-cli` locally for the pre-flight package; the script offers to install it when missing
+- One-time setup: put the updater signing key in repo **Secrets** as `TAURI_SIGNING_PRIVATE_KEY`
+  (optionally `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) — without it the release job fails at the
+  updater-manifest check
+- Emergency manual publish (CI unavailable) reuses the GitHub token stored by Git Credential
+  Manager: `python scripts/publish_release.py --tag vX.Y.Z --version X.Y.Z --package bin/package`
 - Bumping the version rewrites `Cargo.toml` and `tauri.conf.json`; if that fails, restore with
   `git checkout --` as printed by the script
 

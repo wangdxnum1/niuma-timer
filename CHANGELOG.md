@@ -2,6 +2,13 @@
 
 本文件记录项目的所有重要变更。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 变更
+
+- **发布流水线上云**——推送 `v*` tag 触发 GitHub Actions（`release.yml`）：云端重新编译、打包（NSIS / MSI / 便携版 + 更新器签名 + PDB 符号）并复用 `scripts/publish_release.py` 创建与公开 GitHub Release（草稿 → 必需资产 → fail-closed 校验 → 公开 → 发布后验证，幂等可重跑）；`workflow_dispatch` 的 `dry_run` 输入可全链路演练，产物只挂本次运行工件、不创建 Release。发布引擎与本地共用同一脚本，其 token 取值新增环境变量优先（`GITHUB_TOKEN` / `NIUMA_GITHUB_TOKEN`），本机凭据管理器路径保留为应急手动发布通道。
+- **release.bat 瘦身**——本地只负责 测试 / 构建 / 打包 / 元数据预演校验 / commit / tag / push，删除 gh / API / 浏览器三条本机发布路径与 PDB 补传；本机发版不再依赖 GitHub 令牌、gh CLI 与代理，任何机器推 tag 都能发版。
+
 ## [1.5.0] - 2026-09-29
 
 ### 移除
