@@ -103,6 +103,9 @@ $("audioNextDay").addEventListener("click", () => shiftHist("audio", 1, loadAudi
 $("billPrevWeek").addEventListener("click", () => shiftWeek(1));
 $("billExportBtn").addEventListener("click", exportWeekBillCsv);
 $("billNextWeek").addEventListener("click", () => shiftWeek(-1));
+// 时间线日导航（v1.6.0）：‹ 往过去翻无上限，› 往未来翻封顶今天
+$("tlPrevDay").addEventListener("click", () => tlShift(1));
+$("tlNextDay").addEventListener("click", () => tlShift(-1));
 document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
   b.addEventListener("click", () => {
     setBillStyleUI(b.dataset.bill);

@@ -50,8 +50,8 @@ use crate::diag::{build_info, install_crash_log, show_fatal, trace_startup};
 pub(crate) use crate::state::{get_status, AppState};
 
 use cmds_bill::{
-    delete_overtime_record, get_bill, get_body_bill, get_heatmap, get_overtime_records, get_trend,
-    save_overtime_record,
+    delete_overtime_record, get_bill, get_body_bill, get_day_timeline, get_heatmap,
+    get_overtime_records, get_trend, save_overtime_record,
 };
 use cmds_core::{
     apply_monitor_switches, apply_shortcuts, export_csv, focus_window, get_autostart,
@@ -453,6 +453,7 @@ fn main() {
             get_heatmap,
             get_trend,
             get_body_bill,
+            get_day_timeline,
             write_debug_log,
             get_autostart,
             set_autostart,

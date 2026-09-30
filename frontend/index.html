@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=1cd92733" />
+    <link rel="stylesheet" href="styles.css?v=f68812de" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -92,6 +92,7 @@
         <button class="pg-dot" data-btab="heat" title="时段热力"></button>
         <button class="pg-dot" data-btab="trend" title="趋势"></button>
         <button class="pg-dot" data-btab="body" title="身体账单"></button>
+        <button class="pg-dot" data-btab="timeline" title="时间线"></button>
       </div>
     </div>
 
@@ -356,6 +357,27 @@
         <div id="bodyEmpty" class="bill-empty hidden">
           <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
           <div class="bill-empty-txt">这一周还没有键鼠记录</div>
+        </div>
+      </div>
+      <div id="billTabTimeline" class="hidden">
+        <div class="timeline-nav">
+          <button class="pg-btn" id="tlPrevDay" aria-label="前一天">‹</button>
+          <span class="pg-name" id="tlDayLabel">今天</span>
+          <button class="pg-btn" id="tlNextDay" aria-label="后一天">›</button>
+          <span class="tl-summary" id="tlSummary"></span>
+        </div>
+        <section class="card">
+          <div class="tl-legend">
+            <i class="tl-seg-work"></i>工作
+            <i class="tl-seg-slack"></i>摸鱼
+            <i class="tl-seg-comm"></i>沟通
+            <i class="tl-seg-other"></i>其他
+          </div>
+          <div id="tlRows"></div>
+        </section>
+        <div id="tlEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">这一天没有任何监控记录</div>
         </div>
       </div>
     </div>
@@ -827,16 +849,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=1cd92733"></script>
-    <script src="js/settings.js?v=1cd92733"></script>
-    <script src="js/hero.js?v=1cd92733"></script>
-    <script src="js/overtime.js?v=1cd92733"></script>
-    <script src="js/monitor.js?v=1cd92733"></script>
-    <script src="js/bill.js?v=1cd92733"></script>
-    <script src="js/insights.js?v=1cd92733"></script>
-    <script src="js/storage.js?v=1cd92733"></script>
-    <script src="js/update.js?v=1cd92733"></script>
-    <script src="js/boot.js?v=1cd92733"></script>
+    <script src="js/core.js?v=f68812de"></script>
+    <script src="js/settings.js?v=f68812de"></script>
+    <script src="js/hero.js?v=f68812de"></script>
+    <script src="js/overtime.js?v=f68812de"></script>
+    <script src="js/monitor.js?v=f68812de"></script>
+    <script src="js/bill.js?v=f68812de"></script>
+    <script src="js/insights.js?v=f68812de"></script>
+    <script src="js/storage.js?v=f68812de"></script>
+    <script src="js/update.js?v=f68812de"></script>
+    <script src="js/boot.js?v=f68812de"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

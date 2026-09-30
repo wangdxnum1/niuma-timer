@@ -6,9 +6,16 @@ const BILL_TAB_PANES = {
   heat: "billTabHeat",
   trend: "billTabTrend",
   body: "billTabBody",
+  timeline: "billTabTimeline",
 };
-const BILL_TAB_KEYS = ["bill", "heat", "trend", "body"]; // 翻页器循环顺序
-const BILL_TAB_NAMES = { bill: "本周账单", heat: "时段热力", trend: "趋势", body: "身体账单" };
+const BILL_TAB_KEYS = ["bill", "heat", "trend", "body", "timeline"]; // 翻页器循环顺序
+const BILL_TAB_NAMES = {
+  bill: "本周账单",
+  heat: "时段热力",
+  trend: "趋势",
+  body: "身体账单",
+  timeline: "时间线",
+};
 let heatData = null; // 各 tab 最近一次返回缓存（仅当前 tab 会被重画）
 let trendData = null;
 let bodyData = null;
@@ -30,6 +37,7 @@ async function loadBillTab() {
   if (curBillTab === "bill") return loadWeekBill();
   if (curBillTab === "heat") return loadHourHeat();
   if (curBillTab === "trend") return loadWeekTrend();
+  if (curBillTab === "timeline") return loadDayTimeline();
   return loadBodyBill();
 }
 
@@ -372,3 +380,100 @@ function paintBodyBill() {
 
 // 账单页绑定：翻周 + 设置里的风格分段（切风格用缓存重画，免重拉）
 // 洞察翻页交互（billPager）绑定见文件尾部明细翻页器旁，共用冷却逻辑
+
+// ---- 时间线回顾（v1.6.0）：某天 24 小时的前台构成 / 键鼠 / 媒体 ----
+let timelineData = null;
+let timelineOffset = 0; // 0=今天，正数往过去翻（后端未来封顶今天）
+let timelineGeneration = 0;
+
+// 秒 → 紧凑中文时长（时间线行内与汇总用）
+function tlDur(secs) {
+  if (!secs || secs <= 0) return "0分";
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  if (h > 0) return h + "小时" + m + "分";
+  if (m > 0) return m + "分";
+  return secs + "秒";
+}
+
+async function loadDayTimeline() {
+  const offset = timelineOffset,
+    tab = curBillTab;
+  const generation = ++timelineGeneration;
+  try {
+    const result = await invoke("get_day_timeline", { offset });
+    if (generation === timelineGeneration && tab === curBillTab && curView === "viewBill") {
+      timelineData = result;
+      paintDayTimeline();
+    }
+  } catch (e) {
+    flog("get_day_timeline ERR: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+// 行可见性：白天 6–23 点恒显（空行也是时间轴的一部分），凌晨仅在有记录时出现
+function tlRowVisible(h) {
+  return h.hour >= 6 || h.front_secs > 0 || h.events > 0 || h.audio_secs > 0;
+}
+
+// 一行 24% 宽度按秒占比换算：一小时满前台 = 满条，跨小时绝对可比
+function tlPct(secs, total) {
+  if (!total) return 0;
+  return (secs / total) * 100;
+}
+
+function paintDayTimeline() {
+  const tl = timelineData;
+  if (!tl) return;
+  $("tlDayLabel").textContent = dateLabel(tl.date);
+  $("tlSummary").textContent =
+    tl.weekday + " · " + (tl.is_workday ? "工作日" : "休息日") +
+    " · 前台 " + tlDur(tl.total_front) +
+    " · 键鼠 " + fmtWan(tl.total_events) + " 次";
+
+  const rows = $("tlRows");
+  rows.textContent = "";
+  const visible = tl.hours.filter(tlRowVisible);
+  $("tlEmpty").classList.toggle("hidden", visible.length > 0);
+  $("tlNextDay").disabled = timelineOffset <= 0;
+
+  visible.forEach((h) => {
+    const row = document.createElement("div");
+    row.className = "tl-row";
+    const segs = [
+      ["tl-seg-work", h.work_secs],
+      ["tl-seg-slack", h.slack_secs],
+      ["tl-seg-comm", h.comm_secs],
+      ["tl-seg-other", h.other_secs],
+    ];
+    const bar = segs
+      .map(([cls, secs]) => {
+        const w = tlPct(secs, 3600);
+        return w > 0 ? '<i class="' + cls + '" style="width:' + w.toFixed(2) + '%"></i>' : "";
+      })
+      .join("");
+    const note =
+      (h.top_app ? escapeHtml(h.top_app) : "无前台") +
+      (h.audio_secs > 0 ? " · 在响 " + tlDur(h.audio_secs) : "") +
+      " · 键鼠 " + fmtWan(h.events) + " 次";
+    row.innerHTML =
+      '<span class="tl-hour">' + String(h.hour).padStart(2, "0") + "</span>" +
+      '<div class="tl-bar">' + bar + "</div>" +
+      '<span class="tl-note">' + note + "</span>";
+    row.title =
+      h.hour + ":00–" + (h.hour + 1) + ":00 · 前台 " + tlDur(h.front_secs) +
+      "（工作 " + tlDur(h.work_secs) + " · 摸鱼 " + tlDur(h.slack_secs) +
+      " · 沟通 " + tlDur(h.comm_secs) + " · 其他 " + tlDur(h.other_secs) + "）" +
+      " · 键鼠 " + h.events + " 次" +
+      (h.audio_secs > 0 ? " · 在响 " + tlDur(h.audio_secs) : "");
+    rows.appendChild(row);
+  });
+}
+
+// 日导航：‹ 往过去翻无上限，› 往未来翻封顶今天
+function tlShift(delta) {
+  const next = timelineOffset + delta;
+  if (next < 0) return;
+  timelineOffset = next;
+  loadDayTimeline();
+}

@@ -47,7 +47,11 @@ has("events 口径常量（滚轮格数不计）", rsInsights, 'const EVENTS_EXP
 has("中文星期表 WEEKDAYS_CN", rsInsights, 'const WEEKDAYS_CN: [&str; 7]');
 has("热力图纯函数 assemble", rsInsights, "pub fn hour_heatmap_assemble(");
 has("热力图 with_db 入口", rsInsights, "pub fn hour_heatmap(span: Span, offset: i64)");
-has("趋势复用 weekbill::period_bill", rsInsights, "use crate::weekbill::{period_bill, period_bounds, Span};");
+has(
+  "趋势复用 weekbill::period_bill（同源 import，含 v1.6.0 时间线借用的 is_workday_of）",
+  rsInsights,
+  "use crate::weekbill::{is_workday_of, period_bill, period_bounds, Span};"
+);
 has("摸鱼率纯函数 slack_rate_of", rsInsights, "fn slack_rate_of(front: i64, slack: i64)");
 has("前台 0 → 摸鱼率 None（断线不画 0）", rsInsights, "fn slack_rate_of");
 has("身体账单纯函数 assemble", rsInsights, "pub fn body_bill_assemble(");

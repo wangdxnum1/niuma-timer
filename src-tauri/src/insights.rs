@@ -3,16 +3,17 @@
 //! events = moves+left+dbl+right+wheel+mid+xbtn+keys；clicks = left−dbl+right+mid+xbtn。
 //! 设计见 docs/plans/2026-09-18-v1.2.0-insights-design.md。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::app_usage;
 use crate::config::Config;
 use crate::db;
 use crate::holiday::HolidayCache;
-use crate::weekbill::{period_bill, period_bounds, Span};
+use crate::weekbill::{is_workday_of, period_bill, period_bounds, Span};
 
 const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
@@ -399,11 +400,225 @@ fn collapse_days_to_months(bb: BodyBill) -> BodyBill {
     }
 }
 
+// ---------- 时间线回顾（v1.6.0） ----------
+
+/// 单小时时间线行。无前台记录的小时各秒为 0——监控关闭 ≠ 离开，
+/// 不臆造「离开」状态（延续「断线不画 0」的诚实数据原则）。
+#[derive(Debug, Serialize)]
+pub struct DayTimelineHour {
+    pub hour: i64,
+    /// 前台秒按四分类拆分（查询时归类，改分类即重算历史）
+    pub work_secs: i64,
+    pub slack_secs: i64,
+    pub comm_secs: i64,
+    pub other_secs: i64,
+    /// 四类之和
+    pub front_secs: i64,
+    /// 该小时媒体播放秒
+    pub audio_secs: i64,
+    /// 键鼠事件（EVENTS_EXPR 口径）
+    pub events: i64,
+    /// 该小时前台秒最大的应用（仅展示，不出本机）
+    pub top_app: Option<String>,
+}
+
+/// 一天的时间线回顾（24 行固定，渲染端无需补行）
+#[derive(Debug, Serialize)]
+pub struct DayTimeline {
+    pub date: String,
+    pub weekday: String,
+    pub is_today: bool,
+    pub is_workday: bool,
+    pub total_front: i64,
+    pub total_events: i64,
+    pub hours: Vec<DayTimelineHour>,
+}
+
+/// 单日 24 小时聚合：app_usage_hourly 按 (hour, app) 归四类、act_hourly 按小时、
+/// audio_usage_hourly 按小时。三表单日各一条 SQL，内存合并进 24 行。
+pub fn day_timeline_assemble(
+    date: NaiveDate,
+    cfg: &Config,
+    hol: &HolidayCache,
+    conn: &Connection,
+) -> rusqlite::Result<DayTimeline> {
+    let date_s = date.format("%Y-%m-%d").to_string();
+    let mut hours: Vec<DayTimelineHour> = (0..24)
+        .map(|h| DayTimelineHour {
+            hour: h,
+            work_secs: 0,
+            slack_secs: 0,
+            comm_secs: 0,
+            other_secs: 0,
+            front_secs: 0,
+            audio_secs: 0,
+            events: 0,
+            top_app: None,
+        })
+        .collect();
+
+    // 前台秒按 (hour, app) 聚合后归类；同时记每小时前台秒最大的应用
+    let mut top: HashMap<i64, (i64, String)> = HashMap::new();
+    {
+        let mut st = conn.prepare(
+            "SELECT hour, app, SUM(seconds) FROM app_usage_hourly \
+             WHERE date = ?1 GROUP BY hour, app",
+        )?;
+        let rows = st
+            .query_map(rusqlite::params![date_s], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (hour, app, secs) in rows {
+            if !(0..24).contains(&hour) {
+                continue;
+            }
+            let h = &mut hours[hour as usize];
+            let cat = app_usage::category_of(&app, cfg);
+            if cat == app_usage::CAT_WORK {
+                h.work_secs += secs;
+            } else if cat == app_usage::CAT_SLACK {
+                h.slack_secs += secs;
+            } else if cat == app_usage::CAT_COMM {
+                h.comm_secs += secs;
+            } else {
+                h.other_secs += secs;
+            }
+            h.front_secs += secs;
+            let e = top.entry(hour).or_insert((0, String::new()));
+            if secs > e.0 {
+                *e = (secs, app);
+            }
+        }
+    }
+    for (hour, (_, app)) in top {
+        hours[hour as usize].top_app = Some(app);
+    }
+
+    // 键鼠事件（口径同周账单 act_events）
+    {
+        let mut st = conn.prepare(&format!(
+            "SELECT hour, {EVENTS_EXPR} FROM act_hourly WHERE date = ?1 GROUP BY hour"
+        ))?;
+        let rows = st
+            .query_map(rusqlite::params![date_s], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (hour, events) in rows {
+            if (0..24).contains(&hour) {
+                hours[hour as usize].events = events;
+            }
+        }
+    }
+
+    // 媒体播放秒
+    {
+        let mut st = conn.prepare(
+            "SELECT hour, SUM(seconds) FROM audio_usage_hourly WHERE date = ?1 GROUP BY hour",
+        )?;
+        let rows = st
+            .query_map(rusqlite::params![date_s], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (hour, secs) in rows {
+            if (0..24).contains(&hour) {
+                hours[hour as usize].audio_secs = secs;
+            }
+        }
+    }
+
+    let total_front = hours.iter().map(|h| h.front_secs).sum();
+    let total_events = hours.iter().map(|h| h.events).sum();
+    Ok(DayTimeline {
+        date: date_s,
+        weekday: weekday_cn(date).to_string(),
+        is_today: date == Local::now().date_naive(),
+        is_workday: is_workday_of(date, hol),
+        total_front,
+        total_events,
+        hours,
+    })
+}
+
 // ---------- 单测（in-memory，仿 weekbill 基建） ----------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 时间线聚合：四类归口、top_app、键鼠/媒体并入、空小时全 0
+    #[test]
+    fn day_timeline_aggregates_categories() {
+        let conn = mem_conn();
+        let cfg = Config {
+            app_categories: HashMap::from([
+                ("代码".to_string(), "工作".to_string()),
+                ("摸鱼网".to_string(), "摸鱼".to_string()),
+                ("微信".to_string(), "沟通".to_string()),
+            ]),
+            ..Default::default()
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap(); // 周一
+        conn.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES ('2026-09-07', 9, '代码', 1800)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES ('2026-09-07', 9, '摸鱼网', 600)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES ('2026-09-07', 10, '微信', 900)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES ('2026-09-07', 15, '神秘软件', 300)",
+            [],
+        )
+        .unwrap();
+        insert_act(&conn, "2026-09-07", 9, [1, 0, 10, 0, 0, 0, 0, 0, 0]);
+        conn.execute(
+            "INSERT INTO audio_usage_hourly (date, hour, app, seconds) VALUES ('2026-09-07', 9, '网易云', 120)",
+            [],
+        )
+        .unwrap();
+
+        let empty_hol = HolidayCache {
+            year: 2026,
+            ..Default::default()
+        };
+        let tl = day_timeline_assemble(date, &cfg, &empty_hol, &conn).unwrap();
+        assert_eq!(tl.hours.len(), 24, "固定 24 行");
+        assert_eq!(tl.weekday, "周一");
+        assert!(tl.is_workday);
+        assert!(!tl.is_today, "过去日期不标今天");
+
+        let h9 = &tl.hours[9];
+        assert_eq!(h9.work_secs, 1800);
+        assert_eq!(h9.slack_secs, 600);
+        assert_eq!(h9.front_secs, 2400);
+        assert_eq!(h9.top_app.as_deref(), Some("代码"), "前台秒最大者");
+        assert!(h9.events > 0);
+        assert_eq!(h9.audio_secs, 120);
+        let h10 = &tl.hours[10];
+        assert_eq!(h10.comm_secs, 900);
+        let h15 = &tl.hours[15];
+        assert_eq!(h15.other_secs, 300, "未分类归其他");
+        assert_eq!(h15.top_app.as_deref(), Some("神秘软件"));
+        let h23 = &tl.hours[23];
+        assert_eq!(h23.front_secs, 0, "无记录小时全 0");
+        assert_eq!(h23.top_app, None);
+        assert_eq!(tl.total_front, 1800 + 600 + 900 + 300);
+    }
 
     #[test]
     fn annual_body_preserves_recorded_day_count() {

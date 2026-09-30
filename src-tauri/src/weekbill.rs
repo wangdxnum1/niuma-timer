@@ -184,7 +184,7 @@ pub fn delta_pct(cur: f64, prev: f64) -> Option<f64> {
 
 /// 法定工作日口径：当天年份若非当前缓存年份，取内置表（owned，解决生命周期）；
 /// 表缺失/为空退回周一至五；不触发网络刷新。
-fn is_workday_of(date: NaiveDate, cur: &HolidayCache) -> bool {
+pub(crate) fn is_workday_of(date: NaiveDate, cur: &HolidayCache) -> bool {
     let local: Option<HolidayCache> = if cur.year == date.year() {
         None
     } else {
