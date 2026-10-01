@@ -944,6 +944,33 @@ mod tests {
     // ---- 摸鱼统计：分类优先级（用户覆盖 > 内置默认 > 其他）----
 
     #[test]
+    fn suggest_category_rules() {
+        let cfg = Config::default();
+        // 关键词命中（大小写不敏感）
+        assert_eq!(
+            suggest_category("Visual Studio Code", &cfg).as_deref(),
+            Some(CAT_WORK)
+        );
+        assert_eq!(
+            suggest_category("WeChat.exe", &cfg).as_deref(),
+            Some(CAT_COMM)
+        );
+        assert_eq!(
+            suggest_category("bilibili 客户端", &cfg).as_deref(),
+            Some(CAT_SLACK)
+        );
+        // 已在内置默认表的应用不需要建议（微信→沟通已内置）
+        assert_eq!(suggest_category("微信", &cfg), None);
+        // 用户已分类的应用不需要建议
+        let mut cfg2 = Config::default();
+        cfg2.app_categories
+            .insert("神秘软件".to_string(), CAT_WORK.to_string());
+        assert_eq!(suggest_category("神秘软件", &cfg2), None);
+        // 无关键词命中 → 不给建议
+        assert_eq!(suggest_category(" totally-unknown ", &cfg), None);
+    }
+
+    #[test]
     fn category_of_precedence() {
         let mut cfg = Config::default();
         // 内置默认表：网易云→摸鱼、VS Code→工作、微信→沟通

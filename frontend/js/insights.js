@@ -7,14 +7,16 @@ const BILL_TAB_PANES = {
   trend: "billTabTrend",
   body: "billTabBody",
   timeline: "billTabTimeline",
+  focus: "billTabFocus",
 };
-const BILL_TAB_KEYS = ["bill", "heat", "trend", "body", "timeline"]; // 翻页器循环顺序
+const BILL_TAB_KEYS = ["bill", "heat", "trend", "body", "timeline", "focus"]; // 翻页器循环顺序
 const BILL_TAB_NAMES = {
   bill: "本周账单",
   heat: "时段热力",
   trend: "趋势",
   body: "身体账单",
   timeline: "时间线",
+  focus: "专注",
 };
 let heatData = null; // 各 tab 最近一次返回缓存（仅当前 tab 会被重画）
 let trendData = null;
@@ -38,6 +40,7 @@ async function loadBillTab() {
   if (curBillTab === "heat") return loadHourHeat();
   if (curBillTab === "trend") return loadWeekTrend();
   if (curBillTab === "timeline") return loadDayTimeline();
+  if (curBillTab === "focus") return loadFocusSummary();
   return loadBodyBill();
 }
 
@@ -476,4 +479,71 @@ function tlShift(delta) {
   if (next < 0) return;
   timelineOffset = next;
   loadDayTimeline();
+}
+
+// ---- 专注段聚合（v1.7.0）：周期内每日段数/总时长/最长一段 ----
+let focusData = null;
+let focusGeneration = 0;
+
+async function loadFocusSummary() {
+  const span = curBillSpan, offset = weekOffset, tab = curBillTab;
+  const generation = ++focusGeneration;
+  try {
+    const result = await invoke("get_focus_summary", { span, offset });
+    if (generation === focusGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill") {
+      focusData = result;
+      paintFocusSummary();
+    }
+  } catch (e) {
+    flog("get_focus_summary ERR: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function paintFocusSummary() {
+  const s = focusData;
+  if (!s) return;
+  const hasData = s.days.length > 0;
+  $("focusEmpty").classList.toggle("hidden", hasData);
+  $("focusBars").closest("section").classList.toggle("hidden", !hasData);
+  if (!hasData) return;
+
+  const recDays = s.days.length;
+  $("focusSessions").textContent = String(s.total_sessions);
+  $("focusSessionsAvg").textContent = "日均 " + Math.round(s.total_sessions / recDays) + " 段";
+  $("focusTotal").textContent = fmtDurCN(s.total_min * 60);
+  $("focusTotalAvg").textContent = "日均 " + fmtDurCN(Math.round((s.total_min / recDays) * 60));
+  $("focusLongest").textContent = fmtDurCN(s.longest_min * 60);
+  // 全周期最长一段的时间标签：取 longest_min 最大的那天的 longest_hm
+  const best = s.days.reduce((a, d) => (d.longest_min > (a ? a.longest_min : 0) ? d : a), null);
+  $("focusLongestHm").textContent = best && best.longest_hm ? best.longest_hm : "";
+
+  const bd = s.best_day;
+  $("focusBestDay").textContent = bd ? bd.date.slice(5).replace("-", ".") + " " + bd.weekday : "—";
+  $("focusBestMin").textContent = bd ? "单日 " + fmtDurCN(bd.total_min * 60) : "";
+
+  $("focusFoot").textContent =
+    "专注 = 工作类前台 + 键鼠活跃连续达标记一段 · 被打断/离开 5 分钟即断段";
+
+  // 逐日总专注单金柱：只画有专注段的日子（空日本来就没有专注）
+  const bars = $("focusBars");
+  bars.textContent = "";
+  const days = s.days;
+  const maxMin = Math.max(1, ...days.map((d) => d.total_min));
+  days.forEach((d) => {
+    const col = document.createElement("div");
+    col.className = "bar-col";
+    const pair = document.createElement("div");
+    pair.className = "bar-pair";
+    const bar = document.createElement("div");
+    bar.className = "bar bar-earn";
+    bar.style.height = Math.max(3, Math.round((d.total_min / maxMin) * 100)) + "%";
+    bar.title = d.date + " " + d.weekday + " · " + d.sessions + " 段 · " +
+      fmtDurCN(d.total_min * 60) + (d.longest_hm ? " · 最长 " + d.longest_hm : "");
+    pair.append(bar);
+    const wd = document.createElement("div");
+    wd.className = "bar-wd";
+    wd.textContent = d.date.slice(8);
+    col.append(pair, wd);
+    bars.append(col);
+  });
 }

@@ -46,6 +46,9 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Day timeline** — a "Timeline" insight tab: hour-by-hour foreground composition (work/slack/chat/other), top app, input & media activity for any past day; empty hours stay empty — monitor-off never fakes "away"
 - **Bill as image** — render the current period's bill into a dark-and-gold report card (income highlights / breakdown rows / daily bars / extremes / quip), copied to clipboard and saved to Downloads
 - **Hourly wage mode** — switch pay mode between monthly salary and hourly rate; all downstream money math inherits automatically
+- **Focus sessions** — a sixth "Focus" insight tab: segments of continuous work-foreground + keyboard activity (default 25 min, adjustable) counted per day; sleep gaps never counted, accumulates from v1.7.0 on
+- **Category suggestions** — one-tap suggested categories for uncategorized apps (offline keyword rules)
+- **Monthly bill image** — "save as image" now covers the month span, quip wording follows the period
 - **Data insights** — three extra views on the Bill tab: weekday × hour activity heatmap, earnings and slack-rate trends across eight periods, and a period "body bill" of keyboard/mouse wear
 - **Guard reminders** — sedentary reminders and off-work reminders via native Windows notifications, plus global hotkeys (Alt+Shift+N toggle window, Alt+Shift+P pause monitoring); configurable thresholds, all off-work aware
 - **Manual pause** — pause all monitoring from the tray menu or Alt+Shift+P; money freezes until resumed
@@ -180,6 +183,8 @@ live in the `cmds_*.rs` modules since main.rs was modularized).
 | `monthly_salary` | Monthly salary (¥) |
 | `salary_mode` | Pay mode: `monthly` (default) or `hourly` |
 | `hourly_wage` | Hourly wage (¥/h), effective when `salary_mode` is `hourly` |
+| `focus_enabled` | Focus-session tracking switch (default on) |
+| `focus_min_minutes` | Focus segment threshold (minutes, 10-120, default 25) |
 | `am_start` / `am_end` | Morning work segment (e.g. `09:00` / `12:00`) |
 | `pm_start` / `pm_end` | Afternoon work segment (e.g. `13:30` / `18:00`) |
 | `payday` | Pay day of each month (1–31) |

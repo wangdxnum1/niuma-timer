@@ -15,6 +15,7 @@ const caps = read("src-tauri/capabilities/default.json");
 const html = read("frontend/index.html");
 const billSrc = read("frontend/js/bill.js");
 const bootSrc = read("frontend/js/boot.js");
+const css = read("frontend/styles.css");
 
 let pass = 0, fail = 0;
 const eq = (name, a, b) => {
@@ -32,17 +33,22 @@ has("注册进 generate_handler", rsMain, "export_image,");
 has("capabilities 自动补齐 allow-export-image", caps, "allow-export-image");
 
 console.log("== 前端：模型折算（真实调用） ==");
-// 从 bill.js 抽出 buildReportModel 源码（到行首 "}"" 为止），配桩真实调用
+// 从 bill.js 抽出 buildReportModel / spanQuipText 源码（到行首 "}" 为止），配桩真实调用
 const m = billSrc.match(/function buildReportModel\(bill\) \{[\s\S]*?\n\}/);
+const sq = billSrc.match(/function spanQuipText\(text, span\) \{[\s\S]*?\n\}/);
 ok("buildReportModel 可提取", !!m);
-if (m) {
+ok("spanQuipText 可提取", !!sq);
+if (m && sq) {
   const stubFmtDateRange = (s, e) => s + "~" + e;
-  const stubQuip = (pct, withMoney) => withMoney ? "quip-money@" + pct : "quip-plain@" + pct;
+  // 桩金句真实走 spanQuipText：验「本周/本月」措辞随跨度切换
+  const spanQuipText = new Function("return " + sq[0])();
+  const stubQuip = (pct, withMoney, span) =>
+    spanQuipText("本周工资建议原路退回", span) + "@" + pct + "@" + (withMoney ? 1 : 0);
   const build = new Function(
-    "fmtDateRange", "weekBillQuip", "moneyConfigured",
+    "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
     m[0] + "\nreturn buildReportModel;"
-  )(stubFmtDateRange, stubQuip, () => true);
-  const model = build({
+  );
+  const model = build(stubFmtDateRange, stubQuip, () => true, "week")({
     period_label: "第 37 周",
     period_start: "2026-09-07",
     period_end: "2026-09-13",
@@ -65,9 +71,35 @@ if (m) {
   eq("进账 = total_income", model.income, 3000);
   eq("摸鱼率折成百分数", model.slackPct.toFixed(1), "18.2");
   eq("加班费与时长同行", model.ot + "|" + model.otHours, "200|7.5");
-  eq("金句走带钱档位", model.quip, "quip-money@18.2");
+  eq("金句走带钱档位（周措辞）", model.quip, "本周工资建议原路退回@18.2@1");
+  eq("模型带跨度（周）", model.span, "week");
   eq("桶条带工作日标记", model.bars[1].isWorkday, false);
   eq("极值缺失容错 null", model.slackiest, null);
+}
+
+console.log("== 月报图片（v1.7.0） ==");
+has("spanQuipText 分档函数", billSrc, "function spanQuipText(text, span) {");
+ok("金句按跨度替换措辞（本周→本月）", /span === "month" \? text\.replace\(\/本周\/g, "本月"\)/.test(billSrc));
+ok("weekBillQuip 带 span 参数", /function weekBillQuip\(ratePct, withMoney, span\)/.test(billSrc));
+ok("年跨度双重拦截（按钮禁用 + 函数早退）",
+  /imgBtn\.disabled = curBillSpan === "year"/.test(billSrc) &&
+  /if \(curBillSpan === "year"\) \{\s*\n\s*showToast\("年账单暂不支持存为图片", "err"\);/.test(billSrc));
+ok("禁用态样式", css.includes(".ghost[disabled]"));
+if (m && sq) {
+  // 月跨度：同一模型，金句措辞「本周→本月」，span 字段随全局切换
+  const stubFmtDateRange = (s, e) => s + "~" + e;
+  const spanQuipText = new Function("return " + sq[0])();
+  const stubQuip = (pct, withMoney, span) =>
+    spanQuipText("本周工资建议原路退回", span) + "@" + pct + "@" + (withMoney ? 1 : 0);
+  const mm = new Function(
+    "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
+    m[0] + "\nreturn buildReportModel;"
+  )(stubFmtDateRange, stubQuip, () => true, "month")({
+    period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30",
+    total_income: 1, slack_rate: 0.182, buckets: [],
+  });
+  eq("月跨度金句措辞切换", mm.quip, "本月工资建议原路退回@18.2@1");
+  eq("模型带跨度（月）", mm.span, "month");
 }
 
 console.log("== 前端：绘制与保存链路 ==");

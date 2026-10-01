@@ -2261,3 +2261,16 @@ button:active {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 分类建议 chip（v1.7.0）：虚线金描边，与可点分类 chip 区分 */
+.cat-suggest {
+  border: 1px dashed rgba(255, 214, 80, 0.65);
+  color: #ffd650;
+  background: transparent;
+}
+
+/* 禁用态 ghost 按钮（年跨度下的「存为图片」） */
+.ghost[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

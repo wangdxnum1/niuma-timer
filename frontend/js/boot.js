@@ -86,6 +86,11 @@ document.querySelectorAll(".mon-seg-item").forEach((btn) => {
 $("monDetailBtn").addEventListener("click", () => showView(MON_VIEWS[curMon]));
 // 摸鱼统计：点应用行的分类标签循环改分类（事件委托——列表每 2 秒重渲染不丢监听）
 $("appuList").addEventListener("click", (e) => {
+  const sug = e.target.closest(".cat-suggest");
+  if (sug) {
+    acceptSuggestion(sug.dataset.sapp, sug.dataset.scat);
+    return;
+  }
   const chip = e.target.closest(".cat-chip");
   if (chip) cycleAppCategory(chip.dataset.app, chip.dataset.cat);
 });

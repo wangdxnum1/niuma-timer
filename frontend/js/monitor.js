@@ -435,6 +435,22 @@ async function cycleAppCategory(app, current) {
   }
 }
 
+// 采纳分类建议（v1.7.0）：直写建议分类（不走循环），与手点分类同一落库路径
+async function acceptSuggestion(app, cat) {
+  flog("cat: suggest accept app=" + app + " cat=" + cat);
+  try {
+    const cfg = await invoke("load_config");
+    const map = Object.assign({}, cfg.app_categories || {});
+    map[app] = cat;
+    await invoke("save_config", { cfg: { app_categories: map } });
+    showToast("已归类为「" + cat + "」", "ok");
+    loadAppUsage();
+  } catch (e) {
+    flog("cat: suggest FAILED " + e);
+    showToast("分类保存失败：" + e, "err");
+  }
+}
+
 // 应用行：图标 + 软件名 + 分类标签（明细页）+ 进度条 + 时长（按时长降序）。
 // emptyText 自定义空态文案；opts.chips 为 true 时行内带可点的分类标签
 function renderAppRows(container, apps, limit, emptyText, opts) {
@@ -462,10 +478,21 @@ function renderAppRows(container, apps, limit, emptyText, opts) {
           escapeHtml(a.category) +
           "</span>"
         : "";
+    const suggest =
+      chips && a.category === "其他" && a.suggestion
+        ? '<span class="cat-chip cat-suggest" data-sapp="' +
+          escapeHtml(a.app) +
+          '" data-scat="' +
+          escapeHtml(a.suggestion) +
+          '" title="点击采纳建议分类">建议：' +
+          escapeHtml(a.suggestion) +
+          "</span>"
+        : "";
     row.innerHTML =
       appIconHTML(a) +
       '<span class="tk-key appu-name" title="' + escapeHtml(a.app) + '">' + escapeHtml(a.app) + "</span>" +
       chip +
+      suggest +
       '<div class="tk-bar"><div style="width:' + Math.round((a.seconds / max) * 100) + '%"></div></div>' +
       '<span class="tk-count appu-time">' + fmtDurCN(a.seconds) + "</span>";
     container.appendChild(row);
