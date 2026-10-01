@@ -213,7 +213,8 @@ fn monthly_workdays_of(year: i32, month: u32, cfg: &Config, cur: &HolidayCache) 
 }
 
 /// 周期标签：周 → "第 N 周"；月 → "YYYY 年 M 月"；年 → "YYYY 年"
-fn period_label_of(span: Span, start: NaiveDate) -> String {
+/// （focus.rs 的专注聚合复用同一标签口径）
+pub(crate) fn period_label_of(span: Span, start: NaiveDate) -> String {
     match span {
         Span::Week => format!("第 {} 周", start.iso_week().week()),
         Span::Month => format!("{} 年 {} 月", start.year(), start.month()),

@@ -134,6 +134,12 @@ pub struct Config {
     /// 久坐提醒阈值：连续活跃多少分钟后提醒（1–120，默认 50）
     #[serde(default = "default_remind_sedentary_minutes")]
     pub remind_sedentary_minutes: u32,
+    /// 专注段开关（v1.7.0）：关闭时状态机不记段
+    #[serde(default = "default_true")]
+    pub focus_enabled: bool,
+    /// 专注段达标线：连续工作类前台 + 活跃多少分钟记一段（10–120，默认 25）
+    #[serde(default = "default_focus_min_minutes")]
+    pub focus_min_minutes: u32,
     /// 下班提醒开关（工作日过 pm_end 且当日有监控记录时提醒一次）
     #[serde(default = "default_true")]
     pub remind_offwork_enabled: bool,
@@ -203,6 +209,10 @@ fn default_remind_sedentary_minutes() -> u32 {
     50
 }
 
+fn default_focus_min_minutes() -> u32 {
+    25
+}
+
 fn default_salary_mode() -> String {
     "monthly".into()
 }
@@ -244,6 +254,8 @@ impl Default for Config {
             bill_span: "week".into(),
             remind_sedentary_enabled: true,
             remind_sedentary_minutes: 50,
+            focus_enabled: true,
+            focus_min_minutes: 25,
             remind_offwork_enabled: true,
             remind_payday_enabled: true,
             remind_payday_last_date: None,

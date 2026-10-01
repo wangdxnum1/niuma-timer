@@ -512,6 +512,15 @@
           <input id="remind_offwork_enabled" type="checkbox" class="switch" />
         </label>
         <label class="switch-row"><span>发薪日战绩提醒</span><input id="remind_payday_enabled" type="checkbox" class="switch" /></label>
+        <!-- 专注段（v1.7.0）：工作类前台 + 键鼠活跃连续达标记一段，洞察「专注」tab 查看 -->
+        <label class="switch-row">
+          <span>专注统计</span>
+          <input id="focus_enabled" type="checkbox" class="switch" />
+        </label>
+        <label id="focusMinutesRow">
+          <span>专注达标线（分钟）</span>
+          <input id="focus_min_minutes" type="number" min="10" max="120" step="1" />
+        </label>
         <!-- shortcuts_enabled 关闭后 Rust 端 apply_shortcuts 会注销全部全局快捷键 -->
         <label class="switch-row">
           <span>全局快捷键</span>

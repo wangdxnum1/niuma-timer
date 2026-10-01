@@ -6,6 +6,7 @@ use chrono::{Datelike, Duration, Local};
 use tauri::State;
 
 use crate::db;
+use crate::focus;
 use crate::insights;
 use crate::overtime;
 use crate::state::AppState;
@@ -108,4 +109,16 @@ pub(crate) fn get_day_timeline(
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
     db::with_db(|conn| insights::day_timeline_assemble(date, &cfg, &hol, conn))
         .map_err(|e| e.to_string())
+}
+
+/// 专注段聚合（v1.7.0）：周期内每日段数/总时长/最长一段。快照模式同 get_bill。
+#[tauri::command(async)]
+pub(crate) fn get_focus_summary(
+    state: State<'_, AppState>,
+    span: String,
+    offset: i64,
+) -> Result<focus::FocusSummary, String> {
+    let s = weekbill::parse_span(&span)?;
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
+    focus::period_summary(&hol, s, offset)
 }

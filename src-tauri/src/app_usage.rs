@@ -181,6 +181,83 @@ pub(crate) fn category_of(display: &str, cfg: &Config) -> String {
     CAT_OTHER.to_string()
 }
 
+/// 分类建议（v1.7.0）：按名称关键词猜分类，仅供 UI 一键采纳，不自动生效。
+/// 仅当应用既不在用户分类、也不在内置默认表（即当前归「其他」）时才给出建议。
+/// 规则表按首次命中顺序排列；大小写不敏感的子串匹配。
+pub(crate) fn suggest_category(display: &str, cfg: &Config) -> Option<String> {
+    if category_of(display, cfg) != CAT_OTHER {
+        return None; // 用户已分类或内置表已覆盖：不需要建议
+    }
+    let low = display.to_lowercase();
+    const RULES: &[(&str, &str)] = &[
+        // 开发
+        ("code", CAT_WORK),
+        ("visual studio", CAT_WORK),
+        ("idea", CAT_WORK),
+        ("pycharm", CAT_WORK),
+        ("devc", CAT_WORK),
+        ("git ", CAT_WORK),
+        ("terminal", CAT_WORK),
+        ("powershell", CAT_WORK),
+        ("cmd", CAT_WORK),
+        ("sql", CAT_WORK),
+        ("postman", CAT_WORK),
+        ("docker", CAT_WORK),
+        ("word", CAT_WORK),
+        ("excel", CAT_WORK),
+        ("powerpoin", CAT_WORK),
+        ("notion", CAT_WORK),
+        ("outlook", CAT_WORK),
+        ("docs", CAT_WORK),
+        // 沟通
+        ("wechat", CAT_COMM),
+        ("weixin", CAT_COMM),
+        ("qq", CAT_COMM),
+        ("dingtalk", CAT_COMM),
+        ("钉钉", CAT_COMM),
+        ("feishu", CAT_COMM),
+        ("飞书", CAT_COMM),
+        ("slack", CAT_COMM),
+        ("telegram", CAT_COMM),
+        ("discord", CAT_COMM),
+        ("teams", CAT_COMM),
+        ("mail", CAT_COMM),
+        ("thunderbird", CAT_COMM),
+        ("skype", CAT_COMM),
+        // 摸鱼
+        ("bilibili", CAT_SLACK),
+        ("bili", CAT_SLACK),
+        ("youtube", CAT_SLACK),
+        ("douyu", CAT_SLACK),
+        ("斗鱼", CAT_SLACK),
+        ("game", CAT_SLACK),
+        ("steam", CAT_SLACK),
+        ("music", CAT_SLACK),
+        ("cloudmusic", CAT_SLACK),
+        ("网易云", CAT_SLACK),
+        ("qq音乐", CAT_SLACK),
+        ("spotify", CAT_SLACK),
+        ("video", CAT_SLACK),
+        ("potplayer", CAT_SLACK),
+        ("vlc", CAT_SLACK),
+        ("weibo", CAT_SLACK),
+        ("微博", CAT_SLACK),
+        ("zhihu", CAT_SLACK),
+        ("知乎", CAT_SLACK),
+        ("tieba", CAT_SLACK),
+        ("douban", CAT_SLACK),
+        ("小红书", CAT_SLACK),
+        ("xiaohongshu", CAT_SLACK),
+        ("tweet", CAT_SLACK),
+    ];
+    for (kw, cat) in RULES {
+        if low.contains(kw) {
+            return Some((*cat).to_string());
+        }
+    }
+    None
+}
+
 /// 单类切片（应用构成条的一个分段）
 #[derive(Debug, Clone, Serialize)]
 pub struct CategorySlice {
@@ -240,6 +317,15 @@ static CUR: Mutex<CurState> = Mutex::new(CurState {
     app: None,
     since_ms: 0,
 });
+
+/// 当前前台应用展示名（focus.rs 判定「工作类前台」用）。
+/// 监控未就绪/无前台时为 None——调用方按「非工作」处理。
+pub(crate) fn current_display() -> Option<String> {
+    sync::lock(&CUR, "app_usage::CUR")
+        .app
+        .as_ref()
+        .map(|a| a.display.clone())
+}
 
 /// 「显示名 → exe 路径」映射：前台切换时填充，供 summary() 查询路径懒提取图标，
 /// 覆盖「仅短暂前台、tick 来不及提取」的边界情况，避免明细里出现首字占位图标。
@@ -745,6 +831,8 @@ pub struct AppUsageItem {
     pub seconds: i64,
     /// 摸鱼统计分类（工作/摸鱼/沟通/其他）
     pub category: String,
+    /// 分类建议（v1.7.0）：仅「其他」类且当日前台 ≥10 分钟时给出，供前端一键采纳
+    pub suggestion: Option<String>,
     /// 应用图标（base64 PNG data URL），无图标为 None（前端显示首字占位）
     pub icon: Option<String>,
 }
@@ -817,8 +905,15 @@ pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppU
                 .get(&app)
                 .cloned();
             let category = category_of(&app, cfg);
+            // 建议：其他类 + 当日满 10 分钟前台才值得打扰用户
+            let suggestion = if category == CAT_OTHER && seconds >= 600 {
+                suggest_category(&app, cfg)
+            } else {
+                None
+            };
             AppUsageItem {
                 icon: icon_for(&app, exe.as_deref(), known.contains(app.as_str())),
+                suggestion,
                 category,
                 app,
                 seconds,

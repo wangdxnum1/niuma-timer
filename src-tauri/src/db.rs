@@ -104,6 +104,19 @@ CREATE TABLE IF NOT EXISTS audio_usage_hourly (
 );
 "#;
 
+/// 专注段（v1.7.0）：一段达标专注在结束时落一条。date 归属**开始日**，
+/// 跨午夜段 end_hm < start_hm 属正常形态（前端显示「次日」）。
+pub(crate) const CREATE_FOCUS_SESSIONS: &str = r#"
+CREATE TABLE IF NOT EXISTS focus_sessions (
+    date     TEXT NOT NULL,
+    start_hm TEXT NOT NULL,
+    end_hm   TEXT NOT NULL,
+    minutes  INTEGER NOT NULL,
+    top_app  TEXT NOT NULL DEFAULT '',
+    id       INTEGER PRIMARY KEY AUTOINCREMENT
+);
+"#;
+
 /// 全部建表语句（幂等，重复执行无副作用）。
 ///
 /// 按表拆开而非常量拼接：`concat!` 只接受字面量、无法组合 `const &str`；
@@ -116,6 +129,7 @@ const TABLE_DDL: &[&str] = &[
     CREATE_APP_USAGE_HOURLY,
     CREATE_AUDIO_USAGE,
     CREATE_AUDIO_USAGE_HOURLY,
+    CREATE_FOCUS_SESSIONS,
 ];
 
 /// 建全部数据表（幂等，重复执行无副作用）。

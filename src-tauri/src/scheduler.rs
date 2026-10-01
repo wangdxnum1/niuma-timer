@@ -67,6 +67,9 @@ pub fn start(app: AppHandle) {
                 {
                     let state = app.state::<crate::AppState>();
                     run("refresh_tray", || crate::refresh_tray(&app, state.inner()));
+                    // 专注段状态机：每拍喂一次信号（起段/延长/断段判定，见 focus 模块）
+                    let cfg = crate::sync::lock(&state.config, "state.config").clone();
+                    run("focus_tick", move || crate::focus::tick(&cfg));
                 }
 
                 // ── 每 5 拍：跨天重拉节假日 + 锁屏加班落盘 ──

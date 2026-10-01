@@ -38,6 +38,7 @@ const DATED_TABLES: &[(&str, &str)] = &[
     ("app_usage_hourly", "date"),
     ("audio_usage", "date"),
     ("audio_usage_hourly", "date"),
+    ("focus_sessions", "date"),
 ];
 
 /// 迁移遗留文件：8-21 从 JSON 迁到 SQLite 时的备份，早已无用
