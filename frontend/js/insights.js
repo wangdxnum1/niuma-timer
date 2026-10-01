@@ -32,6 +32,8 @@ function setBillTabUI(tab) {
   Object.entries(BILL_TAB_PANES).forEach(([key, id]) =>
     $(id).classList.toggle("hidden", key !== curBillTab)
   );
+  // 导出动作只对本周账单 tab 有意义：其余洞察页隐藏工具栏右侧动作区
+  $("billActions").classList.toggle("hidden", curBillTab !== "bill");
 }
 
 // 懒加载分发：进页 / 切 tab / 翻周才拉对应命令（周级聚合，不进 tick 轮询）

@@ -53,7 +53,7 @@ function extractFn(src, name) {
 // ---------------------------------------------------------------- 1. 结构
 has("加班页导出按钮 otExportBtn", html, 'id="otExportBtn"');
 has("账单页导出按钮 billExportBtn", html, 'id="billExportBtn"');
-has("CSS 导出工具条 .export-bar", css, ".export-bar {");
+has("CSS 账单工具栏 .bill-toolbar（动作区右对齐）", css, ".bill-toolbar {");
 hasNot("已移除内联状态条 .export-status", css, ".export-status {");
 
 // ---------------------------------------------------------------- 2. 函数存在

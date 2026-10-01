@@ -491,14 +491,20 @@ button:active {
   font-size: 12px;
   padding: 5px 11px;
 }
-/* 导出 CSV 工具条：右对齐，与月/周导航拉开距离 */
-.export-bar {
+/* 账单工具栏：左周期切换、右导出动作，单行收纳（替代原孤立的右对齐工具条） */
+.bill-toolbar {
   display: flex;
-  justify-content: flex-end;
-  margin: -2px 0 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
-.export-bar .ghost {
-  margin-left: auto;
+.bill-actions {
+  display: flex;
+  gap: 6px;
+}
+.bill-actions .ghost {
+  padding: 5px 10px;
+  font-size: 12px;
 }
 
 /* ====== hero 卡：全页唯一视觉焦点（大金额 + 进度 + 走势）====== */

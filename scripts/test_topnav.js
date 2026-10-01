@@ -85,7 +85,8 @@ for (const [name, src] of [
   ["前端源码", appSrc],
 ]) {
   eq(name + " 无残留 topnav", src.includes("topnav"), false);
-  eq(name + " 无残留 toolbar", src.includes("toolbar"), false);
+  // 独立 "toolbar" 类名不得复活；复合命名（如 bill-toolbar）不在此列（账单工具栏）
+  eq(name + " 无残留 toolbar", /(^|[^-\w])toolbar([^-\w]|$)/.test(src), false);
   eq(name + " 无残留 seg-nav", src.includes("seg-nav"), false);
   eq(
     name + " 无残留 seg-item 精确类",
