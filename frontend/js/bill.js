@@ -5,12 +5,17 @@ const WEEK_BILL_QUIPS = [
   { min: 0, text: "本周天选牛马，老板的战略合作伙伴" },
 ];
 
-function weekBillQuip(ratePct, withMoney) {
+function weekBillQuip(ratePct, withMoney, span) {
   const tiers = withMoney ? WEEK_BILL_QUIPS : WEEK_BILL_QUIPS.filter((q) => q.min < 40);
   for (const q of tiers) {
-    if (ratePct >= q.min) return q.text;
+    if (ratePct >= q.min) return spanQuipText(q.text, span);
   }
-  return tiers[tiers.length - 1].text;
+  return spanQuipText(tiers[tiers.length - 1].text, span);
+}
+
+// 月跨度账单复用同一组金句，仅把「本周」措辞换成「本月」
+function spanQuipText(text, span) {
+  return span === "month" ? text.replace(/本周/g, "本月") : text;
 }
 
 let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
@@ -52,6 +57,9 @@ function readBillSpan() {
 
 function setBillSpanUI(span) {
   curBillSpan = span === "month" || span === "year" ? span : "week";
+  // 年账单不提供图片导出：报告卡版式按月/周设计，年图价值低（按钮置灰）
+  const imgBtn = $("billImageBtn");
+  if (imgBtn) imgBtn.disabled = curBillSpan === "year";
   document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.span === curBillSpan);
   });
@@ -126,7 +134,7 @@ function paintReceipt(bill) {
   const slackSecs = (bill.buckets || []).reduce((s, d) => s + (d.slack_seconds || 0), 0);
   const quote = $("rcpQuote");
   if (front > 0) {
-    quote.textContent = weekBillQuip((slackSecs / front) * 100, moneyConfigured());
+    quote.textContent = weekBillQuip((slackSecs / front) * 100, moneyConfigured(), curBillSpan);
     quote.classList.remove("hidden");
   } else {
     quote.classList.add("hidden");
@@ -271,7 +279,8 @@ function buildReportModel(bill) {
     })),
     hardest: bill.hardest || null,
     slackiest: bill.slackiest || null,
-    quip: weekBillQuip(ratePct, moneyConfigured()),
+    span: curBillSpan,
+    quip: weekBillQuip(ratePct, moneyConfigured(), curBillSpan),
   };
 }
 
@@ -397,6 +406,10 @@ function drawReport(model, scale) {
 
 // 保存链路：toBlob → 剪贴板（可用则复制）→ base64 → 后端落盘下载目录
 async function saveBillImage() {
+  if (curBillSpan === "year") {
+    showToast("年账单暂不支持存为图片", "err");
+    return;
+  }
   if (!billData) {
     showToast("先看一眼本期账单，再来生成图片", "err");
     return;

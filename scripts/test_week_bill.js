@@ -101,7 +101,7 @@ has("懒渲染：进账单页同步翻页器并拉当前页", appSrc, "setBillTa
 has("翻周状态 weekOffset", appSrc, "let weekOffset = 0;");
 has("本周封顶", appSrc, "if (next < 0) return;");
 has("四档金句表 WEEK_BILL_QUIPS", appSrc, "const WEEK_BILL_QUIPS");
-has("金句函数 weekBillQuip", appSrc, "function weekBillQuip(ratePct, withMoney)");
+has("金句函数 weekBillQuip（v1.7.0 起带跨度参数）", appSrc, "function weekBillQuip(ratePct, withMoney, span)");
 has("金句：<10%", appSrc, "本周天选牛马，老板的战略合作伙伴");
 has("金句：10-25%", appSrc, "摸得克制，装得敬业");
 has("金句：25-40%", appSrc, "将近三分之一的班，上给了手机");

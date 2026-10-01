@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=a544a81c" />
+    <link rel="stylesheet" href="styles.css?v=74268912" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -93,6 +93,7 @@
         <button class="pg-dot" data-btab="trend" title="趋势"></button>
         <button class="pg-dot" data-btab="body" title="身体账单"></button>
         <button class="pg-dot" data-btab="timeline" title="时间线"></button>
+        <button class="pg-dot" data-btab="focus" title="专注"></button>
       </div>
     </div>
 
@@ -380,6 +381,38 @@
           <div class="bill-empty-txt">这一天没有任何监控记录</div>
         </div>
       </div>
+      <div id="billTabFocus" class="hidden">
+        <div class="body-grid">
+          <section class="card body-kpi">
+            <div class="body-k">专注段数</div>
+            <div class="body-v" id="focusSessions">—</div>
+            <div class="body-s" id="focusSessionsAvg"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">总专注</div>
+            <div class="body-v" id="focusTotal">—</div>
+            <div class="body-s" id="focusTotalAvg"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">最长一段</div>
+            <div class="body-v" id="focusLongest">—</div>
+            <div class="body-s" id="focusLongestHm"></div>
+          </section>
+          <section class="card body-kpi">
+            <div class="body-k">最专注一天</div>
+            <div class="body-v" id="focusBestDay">—</div>
+            <div class="body-s" id="focusBestMin"></div>
+          </section>
+        </div>
+        <section class="card">
+          <div class="dash-extreme" id="focusFoot"></div>
+          <div class="dash-bars" id="focusBars"></div>
+        </section>
+        <div id="focusEmpty" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">专注统计自 v1.7.0 起积累，本期还没有专注段</div>
+        </div>
+      </div>
     </div>
 
     <!-- 二级页面：设置（六卡：薪资与作息 → 加班 → 守护 → 数据监控 → 外观 → 系统与数据） -->
@@ -512,6 +545,15 @@
           <input id="remind_offwork_enabled" type="checkbox" class="switch" />
         </label>
         <label class="switch-row"><span>发薪日战绩提醒</span><input id="remind_payday_enabled" type="checkbox" class="switch" /></label>
+        <!-- 专注段（v1.7.0）：工作类前台 + 键鼠活跃连续达标记一段，洞察「专注」tab 查看 -->
+        <label class="switch-row">
+          <span>专注统计</span>
+          <input id="focus_enabled" type="checkbox" class="switch" />
+        </label>
+        <label id="focusMinutesRow">
+          <span>专注达标线（分钟）</span>
+          <input id="focus_min_minutes" type="number" min="10" max="120" step="1" />
+        </label>
         <!-- shortcuts_enabled 关闭后 Rust 端 apply_shortcuts 会注销全部全局快捷键 -->
         <label class="switch-row">
           <span>全局快捷键</span>
@@ -849,16 +891,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=a544a81c"></script>
-    <script src="js/settings.js?v=a544a81c"></script>
-    <script src="js/hero.js?v=a544a81c"></script>
-    <script src="js/overtime.js?v=a544a81c"></script>
-    <script src="js/monitor.js?v=a544a81c"></script>
-    <script src="js/bill.js?v=a544a81c"></script>
-    <script src="js/insights.js?v=a544a81c"></script>
-    <script src="js/storage.js?v=a544a81c"></script>
-    <script src="js/update.js?v=a544a81c"></script>
-    <script src="js/boot.js?v=a544a81c"></script>
+    <script src="js/core.js?v=74268912"></script>
+    <script src="js/settings.js?v=74268912"></script>
+    <script src="js/hero.js?v=74268912"></script>
+    <script src="js/overtime.js?v=74268912"></script>
+    <script src="js/monitor.js?v=74268912"></script>
+    <script src="js/bill.js?v=74268912"></script>
+    <script src="js/insights.js?v=74268912"></script>
+    <script src="js/storage.js?v=74268912"></script>
+    <script src="js/update.js?v=74268912"></script>
+    <script src="js/boot.js?v=74268912"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

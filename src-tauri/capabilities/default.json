@@ -48,6 +48,7 @@
     "allow-list-backups",
     "allow-restore-backup",
     "allow-get-day-timeline",
-    "allow-export-image"
+    "allow-export-image",
+    "allow-get-focus-summary"
   ]
 }

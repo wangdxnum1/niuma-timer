@@ -23,6 +23,7 @@ mod cmds_update;
 mod config;
 mod db;
 mod diag;
+mod focus;
 mod holiday;
 mod icon_render;
 mod insights;
@@ -50,8 +51,8 @@ use crate::diag::{build_info, install_crash_log, show_fatal, trace_startup};
 pub(crate) use crate::state::{get_status, AppState};
 
 use cmds_bill::{
-    delete_overtime_record, get_bill, get_body_bill, get_day_timeline, get_heatmap,
-    get_overtime_records, get_trend, save_overtime_record,
+    delete_overtime_record, get_bill, get_body_bill, get_day_timeline, get_focus_summary,
+    get_heatmap, get_overtime_records, get_trend, save_overtime_record,
 };
 use cmds_core::{
     apply_monitor_switches, apply_shortcuts, export_csv, export_image, focus_window, get_autostart,
@@ -454,6 +455,7 @@ fn main() {
             get_trend,
             get_body_bill,
             get_day_timeline,
+            get_focus_summary,
             write_debug_log,
             get_autostart,
             set_autostart,

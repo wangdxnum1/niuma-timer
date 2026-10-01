@@ -44,6 +44,9 @@ async function load() {
     $("remind_sedentary_minutes").value = cfg.remind_sedentary_minutes ?? 50;
     $("remind_offwork_enabled").checked = cfg.remind_offwork_enabled !== false;
     $("remind_payday_enabled").checked = cfg.remind_payday_enabled !== false;
+    // 专注段（v1.7.0）：开关缺省 true，阈值缺省 25
+    $("focus_enabled").checked = cfg.focus_enabled !== false;
+    $("focus_min_minutes").value = cfg.focus_min_minutes ?? 25;
     $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
     // 自动更新（v1.4.0）：缺省 true，与后端 serde default 对齐
     $("update_auto_check").checked = cfg.update_auto_check !== false;
@@ -198,6 +201,11 @@ function readCfg() {
     ),
     remind_offwork_enabled: $("remind_offwork_enabled").checked,
     remind_payday_enabled: $("remind_payday_enabled").checked,
+    focus_enabled: $("focus_enabled").checked,
+    focus_min_minutes: Math.min(
+      120,
+      Math.max(10, parseInt($("focus_min_minutes").value, 10) || 25)
+    ),
     shortcuts_enabled: $("shortcuts_enabled").checked,
     // 自动更新（v1.4.0）：必须带回去，否则 merge 时一直保留旧值
     update_auto_check: $("update_auto_check").checked,
