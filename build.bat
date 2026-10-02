@@ -66,11 +66,15 @@ echo =========================================
 echo   Building %F% ...
 echo =========================================
 pushd "%SRC%"
+rem Do NOT name the exit-code variable RC: RC is the toolchain variable
+rem holding the rc.exe path (set in common.bat). Overwriting it makes
+rem embed-resource spawn "0" and the release build dies with
+rem "Are you sure you have RC.EXE in your $PATH or ${RC_$TARGET} or $RC is set?"
 if "%F%"=="release" (%CARGO_BIN% build --release) else (%CARGO_BIN% build)
-set "RC=%errorlevel%"
+set "ERRCODE=%errorlevel%"
 popd
-if %RC% neq 0 (
-  echo Build failed for %F% with code %RC%
+if %ERRCODE% neq 0 (
+  echo Build failed for %F% with code %ERRCODE%
   exit /b 1
 )
 set "SRCDIR=%SRC%\target\%TRIPLE%\%F%"
@@ -97,10 +101,10 @@ echo   Packaging (NSIS + MSI) ...
 echo =========================================
 pushd "%SRC%"
 %CARGO_BIN% tauri build
-set "RC=%errorlevel%"
+set "ERRCODE=%errorlevel%"
 popd
-if %RC% neq 0 (
-  echo [ERROR] Package failed with code %RC%
+if %ERRCODE% neq 0 (
+  echo [ERROR] Package failed with code %ERRCODE%
   echo Install tauri-cli first:  cargo install tauri-cli
   echo NSIS will be downloaded automatically on first package run
   exit /b 1
@@ -152,10 +156,10 @@ echo   Testing (cargo test + frontend assert scripts + release engine) ...
 echo =========================================
 pushd "%SRC%"
 %CARGO_BIN% test --quiet
-set "RC=%errorlevel%"
+set "ERRCODE=%errorlevel%"
 popd
-if %RC% neq 0 (
-  echo [ERROR] cargo test failed with code %RC%
+if %ERRCODE% neq 0 (
+  echo [ERROR] cargo test failed with code %ERRCODE%
   exit /b 1
 )
 where node >nul 2>&1
