@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=74268912" />
+    <link rel="stylesheet" href="styles.css?v=d885fda8" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -225,11 +225,16 @@
          切页交互与明细一致（顶部翻页器 + 滚轮翻页，翻页器 DOM 在 detailPager 旁的 billPager）；
          共用周导航翻周；懒渲染契约：切页 / 翻周才拉对应命令，不接 tick 轮询——周级聚合 -->
     <div class="app hidden" id="viewBill">
-      <div class="switch-row">
+      <!-- 工具栏：左周期切换、右导出动作（动作仅本周账单 tab 可见，切 tab 由 setBillTabUI 控制） -->
+      <div class="bill-toolbar">
         <div class="mon-seg" id="billSpanSeg" aria-label="账单周期">
           <button class="mon-seg-item active" data-span="week">周</button>
           <button class="mon-seg-item" data-span="month">月</button>
           <button class="mon-seg-item" data-span="year">年</button>
+        </div>
+        <div class="bill-actions" id="billActions">
+          <button id="billExportBtn" class="ghost">导出 CSV</button>
+          <button id="billImageBtn" class="ghost">存为图片</button>
         </div>
       </div>
       <div class="month-nav">
@@ -238,9 +243,8 @@
         <button id="billNextWeek" class="mn-btn">下一期 ›</button>
       </div>
 
-      <!-- tab 1：本周账单（原有双风格内容原样保留，导出 CSV 只对本 tab 有意义） -->
+      <!-- tab 1：本周账单（原有双风格内容原样保留） -->
       <div id="billTabBill">
-        <div class="export-bar"><button id="billExportBtn" class="ghost">导出 CSV</button><button id="billImageBtn" class="ghost">存为图片</button></div>
 
         <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
         <div id="billEmpty" class="bill-empty hidden">
@@ -891,16 +895,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=74268912"></script>
-    <script src="js/settings.js?v=74268912"></script>
-    <script src="js/hero.js?v=74268912"></script>
-    <script src="js/overtime.js?v=74268912"></script>
-    <script src="js/monitor.js?v=74268912"></script>
-    <script src="js/bill.js?v=74268912"></script>
-    <script src="js/insights.js?v=74268912"></script>
-    <script src="js/storage.js?v=74268912"></script>
-    <script src="js/update.js?v=74268912"></script>
-    <script src="js/boot.js?v=74268912"></script>
+    <script src="js/core.js?v=d885fda8"></script>
+    <script src="js/settings.js?v=d885fda8"></script>
+    <script src="js/hero.js?v=d885fda8"></script>
+    <script src="js/overtime.js?v=d885fda8"></script>
+    <script src="js/monitor.js?v=d885fda8"></script>
+    <script src="js/bill.js?v=d885fda8"></script>
+    <script src="js/insights.js?v=d885fda8"></script>
+    <script src="js/storage.js?v=d885fda8"></script>
+    <script src="js/update.js?v=d885fda8"></script>
+    <script src="js/boot.js?v=d885fda8"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>
