@@ -53,26 +53,19 @@ if "%CARGO_BIN%"=="cargo" (
   if errorlevel 1 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 )
 
-rem release builds embed version/icon resources via rc.exe (Windows Kits).
-rem Plain terminals lack it in PATH; probe the newest SDK copy and pin RC
-rem (embed_resource honors $RC before $PATH). Override: set "RC=<full path>".
-rem Self-heal: a stale RC left in the terminal pointing to a removed file
-rem (SDK upgrade / machine switch) makes embed_resource fail with "RC.EXE
-rem not set" - treat it as unset and re-probe. Keep this file ASCII-only:
-rem cmd mis-parses multibyte comments here (no chcp guard of its own).
-rem Pin a candidate only if it ACTUALLY RUNS. embed-resource uses $RC verbatim
-rem and does NOT fall back to its own registry/vswhere discovery once it is set,
-rem so a copy that exists but cannot start is worse than leaving RC unset (the
-rem vcvars PATH below still carries a working rc.exe as a fallback).
-if defined RC if not exist "%RC%" set "RC="
-if not defined RC (
-  for /f "delims=" %%d in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
-    if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" (
-      "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" /? >nul 2>&1
-      if not errorlevel 1 set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
-    )
-  )
-)
+rem Deliberately do NOT set RC here. RC is the toolchain variable holding the
+rem rc.exe path; embed-resource honours it VERBATIM and - once it is set - does
+rem not fall back to its own discovery. Pinning it also gave our scripts a
+rem mutable name to collide with: build.bat used RC for its exit code, so after
+rem `build.bat debug` the release pass handed rc.exe = "0" and died with
+rem "Are you sure you have RC.EXE in your $PATH or ${RC_$TARGET} or $RC is set?"
+rem (2026-10-02). The two upstream mechanisms are enough and neither can be
+rem corrupted by us:
+rem   1) vcvars64 below puts <SDK>\bin\<ver>\x64 on PATH, so rc.exe resolves
+rem   2) embed-resource discovers the Windows Kits via the registry / vswhere
+rem Verified by deleting this probe and forcing the build script to re-run:
+rem the resource step still found rc.exe. Keep this file ASCII-only (cmd
+rem mis-parses multibyte comments and there is no chcp guard of its own).
 
 rem C-dependency builds (cc-rs, e.g. vswhom-sys) need INCLUDE/LIB. cc-rs's own
 rem MSVC detection misses the VS "18" layout on this machine, so seed the full

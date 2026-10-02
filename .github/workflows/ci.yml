@@ -70,6 +70,15 @@ jobs:
       - name: cargo test
         run: cargo test
         working-directory: src-tauri
+      # The local build scripts (build.bat / common.bat / release.bat) are exercised
+      # by nothing else. A variable-name collision in them broke every release build
+      # for two days while CI stayed green (2026-10-02).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build-script environment contract
+        run: node scripts/test_build_env.js
+
       - name: Drift guard (build.rs 回写检测)
         shell: pwsh
         run: |
