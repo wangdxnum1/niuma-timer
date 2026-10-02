@@ -33,6 +33,9 @@ if "%CARGO_BIN%"=="cargo" (
 rem release builds embed version/icon resources via rc.exe (Windows Kits).
 rem Plain terminals lack it in PATH; probe the newest SDK copy and pin RC
 rem (embed_resource honors $RC before $PATH). Override: set "RC=<full path>".
+rem 自愈：终端里残留的 RC 若指向已不存在的文件（换机/SDK 升级后常见），
+rem 会让 embed_resource 直接用死路径报 "RC.EXE not set"——视为未设置重新探测。
+if defined RC if not exist "%RC%" set "RC="
 if not defined RC (
   for /f "delims=" %%d in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
     if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
