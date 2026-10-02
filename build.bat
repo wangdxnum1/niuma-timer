@@ -1,6 +1,12 @@
 @echo off
-rem This file is UTF-8 encoded; chcp 65001 below switches the console to UTF-8 so CJK echoes render (same as release.bat)
-chcp 65001 >nul
+rem This file is pure ASCII BY DESIGN. History, twice over:
+rem  1) chcp 65001 here broke subprocess-output parsing on CJK-locale Windows:
+rem     cc-rs / embed_resource shell out to vswhere and mis-decode its GBK
+rem     output under UTF-8 codepage, so cl/rc lost INCLUDE and the release
+rem     build died with "RC.EXE not set" (fixed 2026-10-02).
+rem  2) Multibyte rem comments mis-parse in some terminals (PowerShell) and
+rem     execute comment fragments as commands. Keep every byte < 0x80.
+rem All echoes are ASCII too - do not add non-ASCII content.
 setlocal
 rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat.
 rem The gitconfig-http.proxy warning there also explains the retry params.
@@ -74,8 +80,9 @@ if errorlevel 1 (
   echo [ERROR] copy failed, exe not found at %SRCDIR%
   exit /b 1
 )
-rem PDB ? exe ??????? dump ?????????? PDB?PE ??
-rem GUID+Age??exe ???? PDB ??????????????????
+rem PDB must ship beside its exe: a crash dump only symbolises against the
+rem PDB of the same build (PE GUID+Age); an exe released without its PDB
+rem means crashes of that build can never be symbolised.
 if exist "%SRCDIR%\niuma_timer.pdb" copy /Y "%SRCDIR%\niuma_timer.pdb" "%BIN%\%F%\" >nul
 echo Done: %BIN%\%F%\niuma-timer.exe
 goto :eof
@@ -108,12 +115,12 @@ copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\"
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
-rem ??? exe ????????????????? PDB?????????
-rem exe ??????????????? Release ?????
-rem PDB ?????? MB???????? GitHub ????????Errno 10054??
-rem ???? .zip ????tar ? Windows 10/11 ???????????
-rem tar ??? System32 ? bsdtar?-a ? .zip ??????? GNU tar?-a?
-rem ? C: ???? host?Git Bash ?? PATH ???????
+rem Portable-exe debug symbols ship with the release: take the PDB next to
+rem the exe just copied and rename it with the version for asset identification.
+rem Raw PDB is ~150 MB and proxy uploads to GitHub get reset (Errno 10054),
+rem so compress it to .zip; tar ships with Windows 10/11 - no extra dependency.
+rem tar is pinned to System32 bsdtar: -a with .zip needs bsdtar, and GNU
+rem tar treats C: as a remote host - Git Bash PATH resolves GNU tar first.
 set "PDBDIR=%PORTABLE%"
 for %%p in ("%PORTABLE%") do set "PDBDIR=%%~dpp"
 if exist "%PDBDIR%niuma_timer.pdb" (
@@ -123,12 +130,14 @@ if exist "%PDBDIR%niuma_timer.pdb" (
     exit /b 1
   )
 )
-rem ?????????.sig????????????? package???
-rem publish_release.py ???? latest.json?????????????
+rem Updater signature files (.sig) must share the installer's name and be
+rem copied into package together, or publish_release.py cannot build
+rem latest.json and the whole auto-update chain dies.
 if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\"
 if exist "%BUNDLE%\msi\*%APPVER%*.msi.sig" copy /Y "%BUNDLE%\msi\*%APPVER%*.msi.sig" "%BIN%\package\"
-rem ?????????? exe?tauri ??????????????????
-rem ??????????????????????????????
+rem The portable build is a hand-copied bare exe: if tauri produced a
+rem signature for it, rename to the portable name so the .sig file carries
+rem the version (release verification relies on it).
 set "RAWSIG=%SRC%\target\%TRIPLE%\release\niuma-timer.exe.sig"
 if not exist "%RAWSIG%" set "RAWSIG=%SRC%\target\release\niuma-timer.exe.sig"
 if exist "%RAWSIG%" copy /Y "%RAWSIG%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe.sig"

@@ -60,9 +60,14 @@ windows = { version = "0.61", features = [
 #（单任务 panic 只丢一拍、不扩散拖垮整个托盘）依赖 unwind 语义，abort 会让它失效。
 [profile.release]
 lto = "thin"
-codegen-units = 1
+# 4 路并行代码生成：编译时间约为 codegen-units=1 的一半（实测见 1.8.0 变更），
+# 对本应用的运行性能无可感知差异
+codegen-units = 4
 strip = true
 # 保留完整调试信息（源码行号+局部变量）：随 PDB 一起发布，线上崩溃 dump 才能
 # 精确符号化到行。debug=false 的 PDB 只有函数级符号，看到栈也定位不到行。
 # 注：MSVC 下 strip 只清 exe 自身的符号表，不影响 PDB 内容与 CodeView GUID 匹配。
-debug = true
+# line-tables-only：PDB 保留文件/行号（崩溃仍可符号化到行），砍掉局部变量等
+# 丰富信息——生成时间与 PDB 体积大幅下降（1.8.0 实测）。需要变量级调试时临时
+# 改回 debug = true 重编一份即可。
+debug = "line-tables-only"

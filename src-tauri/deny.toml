@@ -1,0 +1,18 @@
+# cargo-deny config: dependency security advisory gate (CI + local).
+# Only advisories are enforced; licenses/bans are reviewed per iteration.
+#
+# All exemptions below are unmaintained/unsupported NOTICES (not vulns)
+# on Linux-side GUI-stack transitive deps - this app ships Windows only
+# and they cannot be fixed until upstream migrates.
+# Real vulns (e.g. RUSTSEC-2026-0285 rustls) get a cargo update fix and
+# never enter this list.
+[advisories]
+yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2025-0081", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2025-0075", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2025-0080", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2025-0100", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2025-0098", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+]
