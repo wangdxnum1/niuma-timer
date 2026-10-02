@@ -1,5 +1,7 @@
 @echo off
-chcp 65001 >nul
+rem Pure ASCII BY DESIGN, and no chcp here - see the header of build.bat:
+rem a UTF-8 code page makes child tools (vswhere via cc-rs / embed_resource)
+rem mis-decode GBK output, which cost us "RC.EXE not set" on 2026-10-02.
 setlocal EnableDelayedExpansion
 rem ============================================================
 rem  Niuma Timer - one-click build / package / tag / push
@@ -9,7 +11,7 @@ rem    release.bat              use current version from Cargo.toml
 rem    release.bat 1.1.0        bump to 1.1.0 (syncs Cargo.toml + tauri.conf.json)
 rem    release.bat 1.1.0 /y     no prompts (fully automatic)
 rem
-rem  Publishing lives in CI (二期): pushing tag vX.Y.Z triggers
+rem  Publishing lives in CI (phase 2): pushing tag vX.Y.Z triggers
 rem  .github/workflows/release.yml, which rebuilds, packages, and
 rem  creates the GitHub Release. Watch progress at:
 rem    https://github.com/wangdxnum1/niuma-timer/actions
@@ -19,6 +21,7 @@ rem ============================================================
 
 rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat
 call "%~dp0common.bat"
+if errorlevel 1 exit /b 1
 set "REPO=wangdxnum1/niuma-timer"
 
 set "AUTO=no"
@@ -125,8 +128,10 @@ if errorlevel 1 (
   if errorlevel 1 ( echo [ERROR] tauri-cli still unavailable after install & exit /b 1 )
 )
 
-rem 更新包签名：tauri 用私钥给安装包产出 .sig，客户端靠它校验下载到的包。
-rem 缺了不会报错、只会静默产出一个没签名的包，到用户侧才发现更新被拒 —— 提前拦住。
+rem Updater signing: tauri signs the installers with the private key, producing
+rem .sig files the client uses to verify what it downloaded.
+rem A missing key does NOT fail the build - it silently ships unsigned
+rem packages and users only discover the rejected update later. Stop it here.
 if not defined TAURI_SIGNING_PRIVATE_KEY if defined TAURI_SIGNING_PRIVATE_KEY_PATH set "TAURI_SIGNING_PRIVATE_KEY=%TAURI_SIGNING_PRIVATE_KEY_PATH%"
 if not defined TAURI_SIGNING_PRIVATE_KEY (
   echo [ERROR] TAURI_SIGNING_PRIVATE_KEY is not set - updater artifacts would be unsigned.
@@ -213,14 +218,17 @@ if defined BADART (
   echo         Clean bin\package and src-tauri\target\...\bundle, then rerun.
   exit /b 1
 )
-rem 没有 .sig 就生成不出 latest.json，发出去的版本永远收不到更新
+rem Without a .sig there is no latest.json, so the shipped version
+rem can never receive an update.
 if not exist "%BIN%\package\*.exe.sig" (
   echo [ERROR] no .exe.sig in bin\package - updater artifacts were not signed.
   echo         Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, then repackage.
   exit /b 1
 )
-rem 没有 PDB 就无法对线上崩溃做任何符号化：这一版发出去等于放弃排查能力
-rem （PDB 以 .pdb.zip 形式随包发布，原始 .pdb 也接受，便于手工补传）
+rem Without a PDB no crash dump from the field can ever be symbolised:
+rem shipping this version means giving up on diagnosing it.
+rem PDBs ship as .pdb.zip; a raw .pdb is accepted too, so a manual
+rem upload can still repair a release.
 if not exist "%BIN%\package\*.pdb.zip" if not exist "%BIN%\package\*.pdb" (
   echo [ERROR] no .pdb in bin\package - crash dumps for this release could never be symbolised.
   echo         Check that target\...\release\niuma_timer.pdb exists, then repackage.
@@ -291,9 +299,11 @@ echo =========================================
 echo   [4/5] Pushing to GitHub ...
 echo =========================================
 rem Detect Clash proxy on 7890; schannel breaks through proxy, so force openssl.
-rem 探测判定「直连」时必须显式清空 http/https 代理：全局 gitconfig 可能残留
-rem socks5://127.0.0.1:7890，代理软件没开时它会静默接管连接，推送报
-rem "Failed to connect over proxy 127.0.0.1"，与探测结论自相矛盾。
+rem When the probe concludes "direct", the http/https proxy must be cleared
+rem explicitly: a global gitconfig may still carry a leftover
+rem socks5://127.0.0.1:7890, and with the proxy app closed it silently takes
+rem over the connection, so the push fails with
+rem "Failed to connect over proxy 127.0.0.1" - contradicting the probe itself.
 set "PROXYARG="
 netstat -an | findstr /C:"127.0.0.1:7890" | findstr /C:"LISTENING" >nul
 if not errorlevel 1 (
@@ -339,8 +349,10 @@ exit /b 0
 
 :done
 rem ---------------- 11. done - the Release itself is built & published by CI ----------------
-rem 发布已上云：tag 触发 .github/workflows/release.yml，云端重编译并创建 GitHub Release。
-rem 应急通道（CI 不可用且急需发布时，本机手动跑发布引擎，走 wincred 令牌）：
+rem Publishing now runs in the cloud: the tag triggers
+rem .github/workflows/release.yml, which rebuilds and creates the GitHub Release.
+rem Emergency path (CI unavailable and the release cannot wait - run the
+rem publishing engine locally, using the token stored by Git Credential Manager):
 rem   python scripts\publish_release.py --tag v%VER% --version %VER% --package bin\package
 echo.
 echo =========================================

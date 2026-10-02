@@ -7,6 +7,7 @@
 ### 修复
 
 - **发布构建环境三连修（VS 18 引爆的编译链失效）**——机器升级 Visual Studio 18 后，本机 release 构建全挂。三处修复：① build.bat 移除 `chcp 65001` 并回归纯 ASCII——UTF-8 代码页下 cc-rs / embed_resource 解析 vswhere 的 GBK 输出错位，cl/rc 双双拿不到 INCLUDE（"RC.EXE not set" 与 cl 静默 exit 2 同根）；② common.bat 经 vswhere 调用 vcvars64 注入完整 INCLUDE/LIB（cc-rs 自身在 VS 18 布局上探测失效），并对终端残留的死 RC 路径自愈重探，且该文件今后保持纯 ASCII（多字节注释在部分终端被当命令执行）；③ cc 构建依赖升级 1.5.1。另从 git 历史（80b2441）字节级找回 build.bat 被 v1.5.0 发布提交损毁的四段中文注释。
+- **构建自持临时目录，根治 cl.exe D8050（exit 2）**——cl.exe 只要开启调试信息（cc-rs 在 debug 与 release 两个 profile 下都会传 `-Z7`），就要把命令行写进 `%TMP%` 的调试记录文件；`%TMP%`/`%TEMP%` 一旦不存在、不可写或未设置，cl 就在启动 c1.dll / c1xx.dll 之前失败，退出码 2 并报 D8050，**表现为全部 C 依赖（ring / libsqlite3-sys / vswhom-sys）同时编译失败**，与 cc 版本、并行度、VS 安装无关，而手工执行同一条命令往往又成功（两次运行拿到的 TMP 不是同一个）。此前 `common.bat` 沿用调用方给的 TMP，在受限身份（沙箱 / 低完整性）或 git-bash 这类会改写 TMP 的终端里必现。现改为构建自持：`common.bat` 创建并固定 `%ROOT%.tmp`，附写入探针，失败即给人话报错；`build.bat` / `release.bat` / `dev.bat` 三处调用点改为检查返回值。
 
 ### 变更
 

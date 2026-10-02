@@ -11,6 +11,7 @@ setlocal
 rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat.
 rem The gitconfig-http.proxy warning there also explains the retry params.
 call "%~dp0common.bat"
+if errorlevel 1 exit /b 1
 
 if not exist "%BIN%" mkdir "%BIN%"
 
