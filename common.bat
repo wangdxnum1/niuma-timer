@@ -60,10 +60,17 @@ rem Self-heal: a stale RC left in the terminal pointing to a removed file
 rem (SDK upgrade / machine switch) makes embed_resource fail with "RC.EXE
 rem not set" - treat it as unset and re-probe. Keep this file ASCII-only:
 rem cmd mis-parses multibyte comments here (no chcp guard of its own).
+rem Pin a candidate only if it ACTUALLY RUNS. embed-resource uses $RC verbatim
+rem and does NOT fall back to its own registry/vswhere discovery once it is set,
+rem so a copy that exists but cannot start is worse than leaving RC unset (the
+rem vcvars PATH below still carries a working rc.exe as a fallback).
 if defined RC if not exist "%RC%" set "RC="
 if not defined RC (
   for /f "delims=" %%d in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
-    if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
+    if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" (
+      "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" /? >nul 2>&1
+      if not errorlevel 1 set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
+    )
   )
 )
 

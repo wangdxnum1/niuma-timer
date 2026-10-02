@@ -183,6 +183,16 @@ exit /b 0
 
 :fail
 echo Build failed.
+echo.
+rem A failure whose text mentions RC.EXE / D8050 / a tool that could not be
+rem started is almost always the toolchain process being denied at spawn, not a
+rem source error. Print what the build was actually handed.
+echo   Build-environment diagnostics:
+echo     RC  = %RC%
+echo     TMP = %TMP%
+echo   Known machine-state issue on this box (see CHANGELOG): a freshly spawned
+echo   toolchain process is occasionally denied under high parallelism. Retry, or
+echo   serialise with:  cargo build --release -j1
 exit /b 1
 
 :done
