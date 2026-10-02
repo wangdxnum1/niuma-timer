@@ -13,6 +13,7 @@
 //
 // 运行：node scripts/test_build_env.js   （非 Windows 平台自动跳过）
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
@@ -37,8 +38,16 @@ if (process.platform !== "win32") {
   process.exit(0);
 }
 
-const TMPDIR = path.join(ROOT, ".tmp");
-fs.mkdirSync(TMPDIR, { recursive: true });
+// Run copied build scripts in a disposable repository-shaped fixture. The
+// cargo stub must never create fake executables in the real target/ tree.
+// Deliberately include spaces to exercise Windows command-line quoting.
+const FIXTURE = fs.mkdtempSync(path.join(os.tmpdir(), "niuma build env-"));
+const TMPDIR = path.join(FIXTURE, ".tmp");
+fs.mkdirSync(path.join(FIXTURE, "src-tauri"), { recursive: true });
+fs.copyFileSync(path.join(ROOT, "build.bat"), path.join(FIXTURE, "build.bat"));
+fs.copyFileSync(path.join(ROOT, "common.bat"), path.join(FIXTURE, "common.bat"));
+fs.writeFileSync(path.join(FIXTURE, "src-tauri", "Cargo.toml"), '[package]\r\nversion = "0.0.0"\r\n');
+fs.mkdirSync(TMPDIR);
 const STUB = path.join(TMPDIR, "stubcargo.bat");
 const LOG = path.join(TMPDIR, "build-env.log");
 
@@ -49,8 +58,8 @@ const STUB_SRC = [
   'set "FL=debug"',
   'echo %* | findstr /C:"--release" >nul && set "FL=release"',
   '>>"%BUILD_ENV_LOG%" echo FLAVOR=%FL% RC=[%RC%] TMP=[%TMP%]',
-  'if not exist "%~dp0..\\src-tauri\\target\\%FL%" mkdir "%~dp0..\\src-tauri\\target\\%FL%"',
-  'echo stub > "%~dp0..\\src-tauri\\target\\%FL%\\niuma-timer.exe"',
+  'if not exist "%BUILD_ENV_FIXTURE%\\src-tauri\\target\\%TRIPLE%\\%FL%" mkdir "%BUILD_ENV_FIXTURE%\\src-tauri\\target\\%TRIPLE%\\%FL%"',
+  'echo stub > "%BUILD_ENV_FIXTURE%\\src-tauri\\target\\%TRIPLE%\\%FL%\\niuma-timer.exe"',
   "exit /b 0",
   "",
 ].join("\r\n");
@@ -64,16 +73,17 @@ fs.writeFileSync(
   RUNNER,
   [
     "@echo off",
-    'set "CARGO_BIN=call ' + STUB + '"',
+    'set "CARGO_BIN=call ..\\.tmp\\stubcargo.bat"',
     'set "BUILD_ENV_LOG=' + LOG + '"',
-    'cd /d "' + ROOT + '"',
+    'set "BUILD_ENV_FIXTURE=' + FIXTURE + '"',
+    'cd /d "' + FIXTURE + '"',
     "call build.bat",
     "",
   ].join("\r\n"),
   "ascii"
 );
 // stdio 必须 inherit/ignore：沙箱下 node 的管道 stdio 会被拒（EPERM）
-const r = spawnSync("cmd", ["/c", RUNNER], { cwd: ROOT, stdio: "inherit" });
+const r = spawnSync("cmd", ["/c", ".tmp\\run-build-env.bat"], { cwd: FIXTURE, stdio: "inherit" });
 ok("build.bat（无参数，debug→release）整体退出码 0", r.status === 0, "exit=" + r.status);
 
 const lines = fs.existsSync(LOG)
@@ -81,6 +91,11 @@ const lines = fs.existsSync(LOG)
   : [];
 
 ok("两个 flavor 都真的调到了 cargo（共 2 次）", lines.length === 2, "实际 " + lines.length + " 次");
+ok("测试在独立临时目录运行", path.resolve(FIXTURE) !== path.resolve(ROOT));
+for (const flavor of ["debug", "release"]) {
+  const output = path.join(FIXTURE, "bin", flavor, "niuma-timer.exe");
+  ok(`${flavor} 假产物只出现在临时目录`, fs.existsSync(output) && fs.readFileSync(output, "utf8").trim() === "stub");
+}
 lines.forEach((l, i) => console.log("       [" + (i + 1) + "] " + l));
 
 // 关键断言：每一次调用看到的 RC 要么为空、要么指向一个真实存在的 rc.exe。
@@ -106,13 +121,7 @@ lines.forEach(function (l, i) {
   );
 });
 
-for (const f of [STUB, RUNNER]) {
-  try {
-    fs.unlinkSync(f);
-  } catch (e) {
-    /* 清理失败不影响结论 */
-  }
-}
+fs.rmSync(FIXTURE, { recursive: true, force: true });
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

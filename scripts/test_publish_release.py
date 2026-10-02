@@ -198,6 +198,32 @@ class ManifestTests(unittest.TestCase):
         self.assertNotIn("--draft", batch)
         self.assertIn("release.yml", batch)
 
+    def test_release_tag_is_immutable(self):
+        batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
+        tag_section = batch.split("rem ---------------- 9. tag ----------------", 1)[1].split(
+            "rem ---------------- 10. push ----------------", 1)[0]
+        self.assertIn('show-ref --verify --quiet "refs/tags/v%VER%"', tag_section)
+        self.assertIn('if not "!TAG_COMMIT!"=="!HEAD_COMMIT!"', tag_section)
+        self.assertNotIn("tag -d", tag_section)
+        self.assertNotIn("push origin \"v%VER%\" --force", batch)
+        self.assertIn('if not "%BRANCH%"=="main" (', batch)
+        self.assertNotIn("Continue releasing from", batch)
+        self.assertLess(batch.index('pushd "%ROOT%"'), batch.index("branch --show-current"))
+        self.assertLess(batch.index('if not "%BRANCH%"=="main" ('), batch.index("rem ---------------- 1. version ----------------"))
+
+    def test_cloud_publish_requires_main_and_ci_gates(self):
+        workflow = (pathlib.Path(__file__).parent.parent / ".github" / "workflows" /
+                    "release.yml").read_text(encoding="utf-8")
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertIn("$env:GITHUB_REF_TYPE -ne 'tag'", workflow)
+        self.assertIn("git merge-base --is-ancestor HEAD origin/main", workflow)
+        for gate in ("cargo fmt --all -- --check", "cargo clippy --all-targets -- -D warnings",
+                     "cargo test", "node scripts/run_all.js", "python scripts/test_publish_release.py",
+                     "cargo deny check advisories"):
+            with self.subTest(gate=gate):
+                self.assertIn(gate, workflow)
+                self.assertLess(workflow.index(gate), workflow.index("Build bundles"))
+
     def test_release_bat_decouples_pdb_from_publish(self):
         # PDB policy since v1.5.1: the local flow refuses to tag a release whose
         # PDB is missing ("no .pdb in bin\\package"), but uploading the symbols is

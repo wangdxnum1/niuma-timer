@@ -38,13 +38,22 @@ if not exist "%GIT%" set "GIT=git"
 rem Push / tag / release all key off the current branch; the flow assumes main.
 rem A non-main branch would make the tag point at a commit that is not on main.
 set "BRANCH="
+pushd "%ROOT%"
+if errorlevel 1 ( echo [ERROR] cannot enter repository root & exit /b 1 )
 for /f "usebackq delims=" %%b in (`"%GIT%" branch --show-current 2^>nul`) do set "BRANCH=%%b"
+popd
 if "%BRANCH%"=="" set "BRANCH=(unknown)"
 
 echo.
 echo =========================================
 echo   Niuma Timer  Build / Package / Release
 echo =========================================
+
+if not "%BRANCH%"=="main" (
+  echo [ERROR] current branch is "%BRANCH%", not main.
+  echo         Cloud publishing accepts only tags whose commits are on main.
+  exit /b 1
+)
 
 rem ---------------- 1. version ----------------
 set "RAWVER="
@@ -150,17 +159,6 @@ echo     3. git commit / tag v%VER%
 echo     4. git push origin %BRANCH%  +  push tag
 echo     5. GitHub Actions builds and publishes the Release (watch the Actions page)
 echo.
-if not "%BRANCH%"=="main" (
-  echo   [WARN] current branch is "%BRANCH%", not main - the tag would point
-  echo          at a commit that is not on main.
-  if "%AUTO%"=="yes" (
-    echo [ERROR] refusing to release from a non-main branch in /y mode.
-    exit /b 1
-  )
-  set "ANS="
-  set /p "ANS=Continue releasing from %BRANCH%? [y/N] "
-  if /i not "!ANS!"=="Y" ( echo Aborted. & exit /b 0 )
-)
 if "%AUTO%"=="no" (
   set "ANS="
   set /p "ANS=Continue? [Y/N] "
@@ -278,20 +276,29 @@ if errorlevel 1 (
 )
 
 rem ---------------- 9. tag ----------------
-"%GIT%" rev-parse "v%VER%" >nul 2>&1
+"%GIT%" show-ref --verify --quiet "refs/tags/v%VER%"
 if not errorlevel 1 (
-  echo.
-  echo   [WARN] tag v%VER% already exists.
-  if "%AUTO%"=="no" (
-    set "ANS="
-    set /p "ANS=Delete and recreate it? [Y/N] "
-    if /i not "!ANS!"=="Y" ( echo Aborted. & popd & exit /b 1 )
+  set "HEAD_COMMIT="
+  set "TAG_COMMIT="
+  for /f "delims=" %%h in ('"%GIT%" rev-parse HEAD 2^>nul') do set "HEAD_COMMIT=%%h"
+  for /f "delims=" %%h in ('"%GIT%" rev-list -n 1 refs/tags/v%VER% 2^>nul') do set "TAG_COMMIT=%%h"
+  if not defined TAG_COMMIT (
+    echo [ERROR] cannot resolve existing tag v%VER% to a commit. Refusing to replace it.
+    popd
+    exit /b 1
   )
-  "%GIT%" tag -d "v%VER%"
+  if not "!TAG_COMMIT!"=="!HEAD_COMMIT!" (
+    echo [ERROR] tag v%VER% points to !TAG_COMMIT!, but HEAD is !HEAD_COMMIT!.
+    echo         Release tags are immutable. Use a new version after correcting the commit.
+    popd
+    exit /b 1
+  )
+  echo     tag v%VER% already points to HEAD; reusing it
+) else (
+  "%GIT%" tag -a "v%VER%" -m "v%VER%"
+  if errorlevel 1 ( echo [ERROR] tag failed & popd & exit /b 1 )
+  echo     tag v%VER% created
 )
-"%GIT%" tag -a "v%VER%" -m "v%VER%"
-if errorlevel 1 ( echo [ERROR] tag failed & popd & exit /b 1 )
-echo     tag v%VER% created
 
 rem ---------------- 10. push ----------------
 echo.
@@ -324,9 +331,8 @@ if errorlevel 1 (
 )
 "%GIT%" %GITCFG% push origin "v%VER%"
 if errorlevel 1 (
-  echo [ERROR] tag push failed. If the remote tag v%VER% already exists from
-  echo         a previous release of this version, force-update it with:
-  echo     "%GIT%" push origin "v%VER%" --force
+  echo [ERROR] tag push failed. The remote tag may point to a different commit.
+  echo         Do not force-update a published tag; inspect the remote ref and use a new version.
   popd
   exit /b 1
 )

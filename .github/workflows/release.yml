@@ -34,6 +34,9 @@ jobs:
       NIUMA_PROXY: off
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tag runs must be able to compare their commit against origin/main.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +47,8 @@ jobs:
           python-version: "3.11"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -55,6 +60,10 @@ jobs:
         with:
           tool: tauri-cli
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
       - name: Resolve & check version
         id: ver
         shell: pwsh
@@ -65,8 +74,12 @@ jobs:
             throw "版本不一致：Cargo.toml ($cargo) vs tauri.conf.json ($conf)"
           }
           "version=$cargo" >> $env:GITHUB_OUTPUT
-          # tag 触发时 tag 必须与代码版本一致（本机 release.bat 负责同步，这里兜底）
-          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+          # A publish run (tag push or manual dry_run=false) must use the
+          # matching tag on main. Manual dry runs remain available on branches.
+          if ('${{ inputs.dry_run }}' -ne 'true') {
+            if ($env:GITHUB_REF_TYPE -ne 'tag') {
+              throw '正式发布必须从 tag 运行；分支只能执行 dry_run'
+            }
             $tag = $env:GITHUB_REF_NAME
             if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
               throw "tag 须为 vX.Y.Z 形式，当前：$tag"
@@ -74,7 +87,21 @@ jobs:
             if ($tag -ne "v$cargo") {
               throw "tag ($tag) 与 Cargo.toml 版本 (v$cargo) 不一致：先提交版本号改动并重打 tag"
             }
+            git fetch --no-tags origin main:refs/remotes/origin/main
+            if ($LASTEXITCODE -ne 0) { throw '无法读取 origin/main，拒绝发布' }
+            git merge-base --is-ancestor HEAD origin/main
+            if ($LASTEXITCODE -ne 0) {
+              throw "tag $tag 的提交不在 origin/main 上，拒绝发布"
+            }
           }
+
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
@@ -82,6 +109,13 @@ jobs:
 
       - name: Frontend assert tests
         run: node scripts/run_all.js
+
+      - name: Release-engine tests
+        run: python scripts/test_publish_release.py
+
+      - name: cargo deny (security advisories)
+        working-directory: src-tauri
+        run: cargo deny check advisories
 
       # 打包（NSIS + MSI + 便携 exe + 更新器 .sig）。缺签名密钥时构建仍会过、
       # 但没有 .sig → 下一步 latest.json 生成 fail-closed 拦住，错误信息会指明原因。

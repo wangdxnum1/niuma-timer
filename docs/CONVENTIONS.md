@@ -7,16 +7,17 @@
 ## 代码地图（现状）
 - 后端 33 个 `.rs`：核心域模块 + 命令层 `cmds_core/cmds_bill/cmds_monitor/cmds_storage/cmds_update/cmds_debug`（二期自 `main.rs` 切出，纯移动）+ `tray/hover_state.rs`。
 - 前端无打包链：`frontend/index.html` 里 **8 个视图容器**（`viewMain/viewBill/viewSettings/viewOt/viewAct/viewApp/viewAudio/viewUpdate`）+ `frontend/js/` **10 个块**（`app.js` 已删除，禁止复活）+ `styles.css` + `hover_card.html`（独立窗口）。
-- 测试规模：Rust 侧 234 个 `#[test]`；`scripts/test_*.js` 33 个 + `scripts/test_publish_release.py`。
+- 测试规模：Rust 侧 234 个 `#[test]`；`scripts/test_*.js` 35 个 + `scripts/test_publish_release.py`。
 - 用户数据在 `%APPDATA%/niuma-timer/`：`niuma.db`（SQLite + WAL）、`config.json`、`holiday_{year}.json`、`debug.log` / `panic.log`、`icons/`。
 
 ## 构建入口与脚本纪律
 - `build.bat [debug|release|all|package|test]` 是唯一构建入口；`release.bat [版本] [/y]` 一键发版，第 0 步就是 `call build.bat test`；`dev.bat` 起静态服务器 + `cargo tauri dev` 做前端热迭代（Rust 只编一次）。
-- 共享初始化全在 `common.bat`：`ROOT/SRC/BIN`、cargo 兜底、`RC` 探测、`vcvars64`。它**故意不写 `setlocal`**（变量必须活过 `call`）；三个调用方都必须 `call "%~dp0common.bat"` 后立刻 `if errorlevel 1 exit /b 1`。
+- 共享初始化全在 `common.bat`：`ROOT/SRC/BIN`、cargo 兜底、`vcvars64`。它**故意不写 `setlocal`**（变量必须活过 `call`）；三个调用方都必须 `call "%~dp0common.bat"` 后立刻 `if errorlevel 1 exit /b 1`。
 - **四个根 .bat 必须纯 ASCII、注释写英文、绝不加 `chcp`**。事故两次：① `chcp 65001` 让 cc-rs / embed_resource 误读 vswhere 的 GBK 输出，release 构建报 `RC.EXE not set`（2026-10-02）；② 中文 `rem` 在部分终端被 cmd 错位解析，注释片段当命令执行（`'报' is not recognized`）。另：**不要加 UTF-8 BOM**（cmd 会让 `@echo off` 失效）。
 - 验收方式：逐字节扫描确认无 >0x7F 字节（现在四个文件都是 0）。
 - `build.bat test` 必跑**三个套件**：`cargo test --quiet` → `node scripts/run_all.js` → `python scripts/test_publish_release.py`。CI（`.github/workflows/ci.yml`）另有 `release-engine-tests`、`dep-audit`（cargo-deny advisories）与 `rust-checks`（fmt / clippy `-D warnings` / test / drift guard）。
 - **没有任何入口跑的测试一定会烂掉**：发布引擎套件就是这样在 v1.5.1 上云后静默失效的，直到 commit 8951e22 才接回 `build.bat test` 与 CI。
+- `scripts/test_build_env.js` 把 `build.bat` / `common.bat` 复制到系统临时目录运行；cargo 桩生成的假 exe 只能留在该隔离目录，禁止写入真实 `src-tauri/target`。
 - CI 的 drift guard 会因 `git status --porcelain -- frontend src-tauri` 非空而失败：`build.rs` 自动回写缓存戳与 capability，所以本地改完前端必须 `cargo build` 一次并把自动改动一并提交。
 
 ## 构建环境陷阱
@@ -26,9 +27,11 @@
 
 ## 发版门禁（`release.bat`）
 - 发版走 CI：push tag `vX.Y.Z` 触发 `.github/workflows/release.yml` 重建并发布。`release.bat` 只做版本同步 → 打包 → tag → push；`scripts/publish_release.py` 是 CI 不可用时的应急本地发布路径，`scripts/push_via_api.py` 是 github.com 被墙时的应急推送。
+- 发布流水线在构建前必须确认正式发布使用版本匹配的 tag、tag 提交位于 `origin/main`，并重跑 fmt / clippy / Rust 测试 / 前端测试 / 发布引擎测试 / cargo-deny；手动分支运行只允许 `dry_run`。
+- 已存在的 `vX.Y.Z` tag 只在指向当前 HEAD 时复用；指向其他提交必须报错并改用新版本。禁止删除或强推已经使用的发布 tag。
 - 版本号必须同时落 `src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json`，且**回读两个文件校验**同步成功。
 - 硬门禁（缺一个就中止）：`TAURI_SIGNING_PRIVATE_KEY` 未设不打包——少了它只会静默发出未签名包，用户装更新时才发现被拒；发布前校验 `bin/package` 里每个安装包**文件名带目标版本**（否则是从旧版本漏进来的陈旧产物）、存在 `*.exe.sig`（没有它就没有 `latest.json`，这个版本永远收不到更新）、存在 `*.pdb.zip` 或 `*.pdb`（没有 PDB 的版本，线上崩溃永远无法符号化）。
-- `/y` 模式拒绝在非 `main` 分支发版（tag 会指向不在 main 上的提交）；push 用 `-c credential.helper=wincred -c http.sslBackend=openssl` 并按 `127.0.0.1:7890` 是否监听决定走代理还是**显式清空**代理（全局 gitconfig 里的残留 socks5 会在代理关闭时静默接管连接）。
+- 所有模式都拒绝在非 `main` 分支发版（否则 tag 指向不在 main 上的提交，云端一定拒绝）；push 用 `-c credential.helper=wincred -c http.sslBackend=openssl` 并按 `127.0.0.1:7890` 是否监听决定走代理还是**显式清空**代理（全局 gitconfig 里的残留 socks5 会在代理关闭时静默接管连接）。
 
 ## 沙箱 / agent 会话陷阱（本机 DSH 文件沙箱以低完整性运行 shell）
 - **git 凭据助手不可用**：Git for Windows 一律经 `sh -c` 调助手，而沙箱禁止 MSYS signal pipe（Win32 error 5）。改用代理 + `-c http.sslBackend=openssl`（Schannel 会以 `SEC_E_NO_CREDENTIALS` 失败）；一次性 push 可把凭据写进 URL。
