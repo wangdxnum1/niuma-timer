@@ -2,6 +2,10 @@ target/
 node_modules/
 src-tauri/target/
 bin/
+# Build-owned temp dir: common.bat pins TMP/TEMP here so cl.exe cannot
+# fail with D8050 when the caller's TMP is missing or unwritable
+# (2026-10-02 post-mortem).
+.tmp/
 *.user
 # 本地构建/测试重定向日志（统一放 logs/，不要散落在仓库根）
 logs/
