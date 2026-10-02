@@ -1285,11 +1285,31 @@ mod tests {
         );
     }
 
+    /// HKCU 是否可写。受限令牌（低完整性 / 沙箱）下整个 HKCU 都写不进去，
+    /// 此时 AUMID 用例应跳过而不是误报失败——否则沙箱 / agent 会话里
+    /// cargo test 恒红，真回归会被这团噪声淹没。
+    /// 探测可写而注册失败 = 真失败，不会被这里掩盖。
+    fn hkcu_writable() -> bool {
+        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let probe = r"SOFTWARE\niuma-timer-write-probe";
+        match hkcu.create_subkey(probe) {
+            Ok(_) => {
+                let _ = hkcu.delete_subkey(probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// AUMID 注册回归：注册 → 读回 DisplayName / IconUri → 清理。
     /// IconUri 仅在传入 Some 时写入（WinRT toast 指向独立 ico 最可靠，
     /// 见 write_aumid_icon_file）。用测试专用键名，避开真应用的 AUMID。
     #[test]
     fn register_aumid_writes_display_name_and_icon() {
+        if !hkcu_writable() {
+            eprintln!("[skip] HKCU 不可写（受限令牌/沙箱），跳过 AUMID 注册回归");
+            return;
+        }
         let aumid = "com.tim.niuma-timer.test.aumid-probe";
         register_aumid(aumid, "牛马计时器-测试", Some("C:\\fake\\probe.ico")).expect("注册应成功");
 

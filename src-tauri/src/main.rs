@@ -475,12 +475,16 @@ fn main() {
     match app {
         Ok(app) => {
             trace_startup("app: built, entering run loop");
-            app.run(|_app_handle, event| {
-                // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据
+            app.run(|app_handle, event| {
+                // 程序退出前：把鼠标/键盘统计与应用使用时长的最后增量落盘，重启后不丢数据。
+                // 专注段只在闭合时落库，不在这里结算，退出瞬间进行中的那一段会被静默丢弃。
                 if let tauri::RunEvent::Exit = event {
                     activity::shutdown();
                     app_usage::shutdown();
                     audio_usage::shutdown();
+                    let cfg =
+                        sync::lock(&app_handle.state::<AppState>().config, "state.config").clone();
+                    focus::shutdown(&cfg);
                 }
             });
         }
