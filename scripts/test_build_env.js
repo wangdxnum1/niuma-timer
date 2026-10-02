@@ -121,7 +121,9 @@ lines.forEach(function (l, i) {
   );
 });
 
-fs.rmSync(FIXTURE, { recursive: true, force: true });
+// Windows runners can briefly keep the just-exited cmd.exe working directory
+// open. Node's recursive removal retries EBUSY with linear backoff.
+fs.rmSync(FIXTURE, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
