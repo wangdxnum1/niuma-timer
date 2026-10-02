@@ -1,10 +1,10 @@
-// éåºæ¶å£å¥çº¦ï¼RunEvent::Exit å¿é¡»ç»ç®ææééå¨ä¸ç¶ææºã
+// 退出收口契约：RunEvent::Exit 必须结算所有采集器与状态机。
 //
-// äºæï¼focus æ®µåªå¨ãé­åãæ¶è½åºï¼èéåºè·¯å¾åªè°äº activity/app_usage/audio
-// ä¸ä¸ª shutdownï¼focus æ¼äº â æçå·¥å·éåºæ¶æ­£å¨è¿è¡çé£ä¸æ®µï¼å¾å¾
-// æ­£æ¯å½å¤©æé¿çä¸æ®µï¼è¢«éé»ä¸¢å¼ä¸ä¸çæ¥å¿ã
+// 事故：focus 段只在「闭合」时落库，而退出路径只调了 activity/app_usage/audio
+// 三个 shutdown，focus 漏了 → 托盘工具退出时正在进行的那一段（往往正是当天最长
+// 的一段）被静默丢弃，且不留任何日志。
 //
-// è¿è¡ï¼node scripts/test_shutdown_hooks.js
+// 运行：node scripts/test_shutdown_hooks.js
 const fs = require("fs");
 const path = require("path");
 
@@ -27,9 +27,9 @@ const src = fs.readFileSync(MAIN, "utf8").replace(/\r\n/g, "\n");
 
 const marker = "tauri::RunEvent::Exit";
 const at = src.indexOf(marker);
-ok("main.rs æ RunEvent::Exit åæ¯", at >= 0);
+ok("main.rs 有 RunEvent::Exit 分支", at >= 0);
 
-// ååº `if let tauri::RunEvent::Exit = event { ... }` çåä½
+// 取出 `if let tauri::RunEvent::Exit = event { ... }` 的块体
 let block = "";
 if (at >= 0) {
   const brace = src.indexOf("{", at);
@@ -51,11 +51,11 @@ if (at >= 0) {
   "audio_usage::shutdown()",
   "focus::shutdown(",
 ].forEach(function (call) {
-  ok("éåºåè°ç¨ " + call, block.indexOf(call) >= 0);
+  ok("退出块调用 " + call, block.indexOf(call) >= 0);
 });
 
 ok(
-  "focus ç»ç®å¸¦éç½®ï¼éå¼å£å¾ä¸ tick ä¸è´ï¼",
+  "focus 结算带配置（阈值口径与 tick 一致）",
   /focus::shutdown\(&\w+/.test(block)
 );
 

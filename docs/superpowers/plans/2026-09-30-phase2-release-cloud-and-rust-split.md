@@ -1,5 +1,7 @@
 # 实施计划：二期——发布流水线上云 + Rust 侧模块化
 
+> **状态（2026-10-02 补记）：已完成并合入 main**（PR-A 发布上云 / PR-B Rust 模块化，各自 CI 绿后合并）。勾选框保留原样作为执行记录；build.bat / common.bat 的后续加固属 v1.8.0 范围。
+
 设计：`docs/superpowers/specs/2026-09-30-phase2-release-cloud-and-rust-split-design.md`
 顺序：两个 PR（A 上云 → B 拆分），各自 CI 绿后合并；docs 先行提交到 main。
 

@@ -53,11 +53,11 @@ pub fn observe_input_device(h: usize) {
     // 已分类：远程设备刷新时间戳后立即返回；非远程直接返回（不解析名字）。
     {
         let tbl = DEVICE_REMOTE.get_or_init(|| Mutex::new(HashMap::new()));
-        let g = tbl.lock().unwrap_or_else(|e| e.into_inner());
+        let g = crate::sync::lock(tbl, "remote::DEVICE_REMOTE");
         if let Some(&is_rem) = g.get(&h) {
             if is_rem {
                 if let Some(slot) = LAST_REMOTE_INPUT.get() {
-                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                    *crate::sync::lock(slot, "remote::LAST_REMOTE_INPUT") = Some(Instant::now());
                 }
             }
             return;
@@ -67,25 +67,25 @@ pub fn observe_input_device(h: usize) {
     let name = match crate::win::raw_input_device_name(HANDLE(h as *mut c_void)) {
         Some(n) => n,
         None => {
-            DEVICE_REMOTE
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(h, false);
+            crate::sync::lock(
+                DEVICE_REMOTE.get_or_init(|| Mutex::new(HashMap::new())),
+                "remote::DEVICE_REMOTE",
+            )
+            .insert(h, false);
             return;
         }
     };
     let is_rem = remote_device_signature(&name);
     if is_rem {
         if let Some(slot) = LAST_REMOTE_INPUT.get() {
-            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+            *crate::sync::lock(slot, "remote::LAST_REMOTE_INPUT") = Some(Instant::now());
         }
     }
-    DEVICE_REMOTE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(h, is_rem);
+    crate::sync::lock(
+        DEVICE_REMOTE.get_or_init(|| Mutex::new(HashMap::new())),
+        "remote::DEVICE_REMOTE",
+    )
+    .insert(h, is_rem);
 }
 
 /// 聚合判定：当前是否处于远程会话（RDP 或近期有远程设备输入）。
@@ -95,7 +95,7 @@ pub fn is_remote_active(window: Duration) -> bool {
     }
     match LAST_REMOTE_INPUT
         .get()
-        .and_then(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
+        .and_then(|m| *crate::sync::lock(m, "remote::LAST_REMOTE_INPUT"))
     {
         Some(t) => t.elapsed() < window,
         None => false,
