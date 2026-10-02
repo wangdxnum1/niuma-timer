@@ -148,7 +148,7 @@ goto :eof
 :do_test
 echo.
 echo =========================================
-echo   Testing (cargo test + frontend assert scripts) ...
+echo   Testing (cargo test + frontend assert scripts + release engine) ...
 echo =========================================
 pushd "%SRC%"
 %CARGO_BIN% test --quiet
@@ -164,6 +164,14 @@ if errorlevel 1 (
   exit /b 1
 )
 node "%ROOT%scripts\run_all.js"
+if errorlevel 1 exit /b 1
+rem Release-engine regression tests (offline; guards the CI publishing path).
+where python >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] python not found - scripts\test_publish_release.py needs Python 3
+  exit /b 1
+)
+python "%ROOT%scripts\test_publish_release.py"
 if errorlevel 1 exit /b 1
 goto :eof
 

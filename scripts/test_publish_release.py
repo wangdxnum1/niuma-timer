@@ -1,17 +1,39 @@
 """Offline updater manifest regression tests; never publish or access credentials."""
+import contextlib
 import os
 import pathlib
+import shutil
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 import json
 import urllib.parse
 import publish_release as release
 
 
+@contextlib.contextmanager
+def tmpdir():
+    """Yield a scratch directory a restricted Windows token can actually write to.
+
+    tmpdir() creates its directory with mode 0700. Under a
+    lockdown token (the DSH file sandbox on this machine) that mode yields a DACL
+    the process itself cannot write through: every file created inside fails with
+    EACCES and even cleanup is denied. os.makedirs inherits the parent's
+    permissive ACL instead, which the same token can write. Behaviour on a normal
+    machine is identical - this only removes a sandbox artefact.
+    """
+    d = os.path.join(tempfile.gettempdir(), "niuma-uitest-" + uuid.uuid4().hex)
+    os.makedirs(d, exist_ok=True)
+    try:
+        yield d
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 class ManifestTests(unittest.TestCase):
     def test_notes_generation_replaces_stale_version(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
             (root / "RELEASE_NOTES.md").write_text("# Niuma 1.3.0\nOld notes", encoding="utf-8")
@@ -23,7 +45,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_api_publishes_only_complete_draft(self):
         for fail_upload in [False, True]:
-            with self.subTest(fail_upload=fail_upload), tempfile.TemporaryDirectory() as d:
+            with self.subTest(fail_upload=fail_upload), tmpdir() as d:
                 root = pathlib.Path(d)
                 (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
                 calls, assets = [], []
@@ -74,7 +96,7 @@ class ManifestTests(unittest.TestCase):
     def test_existing_draft_is_reused_not_duplicated(self):
         # 重跑发布时的真实场景：草稿已存在且部分资产已上传，
         # 必须复用同一份草稿（POST /releases 不得再次出现）。
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
             calls, uploads = [], []
@@ -118,7 +140,7 @@ class ManifestTests(unittest.TestCase):
         # → 必须退出码 1：v1.4.0 发布正是这类静默失败靠人眼兜底才发现的。
         # 注意 PATCH 前 tags 端点必须 404：主脚本第一步就按 tag 查既有 release，
         # 若提前返回 200 会被当成「已存在的草稿」走复用路径，测的就不是本缺陷。
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
             uploads = []
@@ -155,7 +177,7 @@ class ManifestTests(unittest.TestCase):
                 self.assertEqual(release.main(), 1)
 
     def test_empty_or_unsigned_installer_is_rejected(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             with self.assertRaises(ValueError):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
             (pathlib.Path(d) / "niuma-timer_1.4.0_x64-setup.exe").write_bytes(b"installer")
@@ -164,24 +186,31 @@ class ManifestTests(unittest.TestCase):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
 
     def test_release_gate_precedes_git_and_publication(self):
+        # The metadata gate must run before any irreversible git side effect ...
         batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
         generation = batch.index("--generate-notes-only")
         self.assertLess(generation, batch.index('"%GIT%" add -A'))
-        self.assertIn("--draft", batch)
-        self.assertIn("--draft=false", batch)
+        # ... and release.bat must NOT publish: since v1.5.1 the Release itself is
+        # created by CI (release.yml -> publish_release.py). The old local path
+        # (gh release create, --draft transitions, ASSETS block) was deliberately
+        # removed, so asserting it here would just re-encode the abandoned design.
+        self.assertNotIn("gh release", batch)
+        self.assertNotIn("--draft", batch)
+        self.assertIn("release.yml", batch)
 
     def test_release_bat_decouples_pdb_from_publish(self):
-        # PDB 必须在发布后 best-effort 补传：ASSETS 段不得含 .pdb，
-        # 且脚本必须提供 --pdb-only 与 gh release upload 两条补传路径。
+        # PDB policy since v1.5.1: the local flow refuses to tag a release whose
+        # PDB is missing ("no .pdb in bin\\package"), but uploading the symbols is
+        # CI's job (publish_release.py --pdb-only) - release.bat no longer does it.
         batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
-        assets_block = batch[batch.index('set "ASSETS="'):batch.index("where gh >nul")]
-        self.assertNotIn(".pdb", assets_block)
-        self.assertIn("--pdb-only", batch)
-        self.assertIn("gh release upload", batch)
-        self.assertIn("call :upload_pdb", batch)
+        self.assertIn("no .pdb in bin\\package", batch)
+        self.assertNotIn("gh release upload", batch)
+        self.assertNotIn("--pdb-only", batch)
+        publisher = (pathlib.Path(__file__).parent / "publish_release.py").read_text(encoding="utf-8")
+        self.assertIn("--pdb-only", publisher)
 
     def test_installer_and_unsigned_portable_have_distinct_entries(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "CHANGELOG.md").write_text("## [1.4.0]\n\nTest notes\n", encoding="utf-8")
             for name in ["niuma-timer_1.4.0_x64-setup.exe", "niuma-timer-1.4.0-portable.exe"]:
@@ -193,7 +222,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(m["notes"], "Test notes")
 
     def test_orphan_signature_is_rejected(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             (pathlib.Path(d) / "niuma-timer_1.4.0_x64-setup.exe.sig").write_text("signature")
             with self.assertRaises(ValueError):
                 release.build_latest_json(d, "1.4.0", d, "owner/repo")
@@ -201,7 +230,7 @@ class ManifestTests(unittest.TestCase):
     def test_debug_symbols_not_uploaded_in_default_flow(self):
         # PDB 不是运行时依赖：默认发布只发必需资产，调试符号由 --pdb-only
         # 在发布后 best-effort 补传（见 PdbOnlyTests）。PDB 失败绝不能阻断发布。
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
             (root / "niuma-timer-1.4.0-portable.pdb").write_bytes(b"symbols")
@@ -253,7 +282,7 @@ class UploadRetryTests(unittest.TestCase):
 
     def test_retries_transient_then_succeeds(self):
         # 瞬时错误（500）应重试，第 3 次成功则整体成功
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
             p.write_bytes(b"x" * 32)
             gh, calls = self._gh(lambda n: (500, {}) if n < 3 else (201, {}))
@@ -264,7 +293,7 @@ class UploadRetryTests(unittest.TestCase):
 
     def test_client_error_not_retried(self):
         # 永久错误（422 已存在 / 403 无权限）不得重试，一次即判失败
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
             p.write_bytes(b"x" * 32)
             gh, calls = self._gh(lambda n: (422, {}))
@@ -275,7 +304,7 @@ class UploadRetryTests(unittest.TestCase):
 
     def test_network_error_is_retried(self):
         # 连接被重置（Errno 10054）属瞬时错误，必须被接住并重试
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             p = pathlib.Path(d) / "niuma-timer-1.4.1-portable.pdb.zip"
             p.write_bytes(b"x" * 32)
 
@@ -304,7 +333,7 @@ class PdbOnlyTests(unittest.TestCase):
 
     def test_uploads_pdb_to_published_release(self):
         # 目标 Release 已公开（draft=false）时仍能补传 PDB，且不改动发布状态
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
             uploads, patched = [], []
@@ -328,7 +357,7 @@ class PdbOnlyTests(unittest.TestCase):
 
     def test_skips_already_uploaded(self):
         # 已上传的 PDB 幂等跳过，不重复 POST
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
             posts = []
@@ -347,7 +376,7 @@ class PdbOnlyTests(unittest.TestCase):
 
     def test_fails_when_no_release_found(self):
         # tags 查不到、草稿列表也没有 → 没有可挂载 PDB 的 Release，返回 1
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.pdb.zip").write_bytes(b"symbols")
 
@@ -360,7 +389,7 @@ class PdbOnlyTests(unittest.TestCase):
 
     def test_no_pdb_present_is_not_a_failure(self):
         # package 里没有 PDB（例如手工补传已清理）→ 无操作即成功
-        with tempfile.TemporaryDirectory() as d:
+        with tmpdir() as d:
             root = pathlib.Path(d)
             (root / "niuma-timer-1.4.0-portable.exe").write_bytes(b"portable")
 
