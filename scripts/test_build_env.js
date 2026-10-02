@@ -83,7 +83,9 @@ fs.writeFileSync(
   "ascii"
 );
 // stdio 必须 inherit/ignore：沙箱下 node 的管道 stdio 会被拒（EPERM）
-const r = spawnSync("cmd", ["/c", ".tmp\\run-build-env.bat"], { cwd: FIXTURE, stdio: "inherit" });
+// Keep spawn's cwd outside FIXTURE: Windows runners can retain a handle to it
+// until after this process exits, which makes immediate fixture cleanup EBUSY.
+const r = spawnSync("cmd", ["/c", RUNNER], { cwd: ROOT, stdio: "inherit" });
 ok("build.bat（无参数，debug→release）整体退出码 0", r.status === 0, "exit=" + r.status);
 
 const lines = fs.existsSync(LOG)
