@@ -188,15 +188,16 @@ exit /b 0
 :fail
 echo Build failed.
 echo.
-rem A failure whose text mentions RC.EXE / D8050 / a tool that could not be
-rem started is almost always the toolchain process being denied at spawn, not a
-rem source error. Print what the build was actually handed.
+rem Print the toolchain variables we hand to cargo. RC must be EMPTY or a real
+rem rc.exe path: any other non-empty value means one of our own scripts
+rem overwrote it, which makes embed-resource spawn the wrong thing and report
+rem a misleading "Are you sure you have RC.EXE..." (see CHANGELOG 2026-10-02).
 echo   Build-environment diagnostics:
 echo     RC  = %RC%
 echo     TMP = %TMP%
-echo   Known machine-state issue on this box (see CHANGELOG): a freshly spawned
-echo   toolchain process is occasionally denied under high parallelism. Retry, or
-echo   serialise with:  cargo build --release -j1
+echo   If the error above says a tool could not be started (RC.EXE / D8050),
+echo   check the two values first; otherwise retry, or serialise with:
+echo     cargo build --release -j1
 exit /b 1
 
 :done
