@@ -2,6 +2,24 @@
 
 本文件记录项目的所有重要变更。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 修复
+
+- **发布构建环境三连修（VS 18 引爆的编译链失效）**——机器升级 Visual Studio 18 后，本机 release 构建全挂。三处修复：① build.bat 移除 `chcp 65001` 并回归纯 ASCII——UTF-8 代码页下 cc-rs / embed_resource 解析 vswhere 的 GBK 输出错位，cl/rc 双双拿不到 INCLUDE（"RC.EXE not set" 与 cl 静默 exit 2 同根）；② common.bat 经 vswhere 调用 vcvars64 注入完整 INCLUDE/LIB（cc-rs 自身在 VS 18 布局上探测失效），并对终端残留的死 RC 路径自愈重探，且该文件今后保持纯 ASCII（多字节注释在部分终端被当命令执行）；③ cc 构建依赖升级 1.5.1。另从 git 历史（80b2441）字节级找回 build.bat 被 v1.5.0 发布提交损毁的四段中文注释。
+
+### 变更
+
+- **release 编译提速**——`codegen-units` 1→4（并行代码生成）、调试信息 `debug = true` → `line-tables-only`（PDB 保留行号、砍掉局部变量，崩溃仍可符号化到行）：crate 级 release 重编实测 3m10s → 约 5s。PDB 体积不变（C 依赖的 -Z7 完整调试信息占主导）。
+- **build 并行闪断缓解记录**——VS 18 下高并行 cc 编译偶发 D8050（c1.dll 执行失败），串行 `-j1` 稳定通过；属机器态问题（疑似 Defender 并发干扰），遇到时 `cargo build --release -j1` 即可，日常增量构建不受影响。
+
+### 新增
+
+- **dev.bat 前端热迭代工作流**——自动起 1420 端口静态服务 + `cargo tauri dev`：Rust 只编译一次，此后改前端即改即见（页面刷新级），彻底跳过重编。
+- **scripts/push_via_api.py 应急推送工具**——github.com 被墙且代理不在时，经 Git Data API 逐提交推送任意分支（blob sha 校验 + 基线树一致性检查），把断网期的临时手搓方案工具化。
+- **依赖安全门禁**——CI 新增 cargo-deny job（advisories + yanked 检查），依赖 CVE 直接红。
+- **focus_sessions 补 date 索引**——唯一没有日期索引的业务表，聚合与保留期清理改走索引。
+
 ## [1.7.0] - 2026-10-01
 
 ### 新增
