@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS audio_usage_hourly (
 
 /// 专注段（v1.7.0）：一段达标专注在结束时落一条。date 归属**开始日**，
 /// 跨午夜段 end_hm < start_hm 属正常形态（前端显示「次日」）。
+/// 其余表都以 date 前缀主键天然带索引；本表主键是自增 id，按日期的查询
+/// （聚合/保留期清理）靠下面的显式索引。
 pub(crate) const CREATE_FOCUS_SESSIONS: &str = r#"
 CREATE TABLE IF NOT EXISTS focus_sessions (
     date     TEXT NOT NULL,
@@ -115,6 +117,10 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
     top_app  TEXT NOT NULL DEFAULT '',
     id       INTEGER PRIMARY KEY AUTOINCREMENT
 );
+"#;
+
+pub(crate) const CREATE_FOCUS_SESSIONS_IDX: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_date ON focus_sessions (date);
 "#;
 
 /// 全部建表语句（幂等，重复执行无副作用）。
@@ -130,6 +136,7 @@ const TABLE_DDL: &[&str] = &[
     CREATE_AUDIO_USAGE,
     CREATE_AUDIO_USAGE_HOURLY,
     CREATE_FOCUS_SESSIONS,
+    CREATE_FOCUS_SESSIONS_IDX,
 ];
 
 /// 建全部数据表（幂等，重复执行无副作用）。

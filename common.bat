@@ -43,3 +43,13 @@ if not defined RC (
     if not defined RC if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe" set "RC=%ProgramFiles(x86)%\Windows Kits\10\bin\%%d\x64\rc.exe"
   )
 )
+
+rem C-dependency builds (cc-rs, e.g. vswhom-sys) need INCLUDE/LIB. cc-rs's own
+rem MSVC detection misses the VS "18" layout on this machine, so seed the full
+rem toolchain env via vcvars64 (located through vswhere; skipped when the
+rem terminal already has one, e.g. a developer prompt).
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not defined INCLUDE if exist "%VSWHERE%" for /f "delims=" %%p in ('"%VSWHERE%" -latest -property installationPath 2^>nul') do (
+  if exist "%%p\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%%p\VC\Auxiliary\Build\vcvars64.bat"
+)
+if not defined INCLUDE if defined VCVARS call "%VCVARS%" >nul 2>&1
