@@ -172,6 +172,24 @@ pub fn tick(cfg: &Config) {
     }
 }
 
+/// 退出前结算进行中的专注段（ main.rs 的 RunEvent::Exit 调用）。
+///
+/// 段只在「闭合」时落库（见本模块开头），而托盘工具是按工作日起停的：
+/// 不在这里收口，退出瞬间正在进行的那一段——
+/// 往往正是当天最长的一段——会被静默丢弃，且不留任何痕迹。
+/// 暂停 / 远程 / 关闭功能都已由 tick 收敛成断段，唯独退出漏了。
+pub fn shutdown(cfg: &Config) {
+    let input = TickInput {
+        now_ms: now_ms(),
+        active: false,
+        work_app: None,
+    };
+    let threshold = cfg.focus_min_minutes.clamp(10, 120) as i64;
+    if let Some(s) = tick_run(&mut sync::lock(&RUN, "focus::RUN"), input, threshold) {
+        insert_session(&s);
+    }
+}
+
 fn insert_session(s: &ClosedSession) {
     let date = Local
         .timestamp_millis_opt(s.start_ms)

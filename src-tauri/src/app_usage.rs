@@ -133,6 +133,9 @@ pub const CAT_OTHER: &str = "其他";
 const DEFAULT_CATEGORIES: &[(&str, &str)] = &[
     // 工作
     ("VS Code", CAT_WORK),
+    // AI/agent 类 IDE：不在表里就会被归「其他」，
+    // 而 focus 的 work_app 只认工作类 → 专注段永远起不来。
+    ("ZCode", CAT_WORK),
     ("Word", CAT_WORK),
     ("Excel", CAT_WORK),
     ("PowerPoint", CAT_WORK),

@@ -26,6 +26,18 @@ jobs:
       - name: Run frontend tests
         run: node scripts/run_all.js
 
+  release-engine-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # publish_release.py + its offline suite. Local-only until now, which is
+      # exactly why it silently drifted after v1.5.1 moved publishing to CI.
+      - name: Run release-engine tests
+        run: python scripts/test_publish_release.py
+
   dep-audit:
     runs-on: ubuntu-latest
     steps:
