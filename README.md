@@ -160,13 +160,36 @@ the GitHub Release (watch progress on the Actions page).
 - Bumping the version rewrites `Cargo.toml` and `tauri.conf.json`; if that fails, restore with
   `git checkout --` as printed by the script
 
+### Frontend hot iteration
+
+`dev.bat` serves `frontend/` on the devUrl port (1420) and runs `cargo tauri dev`: the Rust side
+compiles once, then editing `index.html` / `styles.css` / `js/*.js` is just a page reload.
+Requires Python (static server) and `tauri-cli`.
+
+### Dependency security gate
+
+`cargo deny check advisories` — config in `src-tauri/deny.toml` — runs in CI as the `dep-audit`
+job. Unmaintained notices on Linux-only GUI transitive deps are explicitly exempted with a
+reason; real CVEs get a dependency bump instead.
+
+### Emergency push (github.com unreachable)
+
+`scripts/push_via_api.py <branch> [--base main]` replays local commits through the GitHub Git Data
+API (blob-SHA verified, remote base tree checked) for the times when `github.com` is blocked but
+`api.github.com` is not.
+
 ### Tests
 
-Run `build.bat test` (cargo test plus `node scripts/run_all.js`) for the full suite; the
-frontend assert scripts read the frontend source via `scripts/lib/fe_sources.js`, which
-concatenates the 10 blocks under `frontend/js/` in load order before any assertions.
-Rust-side source assertions go through `scripts/lib/rs_sources.js` the same way (commands
-live in the `cmds_*.rs` modules since main.rs was modularized).
+Run `build.bat test` for the full suite: it runs `cargo test`, `node scripts/run_all.js`
+(33 assert scripts) and `python scripts/test_publish_release.py` (the release engine's offline
+suite). The frontend assert scripts read the frontend source via `scripts/lib/fe_sources.js`,
+which concatenates the 10 blocks under `frontend/js/` in load order before any assertions.
+Rust-side source assertions go through `scripts/lib/rs_sources.js`, which mirrors
+`src-tauri/src/**/*.rs` recursively (commands live in the `cmds_*.rs` modules since main.rs was
+modularized).
+
+Contributor-facing conventions — locking discipline, cross-boundary naming contracts, test rules
+and the local environment traps — live in [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md).
 
 
 ## Usage
@@ -190,15 +213,22 @@ live in the `cmds_*.rs` modules since main.rs was modularized).
 | `payday` | Pay day of each month (1–31) |
 | `workdays_override` | Manually override the auto-calculated workday count (optional) |
 | `duration_format` | Duration display: `hms` / `hm` / `h` (default `hms`) |
-| `tray_hover_card` | Show the colored hover card instead of the native tooltip (default off) |
+| `tray_hover_card` | Show the colored hover card instead of the native tooltip (default on) |
 | `overtime_enabled` | Enable overtime tracking (default off) |
 | `overtime_start` | Overtime start time `HH:MM` (empty = `pm_end`) |
 | `overtime_rate` | Overtime pay (¥/hour, default 20) |
 | `overtime_meal_enabled` | Enable meal allowance (default on) |
 | `overtime_meal` | Meal allowance amount (¥, default 20) |
+| `weekend_overtime` | Count rest-day / public-holiday overtime (default off) |
+| `weekend_ot_start` | Rest-day overtime start `HH:MM` (default `09:00`; a rest day has no clock-off time) |
+| `overtime_rate_weekend` | Rest-day rate (¥/hour; falls back to `overtime_rate`) |
+| `overtime_rate_holiday` | Public-holiday rate (¥/hour; falls back to the weekend rate) |
 | `monitor_activity` | Mouse/keyboard activity monitoring (default on) |
 | `monitor_app_usage` | App usage monitoring (default on) |
 | `monitor_audio` | Media playback monitoring (default on) |
+
+The table lists the knobs people actually change; the full set (reminders, appearance,
+updates, retention) is whatever `config.json` contains.
 
 ## Data storage
 
@@ -246,10 +276,12 @@ niuma-timer/
 │   │   ├── holiday.rs      # Holiday data fetch + parse + cache + built-in fallback table
 │   │   ├── icon_render.rs  # Tray icon pixel rendering
 │   │   ├── tray.rs         # Tray icon, menu, hover card (debounce/watchdog/click-cooldown)
+│   │   ├── tray/hover_state.rs  # Hover-card interaction state machine (pure)
 │   │   ├── db.rs           # SQLite layer (WAL), schema init
 │   │   ├── overtime.rs     # Overtime records: calc + persistence
 │   │   ├── weekbill.rs     # Week/month/year bill aggregation
 │   │   ├── insights.rs     # Insights aggregation (heatmap / trend / body bill)
+│   │   ├── focus.rs        # Focus-session state machine (v1.7.0)
 │   │   ├── lock_monitor.rs # Windows lock-screen listener (WTS session change)
 │   │   ├── activity.rs     # Raw Input mouse/keyboard capture + hourly buckets + top keys
 │   │   ├── app_usage.rs    # Foreground-window app usage tracking (whitelist)
@@ -267,9 +299,10 @@ niuma-timer/
 │   ├── build.rs           # Tauri build (registers commands)
 │   ├── tauri.conf.json
 │   ├── capabilities/default.json
+│   ├── deny.toml          # cargo-deny config (CI dep-audit gate)
 │   └── permissions/autogenerated/  # command ACL manifests
 ├── frontend/
-│   ├── index.html         # 6 views: main / settings / overtime / activity / app-usage / media
+│   ├── index.html         # 8 views: home / bill / settings / update + 4 detail pages
 │   ├── js/                # 10 classic scripts, loaded by index.html in this order
 │   │   ├── core.js        # shared helpers, state & invoke shim (loads first)
 │   │   ├── settings.js    # settings page
@@ -281,9 +314,21 @@ niuma-timer/
 │   │   ├── storage.js     # system & data card: storage usage, cleanup, backups
 │   │   ├── update.js      # auto update
 │   │   └── boot.js        # view switching + startup sequence (loads last)
-│   └── styles.css
-├── build.bat             # One-click build (debug + release → bin/)
-└── bin/                  # Build artifacts (gitignored)
+│   ├── styles.css
+│   └── hover_card.html    # tray hover card (independent document with its own state)
+├── scripts/               # test suites + release tooling
+│   ├── test_*.js          # 33 source-contract scripts, collected by scripts/run_all.js
+│   ├── test_publish_release.py  # release-engine offline suite (also runs in CI)
+│   ├── lib/               # fe_sources.js / rs_sources.js source aggregators
+│   ├── publish_release.py # GitHub Release engine (CI uses this too)
+│   └── push_via_api.py    # emergency push when github.com is unreachable
+├── common.bat             # shared setup: build-owned TMP, vcvars/RC seeding, cargo fallback
+├── build.bat              # one-click build / test (debug + release → bin/)
+├── dev.bat                # frontend hot iteration
+├── release.bat            # version bump / test / package / tag / push (CI publishes)
+├── CHANGELOG.md
+├── docs/CONVENTIONS.md    # contributor-facing conventions
+└── bin/                   # Build artifacts (gitignored)
 ```
 
 ---

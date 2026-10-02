@@ -6,17 +6,19 @@
 
 ### 修复
 
-- **发布构建环境三连修（VS 18 引爆的编译链失效）**——机器升级 Visual Studio 18 后，本机 release 构建全挂。三处修复：① build.bat 移除 `chcp 65001` 并回归纯 ASCII——UTF-8 代码页下 cc-rs / embed_resource 解析 vswhere 的 GBK 输出错位，cl/rc 双双拿不到 INCLUDE（"RC.EXE not set" 与 cl 静默 exit 2 同根）；② common.bat 经 vswhere 调用 vcvars64 注入完整 INCLUDE/LIB（cc-rs 自身在 VS 18 布局上探测失效），并对终端残留的死 RC 路径自愈重探，且该文件今后保持纯 ASCII（多字节注释在部分终端被当命令执行）；③ cc 构建依赖升级 1.5.1。另从 git 历史（80b2441）字节级找回 build.bat 被 v1.5.0 发布提交损毁的四段中文注释。
+- **发布构建环境三连修（VS 18 引爆的编译链失效）**——机器升级 Visual Studio 18 后，本机 release 构建全挂。三处修复：① build.bat 移除 `chcp 65001` 并回归纯 ASCII——UTF-8 代码页下 cc-rs / embed_resource 解析 vswhere 的 GBK 输出错位，cl/rc 双双拿不到 INCLUDE（"RC.EXE not set" 与 cl 静默 exit 2 同根）；② common.bat 经 vswhere 调用 vcvars64 注入完整 INCLUDE/LIB（cc-rs 自身在 VS 18 布局上探测失效），并对终端残留的死 RC 路径自愈重探，且该文件今后保持纯 ASCII（多字节注释在部分终端被当命令执行）；③ cc 构建依赖试升 1.5.1 后又回退——升级并未解决本机问题，最终锁定 1.4.3（见 Cargo.lock）。另从 git 历史（80b2441）字节级找回 build.bat 被 v1.5.0 发布提交损毁的四段注释，其后按 bat 纯 ASCII 政策统一译为英文。
 - **构建自持临时目录，根治 cl.exe D8050（exit 2）**——cl.exe 只要开启调试信息（cc-rs 在 debug 与 release 两个 profile 下都会传 `-Z7`），就要把命令行写进 `%TMP%` 的调试记录文件；`%TMP%`/`%TEMP%` 一旦不存在、不可写或未设置，cl 就在启动 c1.dll / c1xx.dll 之前失败，退出码 2 并报 D8050，**表现为全部 C 依赖（ring / libsqlite3-sys / vswhom-sys）同时编译失败**，与 cc 版本、并行度、VS 安装无关，而手工执行同一条命令往往又成功（两次运行拿到的 TMP 不是同一个）。此前 `common.bat` 沿用调用方给的 TMP，在受限身份（沙箱 / 低完整性）或 git-bash 这类会改写 TMP 的终端里必现。现改为构建自持：`common.bat` 创建并固定 `%ROOT%.tmp`，附写入探针，失败即给人话报错；`build.bat` / `release.bat` / `dev.bat` 三处调用点改为检查返回值。
 - **发布引擎测试归位**——`scripts/test_publish_release.py` 自 v1.5.1「发布上云」后失修：仍在断言已从 release.bat 删除的本机发布路径（`gh release` / `--draft` / `ASSETS` 段 / `--pdb-only`），且从未被任何入口执行（`run_all.js` 只收 `test_*.js`），烂了没人知道。现对齐现状——本机只跑元数据闸门 `--generate-notes-only` 并打 tag，发布归 CI；临时目录改用不依赖 0700 ACL 的写法（受限令牌/沙箱下同样可跑，这一条此前造成 15 条假报错）；并接入 `build.bat test`。22 条全绿。
 - **专注段不再静默丢失**——专注段只在「闭合」时落库，而退出路径原先只结算了键鼠 / 应用 / 媒体三个采集器，`focus` 漏了：托盘工具按工作日起停，退出瞬间正在进行的那一段（往往正是当天最长的一段）会被静默丢弃且不留日志。现 `focus::shutdown()` 在 `RunEvent::Exit` 结算，并加 `scripts/test_shutdown_hooks.js` 把四条收口钉住。
 - **常用工作应用补录默认分类**——`ZCode` 归入「工作」：默认表不覆盖它时 `focus` 的 `work_app` 恒为空，专注段永远起不来（实测两个月数据 `focus_sessions` 0 行），而分类智能建议虽会给出「工作」chip 却「不点不生效」。
+- **审计修正三处细节**——① 存储细分补上「专注时段」分类：`maintain.rs` 的 `TABLE_GROUPS` 漏了 `focus_sessions`，v1.7.0 起的专注占用一直被算进「其它」；现单列一类并补 `styles.css` 的 `.k-focus` 配色（配色类无兜底，缺了就画不出色段）；② `remote.rs` 5 处裸 `.lock().unwrap_or_else(..)` 收口到 `sync::lock`，中毒时不再静默自愈、改为记日志；③ 订正两处与实现不符的注释（`cmds_core.rs` 的「`<a download>` 被取消」实测并不成立、`overtime.js` 的「纯前端 Blob 下载」实际走后端 `export_csv`）。
 
 ### 变更
 
 - **release 编译提速**——`codegen-units` 1→4（并行代码生成）、调试信息 `debug = true` → `line-tables-only`（PDB 保留行号、砍掉局部变量，崩溃仍可符号化到行）：crate 级 release 重编实测 3m10s → 约 5s。PDB 体积不变（C 依赖的 -Z7 完整调试信息占主导）。
 - **build 并行闪断缓解记录**——VS 18 下高并行 cc 编译偶发 D8050（c1.dll 执行失败），串行 `-j1` 稳定通过；属机器态问题（疑似 Defender 并发干扰），遇到时 `cargo build --release -j1` 即可，日常增量构建不受影响。
 - **测试基建补洞**——`scripts/lib/rs_sources.js` 改为递归扫描（`tray/hover_state.rs` 这类子模块原先对所有 rsSource 断言隐形，其 19 条测试白写）；`scripts/test_publish_release.py` 接入 CI 新增的 `release-engine-tests` job（此前只有本机 `build.bat test` 会跑它，正是它 v1.5.1 后无声腐烂的原因）；`win::tests::register_aumid_writes_display_name_and_icon` 增加 HKCU 可写性探测，受限令牌 / 沙箱下跳过而非误报失败（原先会让沙箱里的 `cargo test` 恒红、淹没真回归）。
+- **工程约定入库 + 文档与实现对齐**——新增受版本控制的 `docs/CONVENTIONS.md`：此前这些硬约定只存在于被 `.gitignore` 忽略的 `.workbuddy/memory/MEMORY.md`（协作者 / CI / agent 都看不到，且已过期 6 个版本、多处数字与事实相反）。同时把两份 README 与实现对齐——订正 `tray_hover_card` 默认值（实为开）、补录休息日 / 法定节假日加班的 4 个配置字段、`build.bat test` 说明改为三步、补上此前完全未提的 `dev.bat` / `scripts/push_via_api.py` / cargo-deny 门禁、结构树补齐 `focus.rs` / `tray/hover_state.rs` / `deny.toml` / `hover_card.html` / `scripts/`，视图数 6→8；订正 CHANGELOG 自身两处失真（cc 实为回退 1.4.3、build.bat 注释已按 ASCII 政策译成英文）；四份历史实施计划补齐「已完成 / 已被取代」状态标注。
 
 ### 新增
 

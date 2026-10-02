@@ -1,5 +1,7 @@
 # 实施计划：CI 自动化 + 前端代码拆分
 
+> **状态（2026-10-02 补记）：已完成**；但本文档描述的是当时的形态，其中两处此后被推翻——① 导航从「3 个顶部标签」改为 4 项竖排侧栏（`nav.rail`）；② `scripts/lib/split_check.js` 已删除。勾选框保留原样作为执行记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkboxes so progress can be tracked while executing. Do not skip verification steps. Each task ends with a commit.
 
 - **Spec**: docs/superpowers/specs/2026-09-29-ci-and-frontend-split-design.md（已批准；commit 4790cdf + 修订 b3ac04d）

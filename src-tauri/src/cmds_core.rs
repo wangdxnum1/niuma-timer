@@ -232,7 +232,9 @@ fn safe_download_path(filename: &str) -> std::path::PathBuf {
 }
 
 /// 导出 CSV：把 content（纯 UTF-8，不含 BOM）写到用户「下载」目录，返回最终保存路径。
-/// 背景：Tauri WebView 的 <a download> 默认被取消，纯前端下载无反应，故走后端写盘。
+/// 背景：早年以为 Tauri WebView 会取消 <a download>（实测并不取消，文件其实会落到
+/// 下载目录）；真正的坑是纯前端下载没有任何可见反馈、用户会反复点。故统一走后端写盘，
+/// 并由前端弹提示条告知落盘位置。
 #[tauri::command]
 pub(crate) fn export_csv(filename: String, content: String) -> Result<String, String> {
     let path = safe_download_path(&filename);

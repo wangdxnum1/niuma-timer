@@ -7,7 +7,7 @@
 //!   实测 4.15MB 是主库 245KB 的 17 倍。必须显式 `PRAGMA wal_checkpoint(TRUNCATE)`
 //!   才能归零（已实测：PASSIVE 后仍是 4.4MB，TRUNCATE 后为 0）。
 //! - **图标缓存只增不减**：`config_dir/icons/` 无清理机制。
-//! - **历史数据无保留策略**：7 张按日期分桶的表只增不减。
+//! - **历史数据无保留策略**：8 张按日期分桶的表只增不减。
 //!
 //! 设计原则：**默认不删用户数据**。保留期由配置 `retention_days` 控制，默认 0 =
 //! 永久保留，此时只做 WAL 收缩、图标与遗留文件清理——这三项都不损失任何数据
@@ -57,6 +57,7 @@ const TABLE_GROUPS: &[(&str, &str, &str)] = &[
     ("app_usage_hourly", "app", "应用使用"),
     ("audio_usage", "audio", "媒体播放"),
     ("audio_usage_hourly", "audio", "媒体播放"),
+    ("focus_sessions", "focus", "专注时段"),
 ];
 
 /// 分类展示顺序（key, 展示名）。key 与 `TABLE_GROUPS` 一一对应。
@@ -65,6 +66,7 @@ const GROUP_ORDER: &[(&str, &str)] = &[
     ("activity", "键鼠活动"),
     ("app", "应用使用"),
     ("audio", "媒体播放"),
+    ("focus", "专注时段"),
 ];
 
 /// 表结构之外、但同在数据目录里的文件（配置 / 节假日缓存 / 日志），
@@ -165,7 +167,7 @@ pub struct StorageInfo {
     pub icon_files: u32,
     /// 图标缓存字节数
     pub icon_bytes: u64,
-    /// 最早的一条数据日期（7 张表取最小）
+    /// 最早的一条数据日期（8 张表取最小）
     pub earliest_date: Option<String>,
     /// 当前保留策略（天；0 = 永久保留）
     pub retention_days: u32,
@@ -228,7 +230,7 @@ pub fn cutoff_for(cfg: &Config, today: NaiveDate) -> Option<NaiveDate> {
 /// 拆出「吃连接」的内层函数是为了能直接用 in-memory 库测——`purge_before`
 /// 走的是全局连接（真实库），单测不能碰。
 ///
-/// 7 张表一并处理：加班、活动、应用、媒体。保留期是用户显式选择的，
+/// 8 张表一并处理：加班、活动、应用、媒体。保留期是用户显式选择的，
 /// 若加班记录比监控明细更需要留久，用户应把保留期设长——分两套策略反而难解释。
 pub fn purge_before_conn(conn: &rusqlite::Connection, cutoff: NaiveDate) -> rusqlite::Result<u32> {
     let cut = cutoff.format("%Y-%m-%d").to_string();
@@ -395,7 +397,7 @@ pub(crate) fn build_storage_info(cfg: &Config, p: StorageParts) -> StorageInfo {
         });
     }
 
-    // 主库里不属于这 7 张表的部分：索引、空闲页、表结构开销。
+    // 主库里不属于这 8 张表的部分：索引、空闲页、表结构开销。
     // saturating_sub：dbstat 精确值理论上不会超，但估算路径可能，不能让它下溢成天文数字
     let counted: u64 = slices.iter().map(|s| s.bytes).sum();
     slices.push(StorageSlice {
@@ -548,8 +550,8 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    /// 用真实建表函数建全 7 张表——手工挑几张会让测试与真实 schema 脱节：
-    /// DATED_TABLES 覆盖全部 7 张，少建一张就会在运行期报 no such table。
+    /// 用真实建表函数建全 8 张表——手工挑几张会让测试与真实 schema 脱节：
+    /// DATED_TABLES 覆盖全部 8 张，少建一张就会在运行期报 no such table。
     fn mem_db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         crate::db::init_tables(&db);
@@ -757,7 +759,7 @@ mod tests {
         assert_eq!(slice_of(&info, "audio").bytes, 10);
     }
 
-    /// 回归：主库里不属于 7 张表的部分（索引、空闲页）归入「索引与空闲页」，
+    /// 回归：主库里不属于 8 张表的部分（索引、空闲页）归入「索引与空闲页」，
     /// 且用 saturating_sub——估算路径下可能出现表总和 > 主库，不能下溢
     #[test]
     fn build_other_is_db_minus_tables_and_never_negative() {
@@ -805,7 +807,10 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            vec!["activity", "app", "audio", "config", "icons", "logs", "other", "overtime", "wal"]
+            vec![
+                "activity", "app", "audio", "config", "focus", "icons", "logs", "other",
+                "overtime", "wal"
+            ]
         );
     }
 

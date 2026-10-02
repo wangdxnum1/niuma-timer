@@ -140,7 +140,8 @@ function renderOtTable(ot) {
   }
 }
 
-// ---- 导出 CSV（纯前端：数据已在 JS 侧，用 Blob 下载，零 Rust / 零新 IPC）----
+// ---- 导出 CSV：数据虽已在 JS 侧，仍走后端 export_csv 写「下载」目录 ----
+// （后端负责文件名清洗与 UTF-8 BOM，前端负责按钮反馈与并发守卫，见 downloadCsv）
 // RFC4180 转义：含逗号/引号/换行才包双引号，内部引号翻倍
 function csvCell(v) {
   const s = v == null ? "" : String(v);

@@ -143,7 +143,7 @@ rem TAURI_SIGNING_PRIVATE_KEY_PASSWORD is optional for an unencrypted local key.
 rem ---------------- 3. confirm ----------------
 echo.
 echo   Steps:
-echo     0. tests (cargo test + frontend assert scripts)
+echo     0. tests (cargo test + frontend assert scripts + release engine)
 echo     1. cargo build --release
 echo     2. cargo tauri build   (NSIS installer + MSI + portable exe)
 echo     3. git commit / tag v%VER%
@@ -177,7 +177,7 @@ if exist "%BIN%\package" (
 rem ---------------- 5. tests ----------------
 echo.
 echo =========================================
-echo   [0/5] Testing (cargo test + frontend assert scripts) ...
+echo   [0/5] Testing (cargo test + frontend assert scripts + release engine) ...
 echo =========================================
 call "%ROOT%build.bat" test
 if errorlevel 1 ( echo [ERROR] tests failed & exit /b 1 )
