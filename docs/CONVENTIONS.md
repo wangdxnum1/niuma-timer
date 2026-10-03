@@ -7,7 +7,7 @@
 ## 代码地图（现状）
 - 后端 33 个 `.rs`：核心域模块 + 命令层 `cmds_core/cmds_bill/cmds_monitor/cmds_storage/cmds_update/cmds_debug`（二期自 `main.rs` 切出，纯移动）+ `tray/hover_state.rs`。
 - 前端无打包链：`frontend/index.html` 里 **8 个视图容器**（`viewMain/viewBill/viewSettings/viewOt/viewAct/viewApp/viewAudio/viewUpdate`）+ `frontend/js/` **10 个块**（`app.js` 已删除，禁止复活）+ `styles.css` + `hover_card.html`（独立窗口）。
-- 测试规模：Rust 侧 234 个 `#[test]`；`scripts/test_*.js` 35 个 + `scripts/test_publish_release.py`。
+- 测试规模：Rust 侧 241 个 `#[test]`；`scripts/test_*.js` 35 个 + `scripts/test_publish_release.py` + `scripts/test_push_via_api.py`。
 - 用户数据在 `%APPDATA%/niuma-timer/`：`niuma.db`（SQLite + WAL）、`config.json`、`holiday_{year}.json`、`debug.log` / `panic.log`、`icons/`。
 
 ## 构建入口与脚本纪律
@@ -15,7 +15,8 @@
 - 共享初始化全在 `common.bat`：`ROOT/SRC/BIN`、cargo 兜底、`vcvars64`。它**故意不写 `setlocal`**（变量必须活过 `call`）；三个调用方都必须 `call "%~dp0common.bat"` 后立刻 `if errorlevel 1 exit /b 1`。
 - **四个根 .bat 必须纯 ASCII、注释写英文、绝不加 `chcp`**。事故两次：① `chcp 65001` 让 cc-rs / embed_resource 误读 vswhere 的 GBK 输出，release 构建报 `RC.EXE not set`（2026-10-02）；② 中文 `rem` 在部分终端被 cmd 错位解析，注释片段当命令执行（`'报' is not recognized`）。另：**不要加 UTF-8 BOM**（cmd 会让 `@echo off` 失效）。
 - 验收方式：逐字节扫描确认无 >0x7F 字节（现在四个文件都是 0）。
-- `build.bat test` 必跑**三个套件**：`cargo test --quiet` → `node scripts/run_all.js` → `python scripts/test_publish_release.py`。CI（`.github/workflows/ci.yml`）另有 `release-engine-tests`、`dep-audit`（cargo-deny advisories）与 `rust-checks`（fmt / clippy `-D warnings` / test / drift guard）。
+- `build.bat test` 必跑四个套件：`cargo test --quiet` → `node scripts/run_all.js` → `python scripts/test_publish_release.py` → `python scripts/test_push_via_api.py`。CI 的四个质量 job（`frontend-tests` / `release-engine-tests` / `dep-audit`（cargo-deny advisories） / `rust-checks`（fmt / clippy `-D warnings` / test / 环境契约 / drift guard））统一定义在 **reusable workflow `.github/workflows/tests.yml`**，`ci.yml`（push/PR）与 `release.yml`（发布，`needs: tests` 作前置门禁）都经 `uses: ./.github/workflows/tests.yml` 调用——**六步检查只此一份**，改门禁只改 tests.yml；两 workflow 的 rust-cache 用同一 `shared-key`（默认按 job 隔离会让发布 job 永远全冷构建）。`test_cloud_publish_requires_main_and_ci_gates` 钉住这套结构。
+- ci.yml 的 `paths-ignore` 只允许 `docs/**`：根目录 `**.md` 不可忽略——test_readme.js 守的 README/CHANGELOG 恰是被改对象，忽略了守卫就只在下次碰代码的提交上补跑。
 - **没有任何入口跑的测试一定会烂掉**：发布引擎套件就是这样在 v1.5.1 上云后静默失效的，直到 commit 8951e22 才接回 `build.bat test` 与 CI。
 - `scripts/test_build_env.js` 把 `build.bat` / `common.bat` 复制到系统临时目录运行；cargo 桩生成的假 exe 只能留在该隔离目录，禁止写入真实 `src-tauri/target`。测试 runner 设置 `VSCMD_SKIP_SENDTELEMETRY=1`：否则 VS 开发命令行会启动后台 `vctip`，持有临时目录导致 Windows CI 清理时报 `EBUSY`。
 - CI 的 drift guard 会因 `git status --porcelain -- frontend src-tauri` 非空而失败：`build.rs` 自动回写缓存戳与 capability，所以本地改完前端必须 `cargo build` 一次并把自动改动一并提交。

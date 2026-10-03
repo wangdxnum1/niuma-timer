@@ -462,6 +462,41 @@ def publish_pdb_only(args, root, package_dir):
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
+def verify_published(gh, api, args, rel, package_dir):
+    """已公开 release 的只读核验：必需资产齐全 → 0（幂等自证），缺资产 → 1。
+
+    背景：发布后验证可能因 tags 端点传播延迟误报失败（PATCH 已 200），而旧版
+    对「已公开」只会 refusing to mutate 返回 1——CI 红字 + 重跑也红，HINT 却让
+    人「重跑确认」，自相矛盾还诱使人去「修」一个没坏的发布。已公开的资产
+    无论如何不可覆盖（改公开产物 = 篡改历史），所以这里只读。
+    """
+    log("  release: already published, read-only verification only")
+    published = {a["name"] for a in rel.get("assets", [])}
+    if os.path.isdir(package_dir):
+        bins, sigs, _pdbs = collect_package_assets(package_dir, args.version)
+        required = {os.path.basename(p) for p in bins + sigs}
+        required.add("latest.json")
+        missing = sorted(required - published)
+    else:
+        # 本地没有 package 目录（手动重跑核验时常见）：退化为远端形态检查
+        missing = []
+        if not any(n.lower().endswith((".exe", ".msi")) for n in published):
+            missing.append("<installer .exe/.msi>")
+        if not any(n.lower().endswith(".sig") for n in published):
+            missing.append("<signature .sig>")
+        if "latest.json" not in published:
+            missing.append("latest.json")
+    if missing:
+        log("  [FAIL] published release is missing required assets: %s"
+            % ", ".join(missing))
+        log("  [HINT] 已公开的资产不可覆盖：发布修复版请用新提交重打 tag")
+        return 1
+    log("  required assets present (%d assets), release verified" % len(published))
+    log("RELEASE_URL=%s" % rel.get("html_url"))
+    log("  already published & verified (read-only), nothing to do")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", required=True)
@@ -483,6 +518,18 @@ def main():
 
     if args.pdb_only:
         return publish_pdb_only(args, root, package_dir)
+
+    # 已公开 release 的只读自证放在最前：手动重跑核验时本地往往没有 package
+    # 目录，下面的 notes/manifest 构建会先 raise，而核验本身不需要本地产物。
+    # generate-notes-only 不碰网络，照旧跳过；无 token 则交给后续统一检查报错。
+    if not args.generate_notes_only:
+        early_token = github_token()
+        if early_token:
+            early_gh = GitHub(early_token, build_opener())
+            early_api = "%s/repos/%s" % (API, args.repo)
+            st, rel = early_gh.call("GET", "%s/releases/tags/%s" % (early_api, args.tag))
+            if st == 200 and not rel.get("draft"):
+                return verify_published(early_gh, early_api, args, rel, package_dir)
 
     notes_path = os.path.join(package_dir, "RELEASE_NOTES.md")
     if os.path.isfile(notes_path) and not args.generate_notes_only:
@@ -516,8 +563,8 @@ def main():
     st, rel = gh.call("GET", "%s/releases/tags/%s" % (api, args.tag))
     if st == 200:
         if not rel.get("draft"):
-            log("  [ERROR] refusing to mutate an already published release")
-            return 1
+            # 极小概率：early 自证之后、发布流程之内被并发公开——同一处置
+            return verify_published(gh, api, args, rel, package_dir)
         log("  release: already exists, reusing id=%s" % rel.get("id"))
     else:
         # 草稿没有 tag 引用，/releases/tags/{tag} 对草稿返回 404；

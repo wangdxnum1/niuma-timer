@@ -135,6 +135,85 @@ class ManifestTests(unittest.TestCase):
                              "must reuse the existing draft instead of creating a duplicate")
             self.assertEqual({u["name"] for u in uploads}, {"latest.json", "SHA256SUMS.txt"})
 
+    def test_already_published_with_required_assets_is_verified_readonly(self):
+        # 发布「成功但未证实」后的重跑：tags 端点已可见且非 draft，旧版一律
+        # 「refusing to mutate」返回 1——CI 红字 + 重跑也红，与 post-verify 的
+        # HINT「直接重跑确认」自相矛盾。现做只读核验：必需资产齐全 → 返 0。
+        with tmpdir() as d:
+            root = pathlib.Path(d)
+            for name in ("niuma-timer-1.4.0-x64-setup.exe",
+                         "niuma-timer-1.4.0-x64-setup.exe.sig"):
+                (root / name).write_bytes(b"installer")
+            calls = []
+            published_assets = [
+                {"name": "niuma-timer-1.4.0-x64-setup.exe", "size": 9},
+                {"name": "niuma-timer-1.4.0-x64-setup.exe.sig", "size": 9},
+                {"name": "latest.json", "size": 5},
+                {"name": "SHA256SUMS.txt", "size": 5},
+            ]
+
+            def call(method, url, data=None, content_type=None):
+                calls.append((method, url))
+                if method == "GET" and "/releases/tags/" in url:
+                    return 200, {"draft": False, "html_url": "https://example.test/r",
+                                 "assets": published_assets}
+                raise AssertionError("unexpected call: %s %s" % (method, url))
+
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0",
+                    "--package", d, "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"),                  mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 0, "已公开且资产齐全必须返 0（幂等自证）")
+            self.assertTrue(all(m == "GET" for m, _ in calls),
+                            "自证路径只读：不得出现任何 POST/PATCH")
+
+    def test_already_published_missing_assets_fails_without_mutation(self):
+        with tmpdir() as d:
+            root = pathlib.Path(d)
+            (root / "niuma-timer-1.4.0-x64-setup.exe").write_bytes(b"installer")
+            calls = []
+
+            def call(method, url, data=None, content_type=None):
+                calls.append((method, url))
+                if method == "GET" and "/releases/tags/" in url:
+                    # 远端缺 latest.json 与签名：残缺的已公开 release 必须报失败
+                    return 200, {"draft": False, "html_url": "https://example.test/r",
+                                 "assets": [{"name": "niuma-timer-1.4.0-x64-setup.exe", "size": 9}]}
+                raise AssertionError("unexpected call: %s %s" % (method, url))
+
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0",
+                    "--package", d, "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"),                  mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 1)
+            self.assertTrue(all(m == "GET" for m, _ in calls), "失败路径同样只读")
+
+    def test_already_published_remote_check_without_package_dir(self):
+        # 手动重跑核验时本地常常没有 package 目录：退化为远端形态检查
+        # （有安装包 + 有签名 + 有 latest.json），不因本地缺文件而误报。
+        with tmpdir() as d:
+            calls = []
+
+            def call(method, url, data=None, content_type=None):
+                calls.append((method, url))
+                if method == "GET" and "/releases/tags/" in url:
+                    return 200, {"draft": False, "html_url": "https://example.test/r",
+                                 "assets": [
+                                     {"name": "niuma-timer-1.4.0-x64-setup.exe", "size": 9},
+                                     {"name": "niuma-timer-1.4.0-x64-setup.exe.sig", "size": 9},
+                                     {"name": "latest.json", "size": 5},
+                                 ]}
+                raise AssertionError("unexpected call: %s %s" % (method, url))
+
+            gh = mock.Mock()
+            gh.call.side_effect = call
+            argv = ["publish_release.py", "--tag", "v1.4.0", "--version", "1.4.0",
+                    "--package", d + "-nonexistent", "--root", d]
+            with mock.patch("sys.argv", argv), mock.patch.object(release, "github_token", return_value="dummy"),                  mock.patch.object(release, "build_opener"), mock.patch.object(release, "GitHub", return_value=gh):
+                self.assertEqual(release.main(), 0)
+
     def test_post_publish_verify_rejects_still_draft(self):
         # PATCH 返回 200 但公开后的 release 仍是 draft（tags 可查但 draft=true）
         # → 必须退出码 1：v1.4.0 发布正是这类静默失败靠人眼兜底才发现的。
@@ -212,17 +291,30 @@ class ManifestTests(unittest.TestCase):
         self.assertLess(batch.index('if not "%BRANCH%"=="main" ('), batch.index("rem ---------------- 1. version ----------------"))
 
     def test_cloud_publish_requires_main_and_ci_gates(self):
-        workflow = (pathlib.Path(__file__).parent.parent / ".github" / "workflows" /
-                    "release.yml").read_text(encoding="utf-8")
+        # 门禁六步定义在 reusable workflow tests.yml（与 ci.yml 同源，防两份漂移）；
+        # release.yml 必须调用它并把 release job 置于 needs 之下——门禁不过不打包。
+        # 此前六步在 release.yml 与 ci.yml 各抄一份，本测试只钉 release.yml 自身，
+        # 抄错一边测试照绿——正是这次抽 reusable workflow 要消灭的漂移土壤。
+        wfdir = pathlib.Path(__file__).parent.parent / ".github" / "workflows"
+        workflow = (wfdir / "release.yml").read_text(encoding="utf-8")
+        tests_wf = (wfdir / "tests.yml").read_text(encoding="utf-8")
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("$env:GITHUB_REF_TYPE -ne 'tag'", workflow)
         self.assertIn("git merge-base --is-ancestor HEAD origin/main", workflow)
+        self.assertIn("uses: ./.github/workflows/tests.yml", workflow)
+        self.assertIn("needs: tests", workflow)
+        self.assertLess(workflow.index("needs: tests"), workflow.index("Build bundles"))
         for gate in ("cargo fmt --all -- --check", "cargo clippy --all-targets -- -D warnings",
-                     "cargo test", "node scripts/run_all.js", "python scripts/test_publish_release.py",
+                     "cargo test", "node scripts/run_all.js",
+                     "python scripts/test_publish_release.py", "python scripts/test_push_via_api.py",
                      "cargo deny check advisories"):
             with self.subTest(gate=gate):
-                self.assertIn(gate, workflow)
-                self.assertLess(workflow.index(gate), workflow.index("Build bundles"))
+                self.assertIn(gate, tests_wf)
+                self.assertNotIn(gate, workflow)
+        # 两个 workflow 的 rust-cache 必须共享同一命名空间（默认按 job 隔离，
+        # release job 永远全冷构建）
+        self.assertEqual(tests_wf.count("shared-key: niuma-timer"), 1)
+        self.assertIn("shared-key: niuma-timer", workflow)
 
     def test_release_bat_decouples_pdb_from_publish(self):
         # PDB policy since v1.5.1: the local flow refuses to tag a release whose

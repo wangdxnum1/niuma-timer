@@ -1,0 +1,99 @@
+name: tests
+
+# 可复用的质量门禁（reusable workflow，workflow_call）：ci.yml（push/PR）与
+# release.yml（tag 发布的前置门禁）都经 `uses: ./.github/workflows/tests.yml`
+# 调用同一份定义。此前 fmt/clippy/test/run_all/release-engine/deny 六步在两个
+# workflow 里各抄一份，纯靠人眼对齐——一处改 flag 忘另一处就会出现
+# 「CI 绿但发布红了」的假信号。改检查步骤只改这里。
+#
+# 注意：caller（ci.yml / release.yml）的 paths-ignore / concurrency / 权限
+# 都留在各自文件里；本文件只定义 job 本身。
+
+on:
+  workflow_call:
+
+jobs:
+  frontend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run frontend tests
+        run: node scripts/run_all.js
+
+  release-engine-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # publish_release.py + push_via_api.py offline suites. Local-only until
+      # now, which is exactly why the release engine silently drifted after
+      # v1.5.1 moved publishing to CI.
+      - name: Run release-engine tests
+        run: |
+          python scripts/test_publish_release.py
+          python scripts/test_push_via_api.py
+
+  dep-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny (security advisories)
+        run: cargo deny check advisories
+        working-directory: src-tauri
+
+  rust-checks:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # shared-key：ci 与 release 两个 workflow 的缓存共享同一命名空间。
+      # Swatinem/rust-cache 默认按 job 名隔离，release job 永远全冷构建
+      # （10-20 分钟纯编译/次，timeout 60 有被打穿的现实风险）；共享后
+      # registry 下载与 dev-profile 产物直接复用，release profile 产物
+      # 随首次发版入缓存。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: niuma-timer
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+      # 豁免清单（Task 2 存量，逐条含理由）：
+      # - clippy::large_enum_variant（config.rs LoadResult——Loaded(Config) 552 字节枚举，短生命周期，装箱收益低）
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: cargo test
+        run: cargo test
+        working-directory: src-tauri
+      # The local build scripts (build.bat / common.bat / release.bat) are exercised
+      # by nothing else. A variable-name collision in them broke every release build
+      # for two days while CI stayed green (2026-10-02).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build-script environment contract
+        run: node scripts/test_build_env.js
+
+      - name: Drift guard (build.rs 回写检测)
+        shell: pwsh
+        run: |
+          $status = git status --porcelain -- frontend src-tauri
+          if ($status) {
+            Write-Host $status
+            throw "build.rs 回写了未提交的自动改动：本地执行 cargo build，将 frontend/ 与 src-tauri/ 的自动变更一并提交后再推送"
+          }

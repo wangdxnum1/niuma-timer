@@ -40,6 +40,19 @@ console.log("== 版本号 ==");
 eq("英文 README 版本 == Cargo.toml", boldVer(en), cargoVer);
 eq("中文 README 版本 == Cargo.toml（两份即相等）", boldVer(zh), cargoVer);
 
+// 版本三处同步守卫（技术债批次三）：此前 Cargo.toml ↔ tauri.conf.json 只在
+// release.bat / release.yml 发版当天把关，CHANGELOG 有没有当前版本段更是
+// 只有 publish_release.py 的 WARN——忘同步时用户更新弹窗会拿「未发布」内容
+// 冒充本版公告。测试守卫让它在 build.bat test / CI 全入口提前红。
+const conf = JSON.parse(fs.readFileSync(path.join(ROOT, "src-tauri", "tauri.conf.json"), "utf8"));
+const changelog = fs.readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8");
+eq("tauri.conf.json 版本 == Cargo.toml", conf.version, cargoVer);
+eq(
+  "CHANGELOG 存在当前版本段 ## [" + cargoVer + "]",
+  new RegExp("^## \\[" + cargoVer.replace(/\./g, "\\.") + "\\]", "m").test(changelog),
+  true
+);
+
 console.log("== 结构对齐 ==");
 eq("两份 ## 二级标题数量相等", h2Count(en), h2Count(zh));
 eq(

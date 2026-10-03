@@ -5,6 +5,10 @@ name: Release
 # 发布引擎与本地共用 scripts/publish_release.py（草稿 → 必需资产 → fail-closed 校验 →
 # 公开 → 发布后验证，幂等可重跑），token 用 Actions 内置 GITHUB_TOKEN。
 #
+# 质量门禁（fmt/clippy/test/run_all/发布引擎/cargo-deny）不在本文件重复定义：
+# 首个 job 经 reusable workflow 调用 tests.yml，release job needs 它作前置——
+# 门禁不过不打包；改检查步骤只改 tests.yml 一处（防两份 workflow 漂移）。
+#
 # dry_run（仅 workflow_dispatch，默认开）：完整走一遍构建与元数据生成，
 # 产物只挂到本次运行的工件上，不创建/修改任何 Release——发布链路的安全演练位。
 on:
@@ -26,7 +30,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 与 CI 完全同一份门禁定义（reusable workflow）
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   release:
+    needs: tests
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -41,10 +50,6 @@ jobs:
           # Tag runs must be able to compare their commit against origin/main.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -56,16 +61,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # 与 tests.yml 的 rust-checks 共享同一缓存命名空间（默认按 job 隔离
+          # 永不命中）；dev-profile 产物与 registry 下载直接复用门禁 job 的
+          # 成果，release 产物随首次构建入缓存。
+          shared-key: niuma-timer
 
       # tauri-cli 用预编译安装（秒级）；上游不可用时改回：
       #   cargo install tauri-cli --locked --version "^2"
       - uses: taiki-e/install-action@v2
         with:
           tool: tauri-cli
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
 
       - name: Resolve & check version
         id: ver
@@ -98,29 +103,9 @@ jobs:
             }
           }
 
-      - name: cargo fmt
-        working-directory: src-tauri
-        run: cargo fmt --all -- --check
-
-      - name: cargo clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: cargo test
-        working-directory: src-tauri
-        run: cargo test
-
-      - name: Frontend assert tests
-        run: node scripts/run_all.js
-
-      - name: Release-engine tests
-        run: |
-          python scripts/test_publish_release.py
-          python scripts/test_push_via_api.py
-
-      - name: cargo deny (security advisories)
-        working-directory: src-tauri
-        run: cargo deny check advisories
+      # 六步质量门禁（fmt/clippy/test/run_all/发布引擎测试/cargo-deny）已由
+      # tests job（reusable workflow tests.yml）前置跑完，needs: tests 失败即止——
+      # 此前这里与 ci.yml 逐字各抄一份，靠人眼对齐必漂移。
 
       # 打包（NSIS + MSI + 便携 exe + 更新器 .sig）。缺签名密钥时构建仍会过、
       # 但没有 .sig → 下一步 latest.json 生成 fail-closed 拦住，错误信息会指明原因。

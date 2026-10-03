@@ -3,12 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    # 只忽略 docs/**（设计文档/计划，无守卫测试针对它们）；根目录 **.md 不能忽略：
+    # test_readme.js 守的恰是 README 双语与版本号、CHANGELOG 链接，忽略 **.md
+    # 会让「只改文档」的提交把 README 改坏也全绿，守卫要等下次碰代码才补跑。
     paths-ignore:
-      - "**.md"
       - "docs/**"
   pull_request:
     paths-ignore:
-      - "**.md"
       - "docs/**"
 
 concurrency:
@@ -16,77 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Run frontend tests
-        run: node scripts/run_all.js
-
-  release-engine-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      # publish_release.py + push_via_api.py offline suites. Local-only until
-      # now, which is exactly why the release engine silently drifted after
-      # v1.5.1 moved publishing to CI.
-      - name: Run release-engine tests
-        run: |
-          python scripts/test_publish_release.py
-          python scripts/test_push_via_api.py
-
-  dep-audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - name: cargo deny (security advisories)
-        run: cargo deny check advisories
-        working-directory: src-tauri
-
-  rust-checks:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-        working-directory: src-tauri
-      # 豁免清单（Task 2 存量，逐条含理由）：
-      # - clippy::large_enum_variant（config.rs LoadResult——Loaded(Config) 552 字节枚举，短生命周期，装箱收益低）
-      - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
-        working-directory: src-tauri
-      - name: cargo test
-        run: cargo test
-        working-directory: src-tauri
-      # The local build scripts (build.bat / common.bat / release.bat) are exercised
-      # by nothing else. A variable-name collision in them broke every release build
-      # for two days while CI stayed green (2026-10-02).
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Build-script environment contract
-        run: node scripts/test_build_env.js
-
-      - name: Drift guard (build.rs 回写检测)
-        shell: pwsh
-        run: |
-          $status = git status --porcelain -- frontend src-tauri
-          if ($status) {
-            Write-Host $status
-            throw "build.rs 回写了未提交的自动改动：本地执行 cargo build，将 frontend/ 与 src-tauri/ 的自动变更一并提交后再推送"
-          }
+  # 四个 job（frontend-tests / release-engine-tests / dep-audit / rust-checks）
+  # 定义在 reusable workflow 里，与 release.yml 共用同一份——见 tests.yml 头注释
+  tests:
+    uses: ./.github/workflows/tests.yml
