@@ -2,7 +2,7 @@
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
 > [Chinese docs](./README.zh-CN.md)
-> Current version **1.8.0** (2026-10-03) · [Changelog](./CHANGELOG.md)
+> Current version **1.8.1** (2026-10-03) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
