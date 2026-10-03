@@ -327,6 +327,18 @@ class ManifestTests(unittest.TestCase):
         publisher = (pathlib.Path(__file__).parent / "publish_release.py").read_text(encoding="utf-8")
         self.assertIn("--pdb-only", publisher)
 
+    def test_release_bat_signing_key_has_default_path(self):
+        # 密钥解析链必须完整：env KEY -> env KEY_PATH -> %USERPROFILE%\.tauri\niuma-timer.key
+        # 约定路径兜底让 "release.bat X /y" 成为真正的零准备一键发版（2026-10-03
+        # 发版时 env 变量被 shell 引号剥离，一键流程在此闸失败）。兜底必须排在
+        # 最终 fail-closed 报错之前：缺钥仍然拒绝，绝不静默发未签名包。
+        batch = (pathlib.Path(__file__).parent.parent / "release.bat").read_text(encoding="utf-8")
+        fallback = 'if exist "%USERPROFILE%\\.tauri\\niuma-timer.key" set "TAURI_SIGNING_PRIVATE_KEY=%USERPROFILE%\\.tauri\\niuma-timer.key"'
+        self.assertIn(fallback, batch)
+        self.assertIn("TAURI_SIGNING_PRIVATE_KEY is not set", batch)
+        self.assertLess(batch.index(".tauri\\niuma-timer.key"), batch.index("TAURI_SIGNING_PRIVATE_KEY is not set"),
+                        "默认路径兜底必须先于 fail-closed 报错")
+
     def test_installer_and_unsigned_portable_have_distinct_entries(self):
         with tmpdir() as d:
             root = pathlib.Path(d)

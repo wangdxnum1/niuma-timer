@@ -32,6 +32,8 @@
 - Windows 发布 runner 必须设置 `PYTHONIOENCODING=utf-8`：默认重定向输出是 `cp1252`，发布引擎测试里的中文诊断会报 `UnicodeEncodeError`，即使业务逻辑本身正确。
 - 已存在的 `vX.Y.Z` tag 只在指向当前 HEAD 时复用；指向其他提交必须报错并改用新版本。禁止删除或强推已经使用的发布 tag。
 - 版本号必须同时落 `src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json`，且**回读两个文件校验**同步成功。
+- **签名密钥解析链**：env `TAURI_SIGNING_PRIVATE_KEY` → env `TAURI_SIGNING_PRIVATE_KEY_PATH` → 约定路径 `%USERPROFILE%\.tauri\niuma-timer.key`（默认兜底让 `release.bat X /y` 真正零准备；契约由 `test_release_bat_signing_key_has_default_path` 钉住）。都落空才 fail-closed 报错——缺钥绝不静默发未签名包。
+- **CHANGELOG 版本段开头放一句「用户视角摘要」**（2026-10-03 起）：发布引擎把整段抽进更新弹窗公告，而用户不是工程师——先一句话说清这版对使用的影响，工程细节随后写（反面教材：v1.8.0 公告全是「四层吞错改 ？ 传播」式术语）。
 - 硬门禁（缺一个就中止）：`TAURI_SIGNING_PRIVATE_KEY` 未设不打包——少了它只会静默发出未签名包，用户装更新时才发现被拒；发布前校验 `bin/package` 里每个安装包**文件名带目标版本**（否则是从旧版本漏进来的陈旧产物）、存在 `*.exe.sig`（没有它就没有 `latest.json`，这个版本永远收不到更新）、存在 `*.pdb.zip` 或 `*.pdb`（没有 PDB 的版本，线上崩溃永远无法符号化）。
 - 所有模式都拒绝在非 `main` 分支发版（否则 tag 指向不在 main 上的提交，云端一定拒绝）；push 用 `-c credential.helper=wincred -c http.sslBackend=openssl` 并按 `127.0.0.1:7890` 是否监听决定走代理还是**显式清空**代理（全局 gitconfig 里的残留 socks5 会在代理关闭时静默接管连接）。
 

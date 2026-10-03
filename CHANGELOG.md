@@ -4,6 +4,8 @@
 
 ## [1.8.0] - 2026-10-03
 
+> 本版无新功能，是一次集中加固：设置与备份更摔不坏、出错的界面会给出提示而不是空白、日志里查得到原因、发布链路全面收紧。日常观感就是两个字：更稳。
+
 ### 修复
 
 - **技术债批次四：低优先顺手清（痛点排查第二轮收官）**——九件：① **Win32 收口收完最后两处**：`lock_monitor` 手搓的 RegisterClassW/CreateWindowExW 换用 `win::MessageWindow`（RAII + 统一消息循环，与 activity 同款），`remote.rs` 体内唯一的 `GetSystemMetrics` unsafe 收口为 `win::is_rdp_session()`——「Win32 一律放 win.rs」的约定至此零例外。② **备份自动轮转**：按 created_at 保留最新 20 份（此前只增不删，「还原失败重试 N 次 = 多 N 份保护性备份」无限放大）；只删可解析的好包，坏包仍列出留给用户自行处理。③ **还原校验版本方向**：新版备份还原到旧程序上明确拒绝并说明原因（新 schema 的列/表旧代码不认识，降级还原属暗雷）；同版本/更旧/解析失败一律放行，不误伤老备份。④ **debug_log 截断改 rename 轮转**：原地 `fs::write("")` 会吞掉并发线程正要写入的日志行，rename 后各线程下一次 open 拿到全新文件。⑤ **旧年份节假日缓存清理**进 run_daily：`holiday_{year}.json` 保留当年与上一年，更旧的自动删（可再生文件，不属用户数据）。⑥ **`days_in_month` 三份逐字拷贝收口**到 holiday.rs 单一实现（calc/weekbill 改为引用）。⑦ **save_config 未知字段记日志**：merge 静默丢弃的拼写错/漏同步键名从此在 debug.log 留痕；前端 `retention_days` 输入钳到 0–36500，乱输不再静默变「永久保留」。⑧ **build.bat package 四处产物拷贝补 errorlevel**（此前拷贝失败照样打印 Done 退出 0，单跑 package 会产出半空包还报喜）；common.bat 调 vcvars64 失败时明确报错退出（不再继续跑、死在 cc-rs 的 INCLUDE 报错里）。⑨ **前端杂项**：悬停卡补 paused 态（手动暂停时显示「已暂停 · 钱先冻结 ⏸」+ 停止脉动，与主界面同口径——此前暂停仍显示「搬砖中，冲鸭」）；专注统计开关现在联动达标线输入行显隐（此前只存盘不联动）；拆分契约测试新增「11 处缓存戳 == FE_VER」一致性检查（手工误改或漏 bump 立刻红，此前的红只能靠 build.rs 回写）；删除死元素 `otExportStatus`、无引用 id `actChartHint`、函数搬走后留下的 5 处悬空注释。附测试：备份轮转 / 版本方向 / prune 共 3 条（Rust 侧 243 个）。

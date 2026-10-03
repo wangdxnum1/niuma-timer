@@ -141,9 +141,18 @@ rem Updater signing: tauri signs the installers with the private key, producing
 rem .sig files the client uses to verify what it downloaded.
 rem A missing key does NOT fail the build - it silently ships unsigned
 rem packages and users only discover the rejected update later. Stop it here.
+rem Key resolution order: env TAURI_SIGNING_PRIVATE_KEY -> env
+rem TAURI_SIGNING_PRIVATE_KEY_PATH -> the conventional per-user key at
+rem %USERPROFILE%\.tauri\niuma-timer.key. The default keeps "release.bat X /y"
+rem a true zero-prep one command; only an unknown key location must be set
+rem by hand (2026-10-03 release: an env var lost to shell quoting made the
+rem one-click flow fail at this gate - the default removes that failure mode).
 if not defined TAURI_SIGNING_PRIVATE_KEY if defined TAURI_SIGNING_PRIVATE_KEY_PATH set "TAURI_SIGNING_PRIVATE_KEY=%TAURI_SIGNING_PRIVATE_KEY_PATH%"
+if not defined TAURI_SIGNING_PRIVATE_KEY if exist "%USERPROFILE%\.tauri\niuma-timer.key" set "TAURI_SIGNING_PRIVATE_KEY=%USERPROFILE%\.tauri\niuma-timer.key"
 if not defined TAURI_SIGNING_PRIVATE_KEY (
   echo [ERROR] TAURI_SIGNING_PRIVATE_KEY is not set - updater artifacts would be unsigned.
+  echo         Default key not found at %%USERPROFILE%%\.tauri\niuma-timer.key either.
+  echo         Put the key there, or set it now:
   echo         PowerShell: $env:TAURI_SIGNING_PRIVATE_KEY = "$HOME\.tauri\niuma-timer.key"
   exit /b 1
 )
