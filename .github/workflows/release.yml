@@ -70,7 +70,7 @@ jobs:
       #   cargo install tauri-cli --locked --version "^2"
       - uses: taiki-e/install-action@v2
         with:
-          tool: tauri-cli
+          tool: tauri-cli@2
 
       - name: Resolve & check version
         id: ver
@@ -188,9 +188,12 @@ jobs:
           --package bin/package
           --repo "${{ github.repository }}"
 
-      # PDB 非运行时依赖：发布后 best-effort 补传，失败只告警不回退发布（与本地一致）
+      # PDB 非运行时依赖：发布后 best-effort 补传，失败只告警不回退发布（与本地一致）。
+      # continue-on-error：publish_pdb_only 失败返 1，没有这行会把已成功的发布 run
+      # 整个标红，诱导人去"补救"一个没坏的发布（2026-10-03 批次二）。
       - name: Upload PDB (best-effort)
         if: inputs.dry_run != true
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >

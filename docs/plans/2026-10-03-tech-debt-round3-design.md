@@ -1,6 +1,6 @@
 # 技术债第三轮清偿 设计文档（spec）
 
-> 状态：已定稿待执行（2026-10-03）。实施计划见 [2026-10-03-tech-debt-round3-plan.md](2026-10-03-tech-debt-round3-plan.md)。
+> 状态：**执行中**——批次一已完成（提交 d9e7cf9），批次二待做。实施计划见 [2026-10-03-tech-debt-round3-plan.md](2026-10-03-tech-debt-round3-plan.md)。
 
 ## 背景
 

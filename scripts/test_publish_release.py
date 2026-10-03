@@ -290,6 +290,15 @@ class ManifestTests(unittest.TestCase):
         self.assertLess(batch.index('pushd "%ROOT%"'), batch.index("branch --show-current"))
         self.assertLess(batch.index('if not "%BRANCH%"=="main" ('), batch.index("rem ---------------- 1. version ----------------"))
 
+    def test_pdb_upload_is_best_effort(self):
+        # PDB 非运行时依赖：发布公开后由 --pdb-only 补传符号，失败必须不拖垮
+        # 整个发布 run（步骤注释自述 best-effort）——没有 continue-on-error 时
+        # publish_pdb_only 返 1 会把已成功的发布标红，诱导人"补救"没坏的发布。
+        workflow = (pathlib.Path(__file__).parent.parent / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        step = workflow.split("Upload PDB (best-effort)")[1].split("- name:")[0]
+        self.assertIn("continue-on-error: true", step)
+        self.assertIn("--pdb-only", step)
+
     def test_cloud_publish_requires_main_and_ci_gates(self):
         # 门禁六步定义在 reusable workflow tests.yml（与 ci.yml 同源，防两份漂移）；
         # release.yml 必须调用它并把 release job 置于 needs 之下——门禁不过不打包。

@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use serde::Serialize;
 
 use crate::app_usage::{self, CAT_WORK};

@@ -22,6 +22,8 @@ rem ============================================================
 rem Shared setup (ROOT/SRC/BIN, cargo PATH fallback, retry env) lives in common.bat
 call "%~dp0common.bat"
 if errorlevel 1 exit /b 1
+rem --- Single source of repo slug: keep in sync with scripts/push_via_api.py
+rem     REPO (scripts/test_local_gate.js asserts both literals match). ---
 set "REPO=wangdxnum1/niuma-timer"
 
 set "AUTO=no"
@@ -31,9 +33,23 @@ if /i "%~2"=="/y" set "AUTO=yes"
 if "%AUTO%"=="yes" set "CI=true"
 
 rem --- Prefer system Git: WorkBuddy's bundled PortableGit has a broken
-rem     credential manager (segfaults). System Git + wincred works. ---
+rem     credential manager (segfaults). System Git + wincred works. Fallback
+rem     probes PATH but refuses PortableGit/WorkBuddy copies (fail-closed). ---
 set "GIT=C:\Program Files\Git\cmd\git.exe"
-if not exist "%GIT%" set "GIT=git"
+if not exist "%GIT%" (
+    set "GIT="
+    for /f "delims=" %%G in ('where git 2^>nul') do (
+        if not defined GIT (
+            echo %%G | findstr /i "PortableGit WorkBuddy" >nul
+            if errorlevel 1 set "GIT=%%G"
+        )
+    )
+)
+if not defined GIT (
+    echo [ERROR] No usable git found. WorkBuddy PortableGit is rejected because
+    echo         its credential helper segfaults. Install system Git first.
+    exit /b 1
+)
 
 rem Push / tag / release all key off the current branch; the flow assumes main.
 rem A non-main branch would make the tag point at a commit that is not on main.

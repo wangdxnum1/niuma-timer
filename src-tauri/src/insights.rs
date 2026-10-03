@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{Datelike, Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use rusqlite::Connection;
 use serde::Serialize;
 

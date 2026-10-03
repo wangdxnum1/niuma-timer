@@ -103,10 +103,10 @@ fn overlap(now: f64, s: f64, e: f64) -> f64 {
 
 /// 当日总工时（小时）
 pub fn daily_hours(cfg: &Config) -> f64 {
-    let am = cfg_to_min("am_end", &cfg.am_end, "12:00")
-        - cfg_to_min("am_start", &cfg.am_start, "09:00");
-    let pm = cfg_to_min("pm_end", &cfg.pm_end, "18:00")
-        - cfg_to_min("pm_start", &cfg.pm_start, "13:00");
+    let am =
+        cfg_to_min("am_end", &cfg.am_end, "12:00") - cfg_to_min("am_start", &cfg.am_start, "09:00");
+    let pm =
+        cfg_to_min("pm_end", &cfg.pm_end, "18:00") - cfg_to_min("pm_start", &cfg.pm_start, "13:00");
     ((am + pm).max(0.0)) / 60.0
 }
 

@@ -37,7 +37,9 @@
 
 ---
 
-### Task 1: 批次一——Rust 正确性与兼容
+### Task 1: 批次一——Rust 正确性与兼容 ✅ 已完成（2026-10-03，提交 d9e7cf9，build.bat test 全绿）
+
+> 执行记录：7 项全部落地（clamp 守卫进 test_commands.js；TABLE_SINCE=v1.0.0×7+focus_sessions=1.7.0（git tag 8bc62ff 考证）；还原放行路径安全性已核实——main.rs:298 apply_pending_on_startup 先于 :306 db::conn()；既有测试语义同步：test_day_timeline.js 1 条、test_insights.js 2 条改写为新口径）。
 
 **Files:** `src-tauri/src/cmds_bill.rs`、`src-tauri/src/db.rs`、`src-tauri/src/backup.rs`、`src-tauri/src/maintain.rs`、`src-tauri/src/weekbill.rs`、`src-tauri/src/insights.rs`、`src-tauri/src/focus.rs`、`src-tauri/src/calc.rs`、`src-tauri/src/overtime.rs`、`src-tauri/src/diag.rs`（只读参考）、`scripts/test_commands.js`
 

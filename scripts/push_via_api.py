@@ -33,6 +33,8 @@ import subprocess
 import sys
 import tempfile
 
+# Single source of repo slug: keep in sync with release.bat REPO
+# (scripts/test_local_gate.js asserts both literals match).
 REPO = "wangdxnum1/niuma-timer"
 API = "https://api.github.com/repos/" + REPO
 

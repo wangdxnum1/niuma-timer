@@ -171,9 +171,35 @@ goto :eof
 :do_test
 echo.
 echo =========================================
-echo   Testing (cargo test + frontend assert scripts + release engine) ...
+echo   Testing (fmt + clippy + deny + cargo test + frontend asserts + release engine) ...
 echo =========================================
+rem Local gate must match the cloud six steps in .github/workflows/tests.yml
+rem verbatim: the tag is immutable, a cloud-only failure burns the version
+rem number and forces a manual re-tag (2026-10-03 batch 2).
 pushd "%SRC%"
+%CARGO_BIN% fmt --all -- --check
+set "ERRCODE=%errorlevel%"
+if %ERRCODE% neq 0 (
+  echo [ERROR] cargo fmt failed with code %ERRCODE%
+  exit /b 1
+)
+%CARGO_BIN% clippy --all-targets -- -D warnings
+set "ERRCODE=%errorlevel%"
+if %ERRCODE% neq 0 (
+  echo [ERROR] cargo clippy failed with code %ERRCODE%
+  exit /b 1
+)
+where cargo-deny >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] cargo-deny not found - install it once with: cargo install cargo-deny --locked
+  exit /b 1
+)
+%CARGO_BIN% deny check advisories
+set "ERRCODE=%errorlevel%"
+if %ERRCODE% neq 0 (
+  echo [ERROR] cargo deny failed with code %ERRCODE%
+  exit /b 1
+)
 %CARGO_BIN% test --quiet
 set "ERRCODE=%errorlevel%"
 popd
