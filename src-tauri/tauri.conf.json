@@ -1,6 +1,6 @@
 {
   "productName": "niuma-timer",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "identifier": "com.tim.niuma-timer",
   "build": {
     "beforeDevCommand": "",
