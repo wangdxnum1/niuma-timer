@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v5f3bdc48";
+const FE_VER = "vd7171e17";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -42,5 +42,31 @@ window.addEventListener("error", function (ev) {
       (ev.lineno || "?")
   );
 });
+
+// 未处理的 Promise rejection 同样进日志（hover_card 一直有同款，主窗口此前漏配：
+// saveBillImage 等异步链抛错时按钮复位但无 toast 无日志）
+window.addEventListener("unhandledrejection", function (ev) {
+  var r = ev.reason;
+  flog("JS REJECTION: " + (r && r.message ? r.message : String(r)));
+});
+
+// 像素 → 距离（96dpi 估算）单一实现：明细页与身体账单共用，单位档位统一
+// （米一位小数，≥1km 显 km）。此前 monitor/insights 各一套，同一数据两处口径分裂。
+function fmtDist(px) {
+  const m = ((Number(px) || 0) * 2.54) / 96 / 100;
+  if (m >= 1000) return (m / 1000).toFixed(2) + " km";
+  return m.toFixed(1) + " m";
+}
+
+// 秒数 → "x小时x分 / x分钟 / x秒" 单一实现（insights 时间线/专注汇总共用）。
+// 此前 insights 的 tlDur 与这里的措辞漂移（"59分钟" vs "60分"）。
+function fmtDurCN(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return h + "小时" + (m > 0 ? m + "分" : "");
+  if (m > 0) return m + "分钟";
+  return sec + "秒";
+}
 
 const $ = (id) => document.getElementById(id);

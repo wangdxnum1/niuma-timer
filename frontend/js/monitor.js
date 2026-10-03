@@ -1,10 +1,3 @@
-function fmtDist(px) {
-  if (px == null || px < 1000) return (px || 0) + "px";
-  const m = px / 3779.5;
-  if (m < 1000) return m.toFixed(0) + "m";
-  return (m / 1000).toFixed(2) + "km";
-}
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -242,16 +235,6 @@ function renderTopKeys(list) {
 }
 
 // ---- 应用使用时长 ----
-
-// 秒数 → "x小时x分 / x分钟 / x秒"
-function fmtDurCN(sec) {
-  sec = Math.max(0, Math.round(sec || 0));
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return h + "小时" + (m > 0 ? m + "分" : "");
-  if (m > 0) return m + "分钟";
-  return sec + "秒";
-}
 
 async function loadAppUsage() {
   if (!monitors.app_usage) {
@@ -519,7 +502,7 @@ function renderAppRows(container, apps, limit, emptyText, opts) {
 // 图标：有 data URL 用 <img>，没有则显示首字占位
 function appIconHTML(a) {
   if (a.icon) {
-    return '<img class="app-icon" src="' + a.icon + '" alt="">';
+    return '<img class="app-icon" src="' + escapeHtml(a.icon) + '" alt="">';
   }
   const ch = (a.app || "?").trim().charAt(0) || "?";
   return '<span class="app-icon app-icon-fallback">' + escapeHtml(ch) + "</span>";

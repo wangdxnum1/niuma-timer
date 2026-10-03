@@ -78,7 +78,9 @@
 
 ---
 
-### Task 2: 批次二——发版链路
+### Task 2: 批次二——发版链路 ✅ 已完成（2026-10-03，提交见 git log 批次二，build.bat test 七步全绿）
+
+> 执行记录：cargo-deny 本地已有 0.20.2（钉同版）；新增 scripts/test_local_gate.js（9 条）；build.bat :do_test 现为 fmt→clippy→deny→test→run_all→双 Python 七步，与 tests.yml 逐字同 flag、cargo-deny 缺失 fail-closed；release.yml PDB 步骤补 continue-on-error + tauri-cli@2 钉版；release.bat GIT 回退拒绝 PortableGit/WorkBuddy；REPO 两处交叉注释；CONVENTIONS.md build.bat test 描述同步为六步对齐版。**注意：clippy 曾红两次——① 收口 weekday_cn 后 focus/insights 的 Datelike 变未使用导入（已删）；② 在 Git Bash 裸跑 cargo clippy 会绕过 common.bat 自持 TMP 触发 cc D8050，必须在 build.bat/cmd 语境跑。**
 
 **Files:** `.github/workflows/release.yml`、`.github/workflows/tests.yml`、`build.bat`、`release.bat`、`scripts/push_via_api.py`、`scripts/test_publish_release.py`、新建 `scripts/test_local_gate.js`
 

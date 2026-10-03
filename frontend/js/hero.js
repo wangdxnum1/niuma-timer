@@ -46,7 +46,8 @@ async function tick() {
     renderSlackBurn();
     renderTagline(s);
   } catch (e) {
-    /* 忽略瞬时错误 */
+    // 2 秒轮询持续失败时主界面会冻结在旧值，必须留日志线索（此前完全吞掉）
+    flog("tick ERR: " + (e && e.message ? e.message : String(e)));
   }
 }
 

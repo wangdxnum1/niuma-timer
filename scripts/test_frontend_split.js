@@ -1,8 +1,9 @@
-// 前端拆分契约测试（多 script 结构守卫），4 项检查：
+// 前端拆分契约测试（多 script 结构守卫），5 项检查：
 //  1. index.html 按 CHUNKS 加载序引用 js/<name>?v=
 //  2. app.js 已删除且 frontend/ 内无残留引用
 //  3. const FE_VER 仅在 core.js 声明一次
 //  4. 非 boot 块顶层仅允许声明与纯挂载（声明-挂载白名单，正则近似）
+//  5. js/ 目录 .js 文件集合 == CHUNKS（双向，新 chunk 漏登记立刻红）
 const fs = require("fs");
 const path = require("path");
 const { CHUNKS, readIndexHtml } = require("./lib/fe_sources");
@@ -104,6 +105,17 @@ if (!feVer) {
     }
   }
 }
+
+// -- 5. js/ 目录 .js 文件集合 == CHUNKS（双向）--------------------------------
+// 新 chunk 漏登记 fe_sources.js 时会静默逃出加载序检查与 feSource 聚合测试。
+const onDisk = walk(JS_DIR, [".js"])
+  .map((f) => path.relative(JS_DIR, f).replace(/\\/g, "/"))
+  .sort();
+const listed = [...CHUNKS].sort();
+const extra = onDisk.filter((f) => !listed.includes(f));
+const missing = listed.filter((f) => !onDisk.includes(f));
+if (extra.length) failures.push(`frontend/js/ 有未登记进 CHUNKS 的文件：${extra.join(", ")}`);
+if (missing.length) failures.push(`CHUNKS 引用了但 js/ 目录不存在的文件：${missing.join(", ")}`);
 
 if (failures.length) {
   console.error(`前端拆分契约检查失败（${failures.length} 项）：`);

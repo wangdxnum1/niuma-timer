@@ -324,11 +324,6 @@ async function loadBodyBill() {
   }
 }
 
-// 像素 → 米（96dpi 估算：1in = 96px = 2.54cm）
-function fmtMeters(px) {
-  return (((Number(px) || 0) * 2.54) / 96 / 100).toFixed(1) + " m";
-}
-
 function paintBodyBill() {
   const body = bodyData;
   if (!body || curView !== "viewBill") return;
@@ -345,8 +340,8 @@ function paintBodyBill() {
   $("bodyClicksAvg").textContent = "日均 " + fmtWan(Math.round(body.clicks / recDays)) + " 次";
   $("bodyKeys").textContent = fmtWan(body.keys) + " 次";
   $("bodyKeysAvg").textContent = "日均 " + fmtWan(Math.round(body.keys / recDays)) + " 次";
-  $("bodyPixels").textContent = fmtMeters(body.pixels);
-  $("bodyPixelsAvg").textContent = "日均 " + fmtMeters(body.pixels / recDays) + "（96dpi 估算）";
+  $("bodyPixels").textContent = fmtDist(body.pixels);
+  $("bodyPixelsAvg").textContent = "日均 " + fmtDist(body.pixels / recDays) + "（96dpi 估算）";
   $("bodyWheel").textContent = fmtWan(body.wheel_ticks) + " 格";
   $("bodyWheelAvg").textContent = "日均 " + fmtWan(Math.round(body.wheel_ticks / recDays)) + " 格";
 
@@ -388,15 +383,7 @@ let timelineData = null;
 let timelineOffset = 0; // 0=今天，正数往过去翻（后端未来封顶今天）
 let timelineGeneration = 0;
 
-// 秒 → 紧凑中文时长（时间线行内与汇总用）
-function tlDur(secs) {
-  if (!secs || secs <= 0) return "0分";
-  const h = Math.floor(secs / 3600);
-  const m = Math.round((secs % 3600) / 60);
-  if (h > 0) return h + "小时" + m + "分";
-  if (m > 0) return m + "分";
-  return secs + "秒";
-}
+// 时长文案统一走 core.js 的 fmtDurCN（原本地 tlDur 与 fmtDurCN 措辞漂移："59分钟" vs "60分"）
 
 async function loadDayTimeline() {
   const offset = timelineOffset,
@@ -436,7 +423,7 @@ function paintDayTimeline() {
   $("tlDayLabel").textContent = dateLabel(tl.date);
   $("tlSummary").textContent =
     tl.weekday + " · " + (tl.is_workday ? "工作日" : "休息日") +
-    " · 前台 " + tlDur(tl.total_front) +
+    " · 前台 " + fmtDurCN(tl.total_front) +
     " · 键鼠 " + fmtWan(tl.total_events) + " 次";
 
   const rows = $("tlRows");
@@ -462,18 +449,18 @@ function paintDayTimeline() {
       .join("");
     const note =
       (h.top_app ? escapeHtml(h.top_app) : "无前台") +
-      (h.audio_secs > 0 ? " · 在响 " + tlDur(h.audio_secs) : "") +
+      (h.audio_secs > 0 ? " · 在响 " + fmtDurCN(h.audio_secs) : "") +
       " · 键鼠 " + fmtWan(h.events) + " 次";
     row.innerHTML =
       '<span class="tl-hour">' + String(h.hour).padStart(2, "0") + "</span>" +
       '<div class="tl-bar">' + bar + "</div>" +
       '<span class="tl-note">' + note + "</span>";
     row.title =
-      h.hour + ":00–" + (h.hour + 1) + ":00 · 前台 " + tlDur(h.front_secs) +
-      "（工作 " + tlDur(h.work_secs) + " · 摸鱼 " + tlDur(h.slack_secs) +
-      " · 沟通 " + tlDur(h.comm_secs) + " · 其他 " + tlDur(h.other_secs) + "）" +
+      h.hour + ":00–" + (h.hour + 1) + ":00 · 前台 " + fmtDurCN(h.front_secs) +
+      "（工作 " + fmtDurCN(h.work_secs) + " · 摸鱼 " + fmtDurCN(h.slack_secs) +
+      " · 沟通 " + fmtDurCN(h.comm_secs) + " · 其他 " + fmtDurCN(h.other_secs) + "）" +
       " · 键鼠 " + h.events + " 次" +
-      (h.audio_secs > 0 ? " · 在响 " + tlDur(h.audio_secs) : "");
+      (h.audio_secs > 0 ? " · 在响 " + fmtDurCN(h.audio_secs) : "");
     rows.appendChild(row);
   });
 }

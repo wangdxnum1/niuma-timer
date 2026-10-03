@@ -133,7 +133,7 @@ has("手写 SVG 用 createElementNS（无外部库）", appSrc, 'createElementNS
 has("摸鱼率 null 断线不画 0", appSrc, "p.slack_rate == null");
 has("趋势空窗口判定", appSrc, "pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null)");
 has("万次缩写 fmtWan", appSrc, "function fmtWan(n)");
-has("96dpi 像素换米", appSrc, "function fmtMeters(px)");
+has("96dpi 像素换米（core.js 单一 fmtDist）", appSrc, "function fmtDist(px)");
 has("热力星期按周一开始", appSrc, "WD_CN[(i + 1) % 7]");
 has("热力 hover 提示 title", appSrc, "cell.title =");
 has("身体最累日文案", appSrc, "最累 ");

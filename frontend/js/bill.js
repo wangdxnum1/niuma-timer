@@ -299,7 +299,7 @@ function drawReport(model, scale) {
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = GOLD;
   ctx.font = '600 26px "Segoe UI", "Microsoft YaHei", sans-serif';
-  ctx.fillText("牛马计时器 · 周账单", 55, 92);
+  ctx.fillText("牛马计时器 · " + (model.span === "month" ? "月账单" : "周账单"), 55, 92);
   ctx.fillStyle = "#f2f2f4";
   ctx.font = '400 21px "Segoe UI", "Microsoft YaHei", sans-serif';
   ctx.fillText(model.label + " · " + model.range, 55, 130);
@@ -445,6 +445,11 @@ async function saveBillImage() {
     } catch (e) {
       showToast("保存失败：" + e, "err");
     }
+  } catch (e) {
+    // buildReportModel/drawReport 抛错此前是无人处理的 rejection：按钮复位但
+    // 无 toast 无日志（主窗口 unhandledrejection 兜底只管日志，可见反馈在这里补）
+    flog("saveBillImage ERR: " + (e && e.message ? e.message : String(e)));
+    showToast("账单图导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
     exportingImg = false;
     if (btn) btn.disabled = false;

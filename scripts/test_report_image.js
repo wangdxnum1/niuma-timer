@@ -28,6 +28,7 @@ console.log("== Rust：export_image ==");
 has("命令 export_image（base64 解码落盘）", rsCore, "pub(crate) fn export_image(filename: String, content_base64: String)");
 has("与 export_csv 共用 safe_download_path 清洗", rsCore, "fn safe_download_path(filename: &str)");
 ok("export_csv 改走共用清洗", /export_csv[\s\S]{0,600}let path = safe_download_path\(&filename\)/.test(rsCore));
+has("报告图标题随跨度（写死周账单会让月跨度导出图穿帮）", billSrc, 'model.span === "month" ? "月账单" : "周账单"');
 ok("空图片数据拒绝写入", rsCore.includes('"图片数据为空"'));
 has("注册进 generate_handler", rsMain, "export_image,");
 has("capabilities 自动补齐 allow-export-image", caps, "allow-export-image");

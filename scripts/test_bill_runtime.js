@@ -33,7 +33,7 @@ function element() {
       days:[{date:'2026-01',weekday:'1 月',events:500}],week_start:'2026-01-01',week_end:'2026-12-31'},
     $:id=>{if(!els.has(id))els.set(id,element());return els.get(id);},document:{createElement:element},
     paintBillNav(){},fmtWan:String,todayStr:()=> '2026-09-26'};
-  vm.createContext(ctx);vm.runInContext(fn('fmtMeters')+'\n'+fn('paintBodyBill'),ctx);ctx.paintBodyBill();
+  vm.createContext(ctx);vm.runInContext(fn('fmtDist')+'\n'+fn('paintBodyBill'),ctx);ctx.paintBodyBill();
   assert.equal(els.get('bodyClicksAvg').textContent,'日均 10 次');
   assert.equal(els.get('bodyBars').children[0].children[1].textContent,'1 月');
   console.log('Bill runtime: 4 stale-response cases, daily average and month label passed');

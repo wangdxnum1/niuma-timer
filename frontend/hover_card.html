@@ -433,6 +433,7 @@
       var curEarned = null; // 最近一次 render 的今日已赚（退出时存档，回归时补账）
       var animating = false; // 补账滚动动画进行中（期间 render 不写金额，防跳变）
       var quipTimer = null;
+      var quipDelay = null; // startQuips 的 3s 首条延时（不登记会在短悬停反复进出时堆积到期回调）
       var catchupHoldUntil = 0; // 补账文案优先展示的截止时刻
       var quipIdx = 0;
       var QUOTES = [
@@ -714,7 +715,8 @@
           quipIdx++;
         }, 4000);
         // 3 秒无补账文案时开始轮换（有补账则由 holdUntil 自然延后）
-        setTimeout(function () {
+        if (quipDelay) clearTimeout(quipDelay);
+        quipDelay = setTimeout(function () {
           if (shown && !document.getElementById("quips").classList.contains("show")) {
             showQuip(QUOTES[quipIdx++ % QUOTES.length], true);
           }
@@ -723,6 +725,8 @@
       function stopQuips() {
         if (quipTimer) clearInterval(quipTimer);
         quipTimer = null;
+        if (quipDelay) clearTimeout(quipDelay);
+        quipDelay = null;
         var q = document.getElementById("quips");
         q.classList.remove("show");
       }
