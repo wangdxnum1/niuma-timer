@@ -32,6 +32,9 @@ jobs:
     env:
       # runner 直连 GitHub，跳过脚本里的本地 Clash 探测
       NIUMA_PROXY: off
+      # Windows runner redirects Python stdout as cp1252; Chinese diagnostics
+      # otherwise raise UnicodeEncodeError in the release-engine test suite.
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
         with:

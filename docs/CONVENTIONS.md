@@ -28,6 +28,7 @@
 ## 发版门禁（`release.bat`）
 - 发版走 CI：push tag `vX.Y.Z` 触发 `.github/workflows/release.yml` 重建并发布。`release.bat` 只做版本同步 → 打包 → tag → push；`scripts/publish_release.py` 是 CI 不可用时的应急本地发布路径，`scripts/push_via_api.py` 是 github.com 被墙时的应急推送。
 - 发布流水线在构建前必须确认正式发布使用版本匹配的 tag、tag 提交位于 `origin/main`，并重跑 fmt / clippy / Rust 测试 / 前端测试 / 发布引擎测试 / cargo-deny；手动分支运行只允许 `dry_run`。
+- Windows 发布 runner 必须设置 `PYTHONIOENCODING=utf-8`：默认重定向输出是 `cp1252`，发布引擎测试里的中文诊断会报 `UnicodeEncodeError`，即使业务逻辑本身正确。
 - 已存在的 `vX.Y.Z` tag 只在指向当前 HEAD 时复用；指向其他提交必须报错并改用新版本。禁止删除或强推已经使用的发布 tag。
 - 版本号必须同时落 `src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json`，且**回读两个文件校验**同步成功。
 - 硬门禁（缺一个就中止）：`TAURI_SIGNING_PRIVATE_KEY` 未设不打包——少了它只会静默发出未签名包，用户装更新时才发现被拒；发布前校验 `bin/package` 里每个安装包**文件名带目标版本**（否则是从旧版本漏进来的陈旧产物）、存在 `*.exe.sig`（没有它就没有 `latest.json`，这个版本永远收不到更新）、存在 `*.pdb.zip` 或 `*.pdb`（没有 PDB 的版本，线上崩溃永远无法符号化）。
