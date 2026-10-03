@@ -16,7 +16,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
 
 /// 第三方远程虚拟设备的设备名特征串（大小写不敏感）。
 ///
@@ -33,10 +32,9 @@ static LAST_REMOTE_INPUT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 /// 设备句柄 → 是否已判定为远程（首次见到才解析设备名，之后直接查表，零成本）。
 static DEVICE_REMOTE: OnceLock<Mutex<HashMap<usize, bool>>> = OnceLock::new();
 
-/// 当前会话是否为 RDP 远程会话（系统权威）。
+/// 当前会话是否为 RDP 远程会话（系统权威）。Win32 调用收口在 `win::is_rdp_session`。
 pub fn is_rdp_session() -> bool {
-    // SM_REMOTESESSION 返回非零表示当前会话是远程会话。
-    unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
+    crate::win::is_rdp_session()
 }
 
 /// 设备名是否命中远程特征串（大小写不敏感）。

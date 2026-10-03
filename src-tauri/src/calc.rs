@@ -1,6 +1,7 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
 
 use crate::config::Config;
+use crate::holiday::days_in_month;
 
 /// 当天实时状态
 #[derive(Clone, Debug, serde::Serialize)]
@@ -125,15 +126,6 @@ pub fn full_day_salary(cfg: &Config, monthly_workdays: u32) -> f64 {
             }
         }
     }
-}
-
-fn days_in_month(y: i32, m: u32) -> u32 {
-    let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-    NaiveDate::from_ymd_opt(ny, nm, 1)
-        .unwrap()
-        .pred_opt()
-        .expect("valid date")
-        .day()
 }
 
 /// 距下一个发薪日天数（今天=发薪日则 0）

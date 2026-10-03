@@ -10,15 +10,15 @@
 //! - **历史数据无保留策略**：8 张按日期分桶的表只增不减。
 //!
 //! 设计原则：**默认不删用户数据**。保留期由配置 `retention_days` 控制，默认 0 =
-//! 永久保留，此时只做 WAL 收缩、图标与遗留文件清理——这三项都不损失任何数据
-//! （图标可从 exe 重新提取，遗留文件是 8-21 迁 SQLite 时的备份）。
+//! 永久保留，此时只做 WAL 收缩与可再生文件清理（图标可从 exe 重新提取、遗留
+//! 文件是 8-21 迁 SQLite 时的备份、旧年份节假日缓存重新联网即得）。
 //!
 //! 所有操作幂等、失败只记 debug.log 不 panic：维护任务失败不该影响计时本身。
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 
 use crate::config::Config;
 
@@ -296,6 +296,30 @@ pub fn remove_legacy_files() -> u32 {
     n
 }
 
+/// 节假日缓存按年累积（holiday_{year}.json，几 KB/份）：保留当年与上一年，
+/// 更旧的自动删除。旧文件运行期已无用途（跨年周查询走内置表），而每年新年份
+/// 缓存到手后不清理就无限累积。可再生文件（重新联网即得），不属用户数据。
+fn prune_old_holiday_files() {
+    let cur = Local::now().year();
+    let dir = config_dir();
+    let Ok(rd) = fs::read_dir(&dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        let Some(y) = name
+            .strip_prefix("holiday_")
+            .and_then(|s| s.strip_suffix(".json"))
+            .and_then(|s| s.parse::<i32>().ok())
+        else {
+            continue; // 损坏备份 .corrupt-*.bak 等其它文件一律不碰
+        };
+        if y < cur - 1 && fs::remove_file(ent.path()).is_ok() {
+            crate::db::debug_log(&format!("[maintain] 已清理旧年份节假日缓存 {name}"));
+        }
+    }
+}
+
 /// 统计图标目录占用
 fn icon_usage(dir: &Path) -> (u32, u64) {
     let Ok(rd) = fs::read_dir(dir) else {
@@ -526,6 +550,7 @@ pub fn run_daily(cfg: &Config) {
         crate::db::debug_log(&format!("[maintain] WAL checkpoint 失败: {e}"));
     }
     remove_legacy_files();
+    prune_old_holiday_files();
     let icons = purge_old_icons();
     if icons > 0 {
         crate::db::debug_log(&format!("[maintain] 清理过期图标缓存 {icons} 个"));

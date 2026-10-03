@@ -74,8 +74,8 @@ ok("load 回填（开关缺省 true、阈值缺省 25）",
 ok("readCfg 采集并钳制 10–120",
   /focus_enabled: \$\("focus_enabled"\)\.checked,/.test(appSrc) &&
   appSrc.includes("focus_min_minutes: Math.min(") && appSrc.includes("Math.max(10, parseInt"));
-ok("绑定：开关即存 + 阈值失焦存",
-  appSrc.includes('$("focus_enabled").addEventListener("change", saveNow);') &&
+ok("绑定：开关即存（并联动达标线显隐） + 阈值失焦存",
+  /applyFocusVisibility\(\$\("focus_enabled"\)\.checked\);[\s\S]{0,40}saveNow\(\);/.test(appSrc) &&
   appSrc.includes('$("focus_min_minutes").addEventListener("blur", saveIfChanged);'));
 
 console.log("");

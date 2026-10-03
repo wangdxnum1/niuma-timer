@@ -565,7 +565,7 @@
         var rest = !s.is_workday;
         card.classList.toggle("rest", rest);
         // 搬砖中才脉动（休息日/已下班静止）
-        card.classList.toggle("pulse", s.is_workday && !s.off_work);
+        card.classList.toggle("pulse", s.is_workday && !s.off_work && !s.paused);
         curEarned = s.earned;
         // 补账滚动动画进行中时跳过金额写入（动画结束写入精确终值）
         if (!animating) {
@@ -606,7 +606,7 @@
 
         // 下班预告价值（C1）：剩余工时 × 时薪——「还要熬多久」直接换算成钱的期待
         var c1 = document.getElementById("c1");
-        if (s.is_workday && !s.off_work && cfg && s.hourly_rate > 0) {
+        if (s.is_workday && !s.off_work && !s.paused && cfg && s.hourly_rate > 0) {
           var amS = toMin(cfg.am_start);
           var amE = toMin(cfg.am_end);
           var pmS = toMin(cfg.pm_start);
@@ -631,9 +631,13 @@
           c1.style.visibility = "hidden";
         }
 
-        // 状态徽章：绿点搬砖中 / 金点已下班 / 灰点休息
+        // 状态徽章：绿点搬砖中 / 金点已下班 / 灰点休息 / 灰点已暂停
+        // （paused 与主界面「已暂停 · 钱先冻结」同口径；此前暂停时仍显示搬砖中+脉动）
         var foot = document.getElementById("foot");
-        if (rest) {
+        if (s.paused) {
+          foot.className = "foot rest";
+          document.getElementById("footText").textContent = "已暂停 · 钱先冻结 ⏸";
+        } else if (rest) {
           foot.className = "foot rest";
           document.getElementById("footText").textContent = "今天休息 🛌";
         } else if (s.off_work) {

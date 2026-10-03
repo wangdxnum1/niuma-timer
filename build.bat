@@ -114,12 +114,27 @@ if not exist "%BUNDLE%" set "BUNDLE=%SRC%\target\release\bundle"
 rem Copy only artifacts matching the current version: cargo tauri build never
 rem deletes stale bundles from older releases, so a bare *.exe/*.msi glob would
 rem sweep old-version installers into bin\package (and onto the GitHub Release).
+rem Every copy checks errorlevel: a silent copy failure here yields an empty or
+rem half-empty bin\package while the script still reports success - the release
+rem gates live in release.bat / CI, so a bare "build.bat package" would lie.
 if not exist "%BIN%\package" mkdir "%BIN%\package"
-copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe" "%BIN%\package\"
-copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\"
+copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe" "%BIN%\package\" >nul
+if errorlevel 1 (
+  echo [ERROR] failed to copy NSIS installer from "%BUNDLE%\nsis\"
+  exit /b 1
+)
+copy /Y "%BUNDLE%\msi\*%APPVER%*.msi" "%BIN%\package\" >nul
+if errorlevel 1 (
+  echo [ERROR] failed to copy MSI installer from "%BUNDLE%\msi\"
+  exit /b 1
+)
 set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
-copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe"
+copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe" >nul
+if errorlevel 1 (
+  echo [ERROR] failed to copy portable exe from "%PORTABLE%"
+  exit /b 1
+)
 rem Portable-exe debug symbols ship with the release: take the PDB next to
 rem the exe just copied and rename it with the version for asset identification.
 rem Raw PDB is ~150 MB and proxy uploads to GitHub get reset (Errno 10054),
@@ -138,14 +153,18 @@ if exist "%PDBDIR%niuma_timer.pdb" (
 rem Updater signature files (.sig) must share the installer's name and be
 rem copied into package together, or publish_release.py cannot build
 rem latest.json and the whole auto-update chain dies.
-if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\"
-if exist "%BUNDLE%\msi\*%APPVER%*.msi.sig" copy /Y "%BUNDLE%\msi\*%APPVER%*.msi.sig" "%BIN%\package\"
+if exist "%BUNDLE%\nsis\*%APPVER%*.exe.sig" copy /Y "%BUNDLE%\nsis\*%APPVER%*.exe.sig" "%BIN%\package\" >nul
+if exist "%BUNDLE%\msi\*%APPVER%*.msi.sig" copy /Y "%BUNDLE%\msi\*%APPVER%*.msi.sig" "%BIN%\package\" >nul
 rem The portable build is a hand-copied bare exe: if tauri produced a
 rem signature for it, rename to the portable name so the .sig file carries
 rem the version (release verification relies on it).
 set "RAWSIG=%SRC%\target\%TRIPLE%\release\niuma-timer.exe.sig"
 if not exist "%RAWSIG%" set "RAWSIG=%SRC%\target\release\niuma-timer.exe.sig"
-if exist "%RAWSIG%" copy /Y "%RAWSIG%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe.sig"
+if exist "%RAWSIG%" copy /Y "%RAWSIG%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe.sig" >nul
+if errorlevel 1 (
+  echo [ERROR] failed to copy portable signature from "%RAWSIG%"
+  exit /b 1
+)
 echo Done: %BIN%\package\
 goto :eof
 

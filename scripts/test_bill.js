@@ -44,7 +44,7 @@ has("weekbill 有 parse_span", rsBill, "pub fn parse_span(s: &str) -> Result<Spa
 has("weekbill 未知跨度显式报错", rsBill, 'other => Err(format!("未知账单跨度: {other}"))');
 has("weekbill 有 period_bounds", rsBill, "pub fn period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, NaiveDate)");
 has("weekbill 有 prev_period_bounds", rsBill, "pub fn prev_period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, NaiveDate)");
-has("weekbill 有 last_day_of", rsBill, "fn last_day_of(year: i32, month: u32) -> u32 {");
+has("weekbill 月末日走 holiday::days_in_month 单一实现（原 last_day_of 三份拷贝已收口）", rsBill, "crate::holiday::days_in_month(y, m)");
 has("单测 周区间与旧 week_bounds 等价", rsBill, "fn period_bounds_week_matches_old_week_bounds()");
 has("单测 月年区间含闰年", rsBill, "fn period_bounds_month_year()");
 has("单测 上一周期即偏移加一", rsBill, "fn prev_period_bounds_is_offset_plus_one()");

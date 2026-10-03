@@ -229,5 +229,3 @@ $("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
 $("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
 $("otfSave").addEventListener("click", submitOtForm);
 $("otfCancel").addEventListener("click", hideOtForm);
-// 顶部导航：主页 / 明细 / 设置 三个 tab。「明细」是聚合 tab，对应 4 个二级页，
-// 具体显示哪个由 lastDetailView 记忆（默认加班——最常用的明细），由分段条二次切换

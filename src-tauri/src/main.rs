@@ -300,7 +300,9 @@ fn main() {
             }
             app.manage(AppState::default());
             // SQLite 首次调用 conn() 时建目录 + 开库 + 建表（WAL）。
-            // 程序未发布、无旧库旧 JSON，不做任何迁移；schema 变更直接改 DDL 重建库。
+            // v1.0.0 起已有真实用户库：schema 变更**不能**删库重建，新列登记进
+            // db.rs 的 EXTRA_COLUMNS（幂等补列），新表同步 TABLE_DDL 与
+            // BUSINESS_TABLES——见 docs/CONVENTIONS.md「数据与业务约定」。
             db::conn();
             trace_startup("setup: db ready");
 

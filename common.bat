@@ -76,3 +76,11 @@ if not defined INCLUDE if exist "%VSWHERE%" for /f "delims=" %%p in ('"%VSWHERE%
   if exist "%%p\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%%p\VC\Auxiliary\Build\vcvars64.bat"
 )
 if not defined INCLUDE if defined VCVARS call "%VCVARS%" >nul 2>&1
+rem vcvars64 failing (half-uninstalled VS / broken license) must stop here:
+rem continuing without INCLUDE/LIB only dies later inside cc-rs with errors
+rem that look like "the toolchain is broken" - exactly what this script exists
+rem to prevent.
+if not defined INCLUDE if defined VCVARS (
+  echo [ERROR] vcvars64 failed - set INCLUDE/LIB manually or repair Visual Studio
+  exit /b 1
+)

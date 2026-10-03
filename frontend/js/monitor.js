@@ -656,7 +656,17 @@ $("remind_sedentary_enabled").addEventListener("change", saveNow);
 $("remind_offwork_enabled").addEventListener("change", saveNow);
 $("remind_payday_enabled").addEventListener("change", saveNow);
 // 专注段（v1.7.0）：开关即存，阈值失焦存
-$("focus_enabled").addEventListener("change", saveNow);
+$("focus_enabled").addEventListener("change", () => {
+  applyFocusVisibility($("focus_enabled").checked);
+  saveNow();
+});
+
+// 专注统计关闭时隐藏达标线输入（同 overtime.js applyOvertimeVisibility 模式）：
+// 此前开关只存盘不联动，焦点行永远显示——像坏了的开关
+function applyFocusVisibility(enabled) {
+  const row = $("focusMinutesRow");
+  if (row) row.classList.toggle("hidden", !enabled);
+}
 $("focus_min_minutes").addEventListener("blur", saveIfChanged);
 $("shortcuts_enabled").addEventListener("change", saveNow);
 $("update_auto_check").addEventListener("change", saveNow);

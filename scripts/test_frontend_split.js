@@ -82,6 +82,29 @@ for (const name of CHUNKS.slice(0, -1)) {
   if (bad.length) failures.push(`${name} 顶层出现白名单之外的语句：\n${bad.join("\n")}`);
 }
 
+// -- 5. 缓存戳一致性：index.html 里全部 ?v= 与 core.js 的 FE_VER 必须同值 -----
+// build.rs 每次构建统一回写这 11 处（1 CSS + 10 JS）；一致性此前完全托付
+// build.rs，测试不校验——手工误改其中一处（或漏 bump 提交）会静默吃旧缓存，
+// 守卫的红只能由本检查给出。
+const coreSrc = fs.readFileSync(path.join(JS_DIR, "core.js"), "utf8");
+// FE_VER 带 v 前缀（"v86d7b7a0"），URL 参数不带（"?v=86d7b7a0"）——比较前剥掉
+const feVer = ((coreSrc.match(/^const FE_VER = "([^"]+)"/m) || [])[1] || "").replace(/^v/, "");
+if (!feVer) {
+  failures.push("core.js 缺少 const FE_VER 声明");
+} else {
+  const stamps = [...html.matchAll(/\?v=([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
+  if (stamps.length !== CHUNKS.length + 1) {
+    failures.push(
+      `index.html 应有 ${CHUNKS.length + 1} 处 ?v=（1 CSS + ${CHUNKS.length} JS），实际 ${stamps.length}`
+    );
+  }
+  for (const [i, v] of stamps.entries()) {
+    if (v !== feVer) {
+      failures.push(`index.html 第 ${i + 1} 处缓存戳 ?v=${v} != FE_VER(${feVer})——改前端后需 cargo build 让 build.rs 统一回写`);
+    }
+  }
+}
+
 if (failures.length) {
   console.error(`前端拆分契约检查失败（${failures.length} 项）：`);
   for (const f of failures) console.error(`- ${f}`);

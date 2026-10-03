@@ -353,7 +353,3 @@ async function deleteOtRecord(date) {
     showToast("删除失败：" + e, "err");
   }
 }
-
-// ---- 活动统计（鼠标/键盘）----
-
-// 像素 → 可读距离：96dpi 下 1 英寸 = 96px，1 米 ≈ 3779.5px

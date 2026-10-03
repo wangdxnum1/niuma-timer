@@ -164,7 +164,7 @@ pub struct Config {
     pub shortcuts_enabled: bool,
 
     // ---- 数据保留 ----
-    /// 历史数据保留天数（加班 / 活动 / 应用 / 媒体，共 7 张表）。
+    /// 历史数据保留天数（加班 / 活动 / 应用 / 媒体 / 专注，共 8 张表）。
     /// **0 = 永久保留**（默认）：不删任何用户数据。
     ///
     /// 之所以默认不删：数据体量本身很小（实测约 11KB/天，一年 4MB），
@@ -400,6 +400,19 @@ pub fn merge_from_value(existing: &Config, incoming: &serde_json::Value) -> Resu
     let mut base = serde_json::to_value(existing).map_err(|e| format!("配置序列化失败: {e}"))?;
     if let Some(obj) = base.as_object_mut() {
         if let Some(inc) = incoming.as_object() {
+            // 未知键 = 前后端字段名漂移的前兆（拼写错 / 改名漏同步）：merge 语义
+            // 是静默丢弃，不记日志的话「前端以为存了、后端其实没收到」无从排查。
+            let unknown: Vec<String> = inc
+                .keys()
+                .filter(|k| !obj.contains_key(*k))
+                .cloned()
+                .collect();
+            if !unknown.is_empty() {
+                crate::db::debug_log(&format!(
+                    "[config] save_config 收到未知字段（已忽略）: {}",
+                    unknown.join(", ")
+                ));
+            }
             for (k, v) in inc {
                 obj.insert(k.clone(), v.clone());
             }

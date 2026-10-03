@@ -11,15 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use windows::core::w;
-use windows::Win32::Foundation::{
-    GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::RemoteDesktop::{
     WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
 
 /// WM_WTSSESSION_CHANGE = 0x02B1，定义在 winuser.h
@@ -73,45 +67,19 @@ pub fn start() {
 }
 
 fn try_run() -> Result<(), String> {
+    // 窗口注册/创建收口 win::MessageWindow（RAII + 统一消息循环，同 activity）。
+    // 此前在本模块手搓 RegisterClassW / CreateWindowExW，与 win.rs 的能力重叠、
+    // 还自带一段体外 unsafe——「Win32 一律放 win.rs」的约定就差这一处没收完。
+    let wnd = crate::win::MessageWindow::create("NiumaLockMonitor", Some(wnd_proc))
+        .map_err(|e| format!("MessageWindow::create 失败: {e}"))?;
+
     unsafe {
-        let class_name = w!("NiumaLockMonitor");
-
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(wnd_proc),
-            lpszClassName: class_name,
-            ..Default::default()
-        };
-
-        let atom = RegisterClassW(&wc);
-        if atom == 0 {
-            let err = GetLastError();
-            if err != ERROR_CLASS_ALREADY_EXISTS {
-                return Err(format!("RegisterClassW 失败: {err:?}"));
-            }
-        }
-
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            class_name,
-            w!(""),
-            WINDOW_STYLE::default(),
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| format!("CreateWindowExW 失败: {e}"))?;
-
-        WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION)
+        WTSRegisterSessionNotification(wnd.hwnd(), NOTIFY_FOR_THIS_SESSION)
             .map_err(|e| format!("WTSRegisterSessionNotification 失败: {e}"))?;
-
-        crate::win::run_message_loop();
-        Ok(())
     }
+
+    wnd.run_message_loop();
+    Ok(())
 }
 
 /// 窗口过程：接收 WM_WTSSESSION_CHANGE 消息
@@ -129,5 +97,5 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
             _ => {}
         }
     }
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam) }
 }

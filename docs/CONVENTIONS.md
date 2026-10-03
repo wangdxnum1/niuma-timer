@@ -45,7 +45,7 @@
 - **SQLite 一律 `db::with_db`**（统一处理锁中毒 + 失败写 `debug.log` + 返回 `Result` 供调用方降级）。`main.rs` 里 `db::conn();` 的空调用是唯一例外——它负责启动建库。
 - **schema 变更走 `db::ensure_column` 幂等补列**（先查 `pragma_table_info` 再 `ALTER`）。不能无条件 ALTER（全新库报 duplicate column name，历史上就是这么翻的车），更不能删库重建：v1.0.0 起已有真实用户库。待补列清单在 `db.rs` 的 `EXTRA_COLUMNS`。
 - **新增周期任务挂 `scheduler.rs`**（1s 一拍：托盘刷新 + focus 状态机；5 拍：跨天 + 锁屏加班；10 拍：活动落盘 + 应用结算；60 拍：按「日期变了」跑每日维护 + 提醒）。不要自己 spawn sleep 循环。
-- **不可合并进调度器的线程**：`activity::raw_thread` / `app_usage::watch_thread` / `lock_monitor`（都要跑 Win32 消息循环）、`audio_usage::tick_loop`（COM 亲和）、`tray` 悬停卡 actor（自带超时驱动）。调度器每个任务都套 `catch_unwind`，单任务 panic 只丢一拍。
+- **不可合并进调度器的线程**：`activity::raw_thread` / `activity::keyq_worker`（键盘队列排空）/ `app_usage::watch_thread` / `lock_monitor`（都要跑 Win32 消息循环）、`audio_usage::tick_loop`（COM 亲和）、`tray` 悬停卡 actor（自带超时驱动）、`update::spawn_update_checker`（阻塞网络 IO，套 catch_unwind）。调度器每个任务都套 `catch_unwind`，单任务 panic 只丢一拍。
 - **Win32 代码一律放 `win.rs` 并用 RAII 守卫**（`MessageWindow` / `WinEventHookGuard` / `ComGuard` / `IconGuard` / `ObjGuard` / `DcGuard`），不手工配对释放；其它模块只该在回调签名上留 unsafe。
 - **键鼠统计用 Raw Input，不要回到低级钩子**（`WH_MOUSE_LL/WH_KEYBOARD_LL` 是「系统拦截」模型，每次按键先跨线程派发到钩子再投递给目标程序，会拖慢输入法；Raw Input 是旁路投递，热路径只做原子 `+1` / 入队，开关监控 = 真正注销设备）。
 - windows-rs 0.61 的几个易错点：`GetRawInputDeviceInfoW` 的首参是 `Option<HANDLE>`（要 `Some(hdevice)`）；`HANDLE` 包的是裸指针（`HANDLE(p as *mut c_void)`）而非 isize；`RAWINPUTHEADER` 里的 `hDevice` 在 x64 下位于偏移 8（`win.rs::raw_input_hdevice` 手工按字节取，别改成按字段读）。

@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=fcca4133" />
+    <link rel="stylesheet" href="styles.css?v=5f3bdc48" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -737,7 +737,6 @@
       <div class="page-head">
         <h2>加班明细</h2>
         <button id="otExportBtn" class="ghost" style="margin-left:auto">导出 CSV</button>
-        <span id="otExportStatus" class="export-status"></span>
       </div>
       <div class="month-nav">
         <button id="otPrevMonth" class="mn-btn">‹ 上一月</button>
@@ -772,7 +771,7 @@
         <h2>逐小时活跃度</h2>
         <div id="actChart" class="act-chart"></div>
         <div class="act-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23时</span></div>
-        <p class="hint" id="actChartHint">金色 = 当前小时；悬停柱子查看该小时详情</p>
+        <p class="hint">金色 = 当前小时；悬停柱子查看该小时详情</p>
       </section>
       <section class="card">
         <h2>鼠标 · 键盘统计</h2>
@@ -902,16 +901,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=fcca4133"></script>
-    <script src="js/settings.js?v=fcca4133"></script>
-    <script src="js/hero.js?v=fcca4133"></script>
-    <script src="js/overtime.js?v=fcca4133"></script>
-    <script src="js/monitor.js?v=fcca4133"></script>
-    <script src="js/bill.js?v=fcca4133"></script>
-    <script src="js/insights.js?v=fcca4133"></script>
-    <script src="js/storage.js?v=fcca4133"></script>
-    <script src="js/update.js?v=fcca4133"></script>
-    <script src="js/boot.js?v=fcca4133"></script>
+    <script src="js/core.js?v=5f3bdc48"></script>
+    <script src="js/settings.js?v=5f3bdc48"></script>
+    <script src="js/hero.js?v=5f3bdc48"></script>
+    <script src="js/overtime.js?v=5f3bdc48"></script>
+    <script src="js/monitor.js?v=5f3bdc48"></script>
+    <script src="js/bill.js?v=5f3bdc48"></script>
+    <script src="js/insights.js?v=5f3bdc48"></script>
+    <script src="js/storage.js?v=5f3bdc48"></script>
+    <script src="js/update.js?v=5f3bdc48"></script>
+    <script src="js/boot.js?v=5f3bdc48"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

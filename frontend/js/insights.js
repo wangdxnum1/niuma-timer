@@ -68,9 +68,6 @@ function fmtWan(n) {
   return n >= 10000 ? (n / 10000).toFixed(1) + " 万" : String(n);
 }
 
-// ISO 日期（YYYY-MM-DD）+n 天，本地时区
-
-
 // ---- 时段热力：7 行（周一~周日）× 24 列（0-23 时），sqrt 归一 4 级金色阶 ----
 
 async function loadHourHeat() {

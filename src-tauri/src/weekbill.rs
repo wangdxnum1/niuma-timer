@@ -130,16 +130,6 @@ pub fn parse_span(s: &str) -> Result<Span, String> {
     }
 }
 
-/// 该月最后一天（下月 1 号 − 1 天，闰年天然正确）
-fn last_day_of(year: i32, month: u32) -> u32 {
-    let (ny, nm) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    (NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)).day()
-}
-
 /// 跨度 + 偏移 → 闭区间 [start, end]（偏移 0 = 当前周期；负值不合法按 0 处理，未来封顶）。
 /// Week 分支与原 insights::week_bounds 逐位等价（B5 删除原函数后以此为准）。
 ///
@@ -160,7 +150,7 @@ pub fn period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, N
             let m = (ym % 12) as u32 + 1;
             (
                 NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
-                NaiveDate::from_ymd_opt(y, m, last_day_of(y, m)).unwrap(),
+                NaiveDate::from_ymd_opt(y, m, crate::holiday::days_in_month(y, m)).unwrap(),
             )
         }
         Span::Year => {

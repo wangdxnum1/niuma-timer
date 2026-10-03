@@ -61,12 +61,13 @@ use windows::Win32::UI::Input::{GetRawInputDeviceInfoW, RIDI_DEVICENAME};
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx, GetCursorPos,
-    GetForegroundWindow, GetIconInfo, GetMessageTime, GetMessageW, GetWindowThreadProcessId,
-    LoadImageW, MessageBoxW, PostThreadMessageW, RegisterClassW, SendMessageW, TranslateMessage,
-    DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON, HWND_MESSAGE, ICONINFO, ICON_BIG, ICON_SMALL,
-    IMAGE_ICON, LR_DEFAULTSIZE, MB_ICONERROR, MB_OK, MSG, RI_KEY_BREAK, SM_CXICON, SM_CXSMICON,
-    SM_CYICON, SM_CYSMICON, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_QUIT, WM_SETICON, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
+    GetForegroundWindow, GetIconInfo, GetMessageTime, GetMessageW, GetSystemMetrics,
+    GetWindowThreadProcessId, LoadImageW, MessageBoxW, PostThreadMessageW, RegisterClassW,
+    SendMessageW, TranslateMessage, DI_NORMAL, EVENT_SYSTEM_FOREGROUND, HICON, HWND_MESSAGE,
+    ICONINFO, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, MB_ICONERROR, MB_OK, MSG,
+    RI_KEY_BREAK, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SM_REMOTESESSION,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_QUIT,
+    WM_SETICON, WNDCLASSW, WNDCLASS_STYLES, WNDPROC,
 };
 
 /// 在调用线程上运行标准 Windows 消息循环，直到收到 `WM_QUIT`。
@@ -221,6 +222,17 @@ impl MessageWindow {
     pub fn run_message_loop(&self) {
         run_message_loop()
     }
+
+    /// 底层窗口句柄（lock_monitor 用于 WTSRegisterSessionNotification 等按句柄注册的 API）。
+    pub fn hwnd(&self) -> windows::Win32::Foundation::HWND {
+        self.hwnd
+    }
+}
+
+/// 当前会话是否为 RDP 远程会话（`GetSystemMetrics(SM_REMOTESESSION)`，系统权威）。
+/// 收口点：Win32 调用一律住 win.rs——remote.rs 原先体内自带 unsafe。
+pub fn is_rdp_session() -> bool {
+    unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
 }
 
 impl Drop for MessageWindow {

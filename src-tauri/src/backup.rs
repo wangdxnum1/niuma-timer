@@ -174,6 +174,15 @@ fn create_backup_inner(cfg_version: &str) -> Result<BackupEntry, String> {
     drop(file);
     std::fs::rename(&partial, &out).map_err(|e| format!("备份就位失败：{e}"))?;
 
+    // 新备份就位后做一次轮转：此前只增不删，「还原失败重试 N 次 = 多 N 份
+    // 保护性备份」的场景会无限放大（stage_restore 每次尝试都先做保护性备份）。
+    let pruned = prune_dir(&dir, KEEP_BACKUPS);
+    if pruned > 0 {
+        crate::db::debug_log(&format!(
+            "[backup] 轮转删除 {pruned} 份最旧备份（保留 {KEEP_BACKUPS} 份）"
+        ));
+    }
+
     Ok(BackupEntry {
         name,
         path: out.to_string_lossy().into_owned(),
@@ -181,6 +190,32 @@ fn create_backup_inner(cfg_version: &str) -> Result<BackupEntry, String> {
         created_at: manifest.created_at,
         app_version: manifest.app_version,
         broken: false,
+    })
+}
+
+/// 备份保留上限（按 created_at 保留最新的 N 份好包）。
+/// 单份很小（几百 KB），上限设得宽裕：价值在「不会无限增长」，不在省空间。
+const KEEP_BACKUPS: usize = 20;
+
+/// 删除超出保留数量的旧备份。只删可解析的好包；坏包仍由列表展示、留给用户
+/// 自行判断（静默删坏包 = 销毁「备份损坏了」的证据）。
+fn prune_dir(dir: &Path, keep: usize) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut good: Vec<(String, PathBuf)> = Vec::new();
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("zip") {
+            continue;
+        }
+        if let Ok(m) = read_manifest(&path) {
+            good.push((m.created_at, path));
+        }
+    }
+    good.sort_by(|a, b| b.0.cmp(&a.0));
+    good.iter().skip(keep).fold(0, |n, (_, path)| {
+        n + usize::from(std::fs::remove_file(path).is_ok())
     })
 }
 
@@ -272,9 +307,37 @@ pub fn stage_restore(name: &str, current_version: &str) -> Result<String, String
     ))
 }
 
+/// 备份的 app_version 是否**严格高于**基准版本。任一侧解析失败一律 false——
+/// 老备份 / 异常清单按「不拒绝」处理，真正要挡的是「1.8 备份 → 1.7 程序」
+/// 这类确定会踩新格式的场景，不做比做错（误拒合法备份）更糟。
+fn version_is_newer(v: &str, base: &str) -> bool {
+    let parse = |s: &str| -> Option<Vec<u64>> {
+        let parts: Option<Vec<u64>> = s.split('.').map(|p| p.parse::<u64>().ok()).collect();
+        match parts {
+            Some(v) if v.len() == 3 => Some(v),
+            _ => None,
+        }
+    };
+    match (parse(v), parse(base)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
 /// 校验只操作独立临时文件，不读写用户当前数据库。
 fn validate_archive(zip_path: &Path, check_db: &Path) -> Result<Option<Vec<u8>>, String> {
     let manifest = read_manifest(zip_path)?;
+    // 版本方向校验：新版备份还原到旧程序上，新 schema 的列/表旧代码不认识
+    // （ensure_column 只会加列不会删列，降级多数能活，但属暗雷）。fail-closed：
+    // 明确拒绝并说明原因，数据在两边都原样不动。
+    if version_is_newer(&manifest.app_version, env!("CARGO_PKG_VERSION")) {
+        return Err(format!(
+            "该备份来自更新版本 v{}（当前 v{}）：降级还原可能丢数据。请先把本应用升级回 v{} 再还原",
+            manifest.app_version,
+            env!("CARGO_PKG_VERSION"),
+            manifest.app_version
+        ));
+    }
     let mut arc = ZipArchive::new(File::open(zip_path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     if arc.len() != if manifest.has_config { 3 } else { 2 } {
@@ -566,6 +629,60 @@ mod tests {
         assert!(swap_pending_in(&dir).is_none());
         assert_eq!(before, snapshot(&dir), "无 pending 时目录必须完全不变");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 轮转：按 created_at 保留最新 N 份好包，更旧的删除；坏包与非 zip 文件不动
+    #[test]
+    fn prune_dir_keeps_newest_good_backups() {
+        let dir = tmp_dir("prune");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5u8 {
+            let manifest = format!(
+                r#"{{"app":"niuma-timer","app_version":"1.7.0","created_at":"2026-01-0{} 00:00:00","db_bytes":0,"has_config":false}}"#,
+                i + 1
+            );
+            let bytes = make_zip(&[(ENTRY_MANIFEST, manifest.as_bytes())]);
+            std::fs::write(dir.join(format!("niuma-backup-2026-0{i}.zip")), bytes).unwrap();
+        }
+        std::fs::write(dir.join("broken.zip"), b"garbage").unwrap(); // 坏包：轮转不得触碰
+        std::fs::write(dir.join("keep.txt"), "x").unwrap();
+        assert_eq!(prune_dir(&dir, 2), 3, "5 份保留 2 份应删 3 份");
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert!(left.contains(&"broken.zip".to_string()), "坏包必须保留");
+        assert!(left.contains(&"keep.txt".to_string()));
+        assert!(left.contains(&"niuma-backup-2026-03.zip".to_string()));
+        assert!(left.contains(&"niuma-backup-2026-04.zip".to_string()));
+        assert!(
+            !left.contains(&"niuma-backup-2026-01.zip".to_string()),
+            "最旧的必须先删"
+        );
+        assert!(
+            !left.contains(&"niuma-backup-2026-00.zip".to_string()),
+            "最旧的必须先删"
+        );
+        assert_eq!(left.len(), 4, "2 好包 + 坏包 + keep.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 版本方向：严格大于才拒绝；同版本 / 更旧 / 解析失败（老备份兼容）一律放行
+    #[test]
+    fn version_is_newer_strict_semantics() {
+        assert!(version_is_newer("1.8.0", "1.7.0"));
+        assert!(
+            version_is_newer("1.10.0", "1.9.9"),
+            "必须按数值而非字典序比较"
+        );
+        assert!(!version_is_newer("1.7.0", "1.7.0"), "同版本不拒绝");
+        assert!(!version_is_newer("1.6.9", "1.7.0"));
+        assert!(
+            !version_is_newer("not-a-version", "1.7.0"),
+            "解析失败不拒绝"
+        );
+        assert!(!version_is_newer("1.8", "1.7.0"), "段数不足按解析失败处理");
     }
 
     #[test]

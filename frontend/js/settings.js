@@ -47,6 +47,7 @@ async function load() {
     // 专注段（v1.7.0）：开关缺省 true，阈值缺省 25
     $("focus_enabled").checked = cfg.focus_enabled !== false;
     $("focus_min_minutes").value = cfg.focus_min_minutes ?? 25;
+    applyFocusVisibility(cfg.focus_enabled !== false);
     $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
     // 自动更新（v1.4.0）：缺省 true，与后端 serde default 对齐
     $("update_auto_check").checked = cfg.update_auto_check !== false;
@@ -231,7 +232,8 @@ function readCfg() {
     overtime_rate_holiday: numOrNull($("overtime_rate_holiday").value),
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
     app_whitelist: readWhitelist(),
-    retention_days: parseInt($("retention_days").value) || 0,
+    // 乱输负数/超长都会静默变成奇怪语义，钳到 0（永久）–36500（约百年）
+    retention_days: Math.min(36500, Math.max(0, parseInt($("retention_days").value) || 0)),
     bill_style: readBillStyle(),
     bill_span: readBillSpan(),
   };

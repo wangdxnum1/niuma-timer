@@ -207,13 +207,16 @@ fn db_path() -> PathBuf {
 
 /// 前端/命令层调试日志：追加写入 `%APPDATA%/niuma-timer/debug.log`。
 /// 专供排查用户桌面环境问题（沙箱无法复现 WebView2 现场时以该文件为准）。
-/// 超过 256KB 自动截断重开，避免无限增长。
+/// 超过 256KB 自动轮转重开，避免无限增长。
 pub fn debug_log(msg: &str) {
     use std::io::Write;
     let path = crate::config::config_dir().join("debug.log");
     if let Ok(md) = fs::metadata(&path) {
         if md.len() > 256 * 1024 {
-            let _ = fs::write(&path, "");
+            // rename 而非原地截断（fs::write("")）：多线程同时追加时，原地截断
+            // 会吞掉其他线程正要写入的行；rename 后旧句柄继续写旧文件（内容随后
+            // 被下次轮转覆盖），各线程的下一次 open 拿到的是全新文件。
+            let _ = fs::rename(&path, path.with_extension("log.old"));
         }
     }
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {

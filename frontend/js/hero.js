@@ -240,4 +240,3 @@ function applyTaglineCustomVisibility(v) {
   if (row) row.style.display = v === "custom" ? "" : "none";
 }
 
-// 加班开关关闭时隐藏主界面「加班总览」卡片；已有数据保留在库中不受影响
