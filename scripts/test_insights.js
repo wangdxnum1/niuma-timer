@@ -167,6 +167,12 @@ const refIds = [...appSrc.matchAll(/\$\("([A-Za-z_]\w*)"\)/g)].map((m) => m[1]);
 const missing = [...new Set(refIds)].filter((id) => !html.includes('id="' + id + '"'));
 eq("前端源码引用的元素全部存在于 index.html", JSON.stringify(missing), "[]");
 
+// -------------------------------------------------- 7. 失败可见性（技术债批次二）
+has("时间线失败要可见（不再静默空白）", appSrc, "时间线加载失败（详见 debug.log）");
+has("时间线错误挂在 tlRows（成功重绘会清空，不动 tlEmpty 语义）", appSrc, 'tlRows").innerHTML');
+has("专注失败要可见（不再只有四个「—」）", appSrc, "专注数据加载失败（详见 debug.log）");
+has("专注错误挂在 focusBars 容器", appSrc, 'focusBars").innerHTML');
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

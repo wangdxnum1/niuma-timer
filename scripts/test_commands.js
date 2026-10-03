@@ -92,6 +92,24 @@ while ((m = ire.exec(appSrc)) !== null) inv.add(m[1]);
 const unknown = [...inv].filter((n) => !commands.includes(n));
 eq("前端调用了但后端不存在的命令", unknown.length ? unknown.join(", ") : "无", "无");
 
+console.log("== 慢命令必须 async（约定：同步命令在主线程执行）==");
+// 不带 (async) 的 #[tauri::command] 函数体里出现 with_db 即红：SQL 走全局 DB 锁，
+// 「立即整理」持锁秒级时同步命令会在主线程等锁，冻结托盘刷新与窗口事件。
+// 函数体切到下一个命令属性 / 下一份文档注释 / 测试模块为止。
+const syncRe = /#\[tauri::command\]\s*(?:(?:#\[[^\]]*\]\s*)|(?:\/\/[^\n]*\n\s*))*(?:pub(?:\([^)]*\))?\s+)?fn\s+(\w+)/g;
+const syncSlow = [];
+while ((m = syncRe.exec(rsSrc)) !== null) {
+  const bodyStart = m.index + m[0].length;
+  const ends = [
+    rsSrc.indexOf("#[tauri::command", bodyStart),
+    rsSrc.indexOf("\n///", bodyStart),
+    rsSrc.indexOf("#[cfg(test)]", bodyStart),
+  ].filter((x) => x !== -1);
+  const body = rsSrc.slice(bodyStart, ends.length ? Math.min(...ends) : bodyStart + 3000);
+  if (/with_db/.test(body)) syncSlow.push(m[1]);
+}
+eq("同步命令体内不做 DB 查询", syncSlow.length ? syncSlow.join(", ") : "无", "无");
+
 console.log("");
 console.log(
   "  共 " + commands.length + " 个命令，permissions " + cap.permissions.length + " 项"

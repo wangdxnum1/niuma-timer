@@ -127,6 +127,9 @@ function resetHistDates() {
   }
 }
 
+// 2 秒轮询的失败提示去重旗标：失败只弹一次 toast，成功后复位（见 loadActivity catch）
+let actErrToasted = false;
+
 async function loadActivity() {
   if (!monitors.activity) {
     // 停用即清缓存：否则从设置页切回主界面时，会拿旧数据画出已停用模块的数字
@@ -141,9 +144,17 @@ async function loadActivity() {
   }
   try {
     const a = await invoke("get_activity_summary", { date: histDate.act });
+    actErrToasted = false;
     viewData.activity = a;
     paintActivity();
   } catch (e) {
+    flog("act ERR: " + (e && e.message ? e.message : String(e)));
+    // 主界面没有可挂错误文案的卡片；2 秒轮询也不能每次弹 toast（会轰炸）。
+    // 折中：失败只提示一次，成功后复位。
+    if (!actErrToasted) {
+      showToast("活动数据加载失败，将自动重试", "err");
+      actErrToasted = true;
+    }
     console.error("loadActivity error:", e);
   }
 }

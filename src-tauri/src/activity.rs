@@ -448,42 +448,43 @@ fn save_day(d: &mut DayState) {
 fn query_day_from_db(date: &str) -> (Vec<HourBucket>, BTreeMap<u32, u64>) {
     let mut hourly = vec![HourBucket::default(); 24];
     let mut keys = BTreeMap::new();
+    // 失败经 ？ 传播给 with_db 记日志（吞错问题与修法同 app_usage::summary）；
+    // 外层降级为「空数据」返回，调用方照常渲染。
     let _ = crate::db::with_db(|g| -> rusqlite::Result<()> {
-        if let Ok(mut stmt) = g.prepare(
+        let mut stmt = g.prepare(
             "SELECT hour, moves, pixels, left, dbl, right, wheel, wheel_ticks, mid, xbtn, keys \
              FROM act_hourly WHERE date = ?1",
-        ) {
-            if let Ok(rows) = stmt.query_map(params![date], |r| {
-                let hour: i64 = r.get(0)?;
-                let b = HourBucket {
-                    moves: r.get(1)?,
-                    pixels: r.get(2)?,
-                    left: r.get(3)?,
-                    dbl: r.get(4)?,
-                    right: r.get(5)?,
-                    wheel: r.get(6)?,
-                    wheel_ticks: r.get(7)?,
-                    mid: r.get(8)?,
-                    xbtn: r.get(9)?,
-                    keys: r.get(10)?,
-                };
-                Ok((hour, b))
-            }) {
-                for row in rows.flatten() {
-                    if let Some(b) = hourly.get_mut(row.0 as usize) {
-                        *b = row.1;
-                    }
-                }
+        )?;
+        let rows = stmt.query_map(params![date], |r| {
+            let hour: i64 = r.get(0)?;
+            let b = HourBucket {
+                moves: r.get(1)?,
+                pixels: r.get(2)?,
+                left: r.get(3)?,
+                dbl: r.get(4)?,
+                right: r.get(5)?,
+                wheel: r.get(6)?,
+                wheel_ticks: r.get(7)?,
+                mid: r.get(8)?,
+                xbtn: r.get(9)?,
+                keys: r.get(10)?,
+            };
+            Ok((hour, b))
+        })?;
+        for row in rows {
+            let (hour, bucket) = row?;
+            if let Some(slot) = hourly.get_mut(hour as usize) {
+                *slot = bucket;
             }
         }
-        if let Ok(mut stmt) = g.prepare("SELECT vk, count FROM act_keys WHERE date = ?1") {
-            if let Ok(rows) = stmt.query_map(params![date], |r| {
-                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64))
-            }) {
-                for row in rows.flatten() {
-                    keys.insert(row.0, row.1);
-                }
-            }
+
+        let mut stmt = g.prepare("SELECT vk, count FROM act_keys WHERE date = ?1")?;
+        let rows = stmt.query_map(params![date], |r| {
+            Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64))
+        })?;
+        for row in rows {
+            let (vk, count) = row?;
+            keys.insert(vk, count);
         }
         Ok(())
     });
@@ -570,13 +571,16 @@ fn raw_thread() {
         let mut wnd = match crate::win::MessageWindow::create(RAW_WND_CLASS, Some(raw_wndproc)) {
             Ok(w) => w,
             Err(e) => {
+                // release 无控制台，必须同时落 debug.log（理由同 audio_usage::tick_loop）
                 eprintln!("[activity] Raw Input 窗口创建失败: {e}");
+                crate::db::debug_log(&format!("[activity] Raw Input 窗口创建失败: {e}"));
                 RAW_OK.store(false, Ordering::SeqCst);
                 return;
             }
         };
         if let Err(e) = wnd.register_raw_input() {
             eprintln!("[activity] Raw Input 注册失败: {e}");
+            crate::db::debug_log(&format!("[activity] Raw Input 注册失败: {e}"));
             RAW_OK.store(false, Ordering::SeqCst);
             return;
         }

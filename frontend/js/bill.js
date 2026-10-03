@@ -404,7 +404,9 @@ function drawReport(model, scale) {
   return canvas;
 }
 
-// 保存链路：toBlob → 剪贴板（可用则复制）→ base64 → 后端落盘下载目录
+// 保存链路：toBlob → 剪贴板（可用则复制）→ base64 → 后端落盘下载目录。
+// 并发守卫同 downloadCsv：连点会重复画布 + 落盘一堆同名文件；按钮同步禁用给反馈。
+let exportingImg = false;
 async function saveBillImage() {
   if (curBillSpan === "year") {
     showToast("年账单暂不支持存为图片", "err");
@@ -414,33 +416,42 @@ async function saveBillImage() {
     showToast("先看一眼本期账单，再来生成图片", "err");
     return;
   }
-  const model = buildReportModel(billData);
-  const canvas = drawReport(model);
-  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-  if (!blob) {
-    showToast("图片生成失败", "err");
-    return;
-  }
-  // 剪贴板不可用属预期（旧 WebView/权限）：静默降级为仅保存
-  let copied = false;
+  if (exportingImg) return;
+  exportingImg = true;
+  const btn = $("billImageBtn");
+  if (btn) btn.disabled = true;
   try {
-    if (typeof ClipboardItem === "function") {
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-      copied = true;
+    const model = buildReportModel(billData);
+    const canvas = drawReport(model);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+    if (!blob) {
+      showToast("图片生成失败", "err");
+      return;
     }
-  } catch (e) {
-    /* fallthrough */
-  }
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  try {
-    const path = await invoke("export_image", {
-      filename: "niuma-账单-" + (model.label || billData.period_start) + ".png",
-      contentBase64: btoa(bin),
-    });
-    showToast(copied ? "已复制剪贴板，并保存到 " + path : "已保存到 " + path, "ok");
-  } catch (e) {
-    showToast("保存失败：" + e, "err");
+    // 剪贴板不可用属预期（旧 WebView/权限）：静默降级为仅保存
+    let copied = false;
+    try {
+      if (typeof ClipboardItem === "function") {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        copied = true;
+      }
+    } catch (e) {
+      /* fallthrough */
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    try {
+      const path = await invoke("export_image", {
+        filename: "niuma-账单-" + (model.label || billData.period_start) + ".png",
+        contentBase64: btoa(bin),
+      });
+      showToast(copied ? "已复制剪贴板，并保存到 " + path : "已保存到 " + path, "ok");
+    } catch (e) {
+      showToast("保存失败：" + e, "err");
+    }
+  } finally {
+    exportingImg = false;
+    if (btn) btn.disabled = false;
   }
 }

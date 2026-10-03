@@ -613,10 +613,15 @@ fn watch_thread() {
     // 不会再出现「提前 return 漏卸载」的手工配对问题（收口于 win::WinEventHookGuard）。
     let Some(_hook) = crate::win::WinEventHookGuard::install_foreground_hook(Some(win_event_proc))
     else {
+        // release 无控制台，必须同时落 debug.log（理由同 audio_usage::tick_loop）
         eprintln!(
             "[app_usage] 前台窗口事件钩子安装失败: {}",
             windows::core::Error::from_win32()
         );
+        crate::db::debug_log(&format!(
+            "[app_usage] 前台窗口事件钩子安装失败: {}",
+            windows::core::Error::from_win32()
+        ));
         WATCH_OK.store(false, Ordering::SeqCst);
         return;
     };
@@ -859,6 +864,9 @@ pub struct AppUsageSummary {
 /// `known_icons`：前端已缓存过图标的应用名。命中的条目 `icon` 返回 `None`，不再回传
 /// base64——前端每 2 秒轮询一次，而图标是几 KB~几十 KB 的 data URL，每次整批搬运
 /// 纯属浪费 IPC 带宽（只有新出现的应用才真正需要传一次）。
+/// summary 的 DB 查询产物：（应用名, 秒数）列表 与 24 小时桶
+type UsageRows = (Vec<(String, i64)>, Vec<i64>);
+
 pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppUsageSummary {
     let known: HashSet<&str> = known_icons.iter().map(|s| s.as_str()).collect();
     let date = match date {
@@ -866,35 +874,33 @@ pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppU
         None => Local::now().date_naive().format("%Y-%m-%d").to_string(),
     };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
-    // 查询失败时降级为空汇总（前端显示「暂无数据」），错误已由 with_db 记入 debug.log
+    // 查询失败时降级为空汇总（前端显示「暂无数据」），具体错误经 ？ 传播给 with_db
+    // 统一记入 debug.log。内层此前用 if let Ok 双层吞错：with_db 只看得到外层 Ok，
+    // 表损坏/磁盘满时这里静默变「今日 0 数据」，与「监控暂停」不可区分、零线索。
     // 图标提取必须在 DB 锁外：settle() 是 ICON_CACHE → DB，这里若反过来会 ABBA 死锁。
-    let (rows, hourly) = crate::db::with_db(|g| {
+    let (rows, hourly) = crate::db::with_db(|g| -> rusqlite::Result<UsageRows> {
         let mut apps = Vec::new();
-        if let Ok(mut stmt) =
-            g.prepare("SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC")
-        {
-            if let Ok(rows) = stmt.query_map(params![date], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            }) {
-                for row in rows.flatten() {
-                    apps.push(row);
-                }
-            }
+        let mut stmt =
+            g.prepare("SELECT app, seconds FROM app_usage WHERE date = ?1 ORDER BY seconds DESC")?;
+        let rows = stmt.query_map(params![date], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            apps.push(row?);
         }
 
         let mut hourly = vec![0i64; 24];
-        if let Ok(mut stmt) = g.prepare(
+        let mut stmt = g.prepare(
             "SELECT hour, SUM(seconds) FROM app_usage_hourly \
              WHERE date = ?1 GROUP BY hour ORDER BY hour",
-        ) {
-            if let Ok(rows) = stmt.query_map(params![date], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            }) {
-                for row in rows.flatten() {
-                    if let Some(b) = hourly.get_mut(row.0 as usize) {
-                        *b = row.1;
-                    }
-                }
+        )?;
+        let rows = stmt.query_map(params![date], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (h, secs) = row?;
+            if let Some(b) = hourly.get_mut(h as usize) {
+                *b = secs;
             }
         }
         Ok((apps, hourly))

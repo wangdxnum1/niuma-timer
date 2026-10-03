@@ -15,7 +15,8 @@ use crate::weekbill;
 
 /// 获取指定月份的加班记录（含预计算汇总字段）。
 /// year / month 省略时取当前月——老调用方不传参也能正常工作。
-#[tauri::command]
+/// async：查询走全局 DB 锁，「立即整理」持锁秒级时不得冻结主线程（同 get_bill）。
+#[tauri::command(async)]
 pub(crate) fn get_overtime_records(
     year: Option<i32>,
     month: Option<u32>,
@@ -28,7 +29,7 @@ pub(crate) fn get_overtime_records(
 
 /// 手动添加/修改某天加班记录（可补录历史月份，但不能是未来日期）。
 /// 返回该记录**所属月份**的视图：补录 8 月时界面不会莫名跳回当月。
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_overtime_record(
     state: State<AppState>,
     input: overtime::ManualOvertimeInput,
@@ -42,7 +43,7 @@ pub(crate) fn save_overtime_record(
 }
 
 /// 手动删除某天加班记录（历史月份同样可删）。返回该记录**所属月份**的视图。
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_overtime_record(
     date: String,
 ) -> Result<overtime::MonthlyOvertimeView, String> {

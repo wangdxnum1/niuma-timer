@@ -865,19 +865,29 @@ fn jitter_secs() -> u64 {
 
 /// 启动自动检查线程：延迟 30 秒先跑一次（不抢启动期资源），
 /// 之后每 6 小时 ± 抖动一次。每轮开头重读开关，用户关掉后下一轮即生效。
+///
+/// 不迁入 scheduler：check_and_notify 是阻塞网络 IO（reqwest blocking + 超时），
+/// 放进 1s 节拍的调度线程会把托盘刷新卡住整个网络超时窗口——故保持专用线程，
+/// 但循环体必须 panic 隔离（scheduler::run 同款 catch_unwind）：否则任何一轮 panic
+/// 都让线程死透，更新检查从此静默停摆且无日志——正是本项目反复修的失效模式。
 pub fn spawn_update_checker(app: tauri::AppHandle) {
     let _ = std::thread::Builder::new()
         .name("niuma-update-check".to_string())
         .spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
             loop {
-                let enabled = {
-                    let state = app.state::<crate::AppState>();
-                    let cfg = crate::sync::lock(&state.config, "state.config");
-                    cfg.update_auto_check
+                let body = || {
+                    let enabled = {
+                        let state = app.state::<crate::AppState>();
+                        let cfg = crate::sync::lock(&state.config, "state.config");
+                        cfg.update_auto_check
+                    };
+                    if enabled {
+                        check_and_notify(&app);
+                    }
                 };
-                if enabled {
-                    check_and_notify(&app);
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).is_err() {
+                    crate::db::debug_log("[update] 自动检查本轮 panic，已跳过（线程存活）");
                 }
                 std::thread::sleep(Duration::from_secs(6 * 3600 + jitter_secs()));
             }

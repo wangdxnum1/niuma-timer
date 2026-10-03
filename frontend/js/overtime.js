@@ -13,26 +13,42 @@ function applyRestOvertimeVisibility(enabled) {
 let otView = null;
 
 // 加班记录加载与渲染
+// 懒渲染契约（同 monitor/insights）：明细表只在加班页可见时重绘——
+// 此前 10 秒轮询停在主页也全量重建隐藏表格、还多拉一份浏览月的 IPC。
+// 主界面「加班战果」卡走单独的轻路径，只拉当月。
 async function loadOvertime() {
   // 加班追踪关闭时不拉取、不展示（历史记录仍保留在 SQLite，开关不影响数据）
   if (!$("overtime_enabled").checked) return;
   const now = new Date();
   const curY = now.getFullYear();
   const curM = now.getMonth() + 1;
-  const vy = otView ? otView.year : curY;
-  const vm = otView ? otView.month : curM;
   try {
-    const ot = await invoke("get_overtime_records", { year: vy, month: vm });
-    renderOtTable(ot);
-    // 主界面「加班总览」固定反映当月：翻到历史月份时要单独拉当月，
-    // 否则主界面会显示 8 月的合计却标着「本月合计」，属于数据错位。
-    if (vy === curY && vm === curM) {
-      renderOtHome(ot);
+    if (curView === "viewOt") {
+      const vy = otView ? otView.year : curY;
+      const vm = otView ? otView.month : curM;
+      const ot = await invoke("get_overtime_records", { year: vy, month: vm });
+      renderOtTable(ot);
+      // 主界面「加班总览」固定反映当月：翻到历史月份时要单独拉当月，
+      // 否则主界面会显示 8 月的合计却标着「本月合计」，属于数据错位。
+      if (vy === curY && vm === curM) {
+        renderOtHome(ot);
+      } else {
+        renderOtHome(await invoke("get_overtime_records", { year: curY, month: curM }));
+      }
     } else {
-      const home = await invoke("get_overtime_records", { year: curY, month: curM });
-      renderOtHome(home);
+      // 不在加班页：只维护主界面当月卡，明细表不碰
+      renderOtHome(await invoke("get_overtime_records", { year: curY, month: curM }));
     }
   } catch (e) {
+    // 与 monitor/bill 同标准：失败要可见。写进小计区（成功重绘会整体重画），
+    // 轮询场景写 DOM 文本不会像 toast 那样轰炸。
+    if (curView === "viewOt") {
+      const sum = $("otMonthSummary");
+      if (sum) {
+        sum.classList.add("empty");
+        sum.textContent = "加班明细加载失败（详见 debug.log）";
+      }
+    }
     console.error("loadOvertime error:", e);
   }
 }

@@ -327,10 +327,15 @@ pub fn load() -> Config {
             let ts = Local::now().format("%Y%m%d-%H%M%S");
             let bak = path.with_file_name(format!("config.json.corrupt-{ts}.bak"));
             let _ = fs::rename(&path, &bak);
+            // release 无控制台，eprintln 之外必须落 debug.log 留痕（理由同下 Unreadable）
             eprintln!(
                 "[config] config.json 解析失败，已备份为 {}（回退默认配置）",
                 bak.display()
             );
+            crate::db::debug_log(&format!(
+                "[config] config.json 解析失败（损坏/写半截），已备份为 {}，回退默认配置",
+                bak.display()
+            ));
             let cfg = Config::default();
             let _ = save(&cfg);
             cfg

@@ -26,7 +26,9 @@ pub(crate) fn load_config(state: State<AppState>) -> config::Config {
     sync::lock(&state.config, "state.config").clone()
 }
 
-#[tauri::command]
+/// async：关闭应用监控的保存会经 apply_monitor_switches → app_usage::shutdown()
+/// 触发一次结算落库，「立即整理」持锁秒级时不得让保存卡在主线程等锁（同 cmds_bill）。
+#[tauri::command(async)]
 pub(crate) fn save_config(
     state: State<AppState>,
     app: tauri::AppHandle,

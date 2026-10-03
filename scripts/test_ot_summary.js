@@ -52,6 +52,11 @@ has("CSS: .os-amount 金色金额", css, ".os-amount {");
 has("CSS: .os-meta .cell 统计格", css, ".os-meta .cell {");
 has("CSS: 金色金额色值 #ffd650", css, "#ffd650");
 
+// -------------------------------------------------- 4. 懒渲染与失败可见性（技术债批次二）
+has("loadOvertime 按视图门闸：明细表只在加班页重绘", appSrc, 'if (curView === "viewOt") {');
+has("主页轻路径：不在加班页只维护当月卡", appSrc, "不在加班页：只维护主界面当月卡");
+has("失败文案落在小计区（成功重绘会重画）", appSrc, "加班明细加载失败（详见 debug.log）");
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

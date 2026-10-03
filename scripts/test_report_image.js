@@ -116,6 +116,11 @@ ok("剪贴板失败降级为仅保存（不阻断）", /typeof ClipboardItem ===
   /已复制剪贴板，并保存到 /.test(billSrc));
 ok("图片按桶条数自适应柱宽", /const barW = Math\.min\(52, \(areaR - areaL - gap \* \(n - 1\)\) \/ n\);/.test(billSrc));
 
+ok("连点守卫：exportingImg 旗标 + 按钮禁用（同 downloadCsv 的 exportingCsv）",
+  /let exportingImg = false;/.test(billSrc) &&
+  /if \(btn\) btn\.disabled = true;/.test(billSrc) &&
+  /exportingImg = false;[\s\S]{0,40}if \(btn\) btn\.disabled = false;/.test(billSrc));
+
 console.log("");
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

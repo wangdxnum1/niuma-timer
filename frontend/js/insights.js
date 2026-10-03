@@ -413,6 +413,12 @@ async function loadDayTimeline() {
     }
   } catch (e) {
     flog("get_day_timeline ERR: " + (e && e.message ? e.message : String(e)));
+    // 与 monitor/bill 同标准：失败要可见，不再静默空白（此前 tlEmpty 因未渲染保持隐藏，
+    // 时间线 tab 永久空白且无文案）。写进行容器 tlRows——成功重绘会先清空它；
+    // 不动 tlEmpty，那里的文案语义是「没有记录」，与「加载失败」必须可区分。
+    if (generation === timelineGeneration && tab === curBillTab && curView === "viewBill") {
+      $("tlRows").innerHTML = '<p class="hint">时间线加载失败（详见 debug.log）</p>';
+    }
   }
 }
 
@@ -498,6 +504,11 @@ async function loadFocusSummary() {
     }
   } catch (e) {
     flog("get_focus_summary ERR: " + (e && e.message ? e.message : String(e)));
+    // 同 loadDayTimeline：失败要可见（此前四个指标永远显示「—」无解释）。
+    // 写进 focusBars 容器，成功重绘时会被清空重画。
+    if (generation === focusGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill") {
+      $("focusBars").innerHTML = '<p class="hint">专注数据加载失败（详见 debug.log）</p>';
+    }
   }
 }
 
