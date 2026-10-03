@@ -17,7 +17,7 @@
 - 验收方式：逐字节扫描确认无 >0x7F 字节（现在四个文件都是 0）。
 - `build.bat test` 必跑**三个套件**：`cargo test --quiet` → `node scripts/run_all.js` → `python scripts/test_publish_release.py`。CI（`.github/workflows/ci.yml`）另有 `release-engine-tests`、`dep-audit`（cargo-deny advisories）与 `rust-checks`（fmt / clippy `-D warnings` / test / drift guard）。
 - **没有任何入口跑的测试一定会烂掉**：发布引擎套件就是这样在 v1.5.1 上云后静默失效的，直到 commit 8951e22 才接回 `build.bat test` 与 CI。
-- `scripts/test_build_env.js` 把 `build.bat` / `common.bat` 复制到系统临时目录运行；cargo 桩生成的假 exe 只能留在该隔离目录，禁止写入真实 `src-tauri/target`。
+- `scripts/test_build_env.js` 把 `build.bat` / `common.bat` 复制到系统临时目录运行；cargo 桩生成的假 exe 只能留在该隔离目录，禁止写入真实 `src-tauri/target`。测试 runner 设置 `VSCMD_SKIP_SENDTELEMETRY=1`：否则 VS 开发命令行会启动后台 `vctip`，持有临时目录导致 Windows CI 清理时报 `EBUSY`。
 - CI 的 drift guard 会因 `git status --porcelain -- frontend src-tauri` 非空而失败：`build.rs` 自动回写缓存戳与 capability，所以本地改完前端必须 `cargo build` 一次并把自动改动一并提交。
 
 ## 构建环境陷阱

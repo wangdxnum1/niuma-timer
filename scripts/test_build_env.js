@@ -73,6 +73,9 @@ fs.writeFileSync(
   RUNNER,
   [
     "@echo off",
+    // common.bat calls vcvars64 when INCLUDE is absent. VsDevCmd otherwise
+    // starts background telemetry (vctip) in FIXTURE and keeps it locked.
+    'set "VSCMD_SKIP_SENDTELEMETRY=1"',
     'set "CARGO_BIN=call ..\\.tmp\\stubcargo.bat"',
     'set "BUILD_ENV_LOG=' + LOG + '"',
     'set "BUILD_ENV_FIXTURE=' + FIXTURE + '"',
@@ -83,8 +86,7 @@ fs.writeFileSync(
   "ascii"
 );
 // stdio 必须 inherit/ignore：沙箱下 node 的管道 stdio 会被拒（EPERM）
-// Keep spawn's cwd outside FIXTURE: Windows runners can retain a handle to it
-// until after this process exits, which makes immediate fixture cleanup EBUSY.
+// Launch outside FIXTURE; the runner changes into the fixture explicitly.
 const r = spawnSync("cmd", ["/c", RUNNER], { cwd: ROOT, stdio: "inherit" });
 ok("build.bat（无参数，debug→release）整体退出码 0", r.status === 0, "exit=" + r.status);
 
