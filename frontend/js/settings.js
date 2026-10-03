@@ -67,15 +67,31 @@ async function load() {
     }
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
     lastSaved = JSON.stringify(readCfg());
+    // 加载成功才解锁自动保存（见 doSave 门闸）；同时撤掉失败横幅
+    configLoaded = true;
+    showCfgLoadError(false);
   } catch (e) {
     flog("load_config ERR: " + (e && e.message ? e.message : String(e)));
     console.error(e);
+    // 加载失败 = 表单还是空白默认值。此时放行自动保存，用户随手拨一个开关
+    // 就会把空作息/空薪资 merge 进真实配置（merge 按键无条件覆盖）——
+    // 宁可拒绝保存，横幅里给「重新加载」按钮。
+    configLoaded = false;
+    showCfgLoadError(true);
   }
+}
+
+// 设置加载失败横幅：显隐由 load() 控制，重试按钮重新走一遍 load()
+function showCfgLoadError(show) {
+  const el = $("cfgLoadError");
+  if (el) el.classList.toggle("hidden", !show);
 }
 
 // ---- 自动保存（控件失去焦点时触发）----
 let lastSaved = null; // 上次成功保存的配置 JSON 快照，用于去重
 let lastOverride = null; // 上次保存的上班天数，用于判断是否需静默刷新工作日数据
+// 配置是否加载成功。false 时自动保存全部拒绝——这是「用空表单覆盖真实配置」的门闸
+let configLoaded = false;
 
 // 三个监控开关的内存状态（同步自配置；关闭时对应卡片显示停用提示并跳过轮询）
 let monitors = { activity: true, app_usage: true, audio: true };
@@ -278,6 +294,13 @@ function saveNow() {
 }
 
 async function doSave({ silent = false } = {}) {
+  // 门闸：配置没加载成功时，表单里是空白默认值，此刻保存=用空值覆盖真实配置。
+  // 静默保存（切跨度记偏好等）连 toast 都不打，只留日志。
+  if (!configLoaded) {
+    flog("doSave skipped: config not loaded (load_config failed at boot)");
+    if (!silent) showToast("配置未加载，已阻止自动保存——请点设置页顶部「重新加载」", "err");
+    return;
+  }
   const cfg = readCfg();
   try {
     await invoke("save_config", { cfg });
@@ -307,3 +330,7 @@ function showToast(msg, type) {
   }, dur);
 }
 
+
+// 加载失败横幅的「重新加载」按钮：属于本文件的加载职责，绑在这里而非 monitor.js。
+// 脚本在 body 末尾加载，DOM 此时已就绪，可直接绑定。
+$("cfgRetryBtn").addEventListener("click", async () => { await load(); });

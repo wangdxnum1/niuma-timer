@@ -33,10 +33,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # publish_release.py + its offline suite. Local-only until now, which is
-      # exactly why it silently drifted after v1.5.1 moved publishing to CI.
+      # publish_release.py + push_via_api.py offline suites. Local-only until
+      # now, which is exactly why the release engine silently drifted after
+      # v1.5.1 moved publishing to CI.
       - name: Run release-engine tests
-        run: python scripts/test_publish_release.py
+        run: |
+          python scripts/test_publish_release.py
+          python scripts/test_push_via_api.py
 
   dep-audit:
     runs-on: ubuntu-latest

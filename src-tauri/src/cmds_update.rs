@@ -22,7 +22,8 @@ pub(crate) async fn check_update(app: tauri::AppHandle) -> Result<update::Update
         let state = app.state::<AppState>();
         let mut cfg = sync::lock(&state.config, "state.config");
         cfg.update_last_check = Some(chrono::Local::now().to_rfc3339());
-        config::save(&cfg);
+        // 时间戳性质的记账，落盘失败由 save 记 debug.log，检查结果照常返回
+        let _ = config::save(&cfg);
     }
     Ok(info)
 }
@@ -244,7 +245,8 @@ pub(crate) fn skip_update_version(app: tauri::AppHandle, version: String) -> Res
     let state = app.state::<AppState>();
     let mut cfg = sync::lock(&state.config, "state.config");
     cfg.update_skipped_version = Some(version);
-    config::save(&cfg);
+    // 用户显式操作：写不进去要让前端知道，不能弹了「已跳过」重启后又冒出来
+    config::save(&cfg)?;
     Ok(())
 }
 

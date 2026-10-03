@@ -123,6 +123,23 @@ pub(crate) const CREATE_FOCUS_SESSIONS_IDX: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_date ON focus_sessions (date);
 "#;
 
+/// 全部业务表名单——**单一真相源**。备份完整性校验（backup 解包后必须齐全）与
+/// 保留期清理（maintain::DATED_TABLES）都以此为准；两侧等价性由
+/// `business_tables_match_ddl`（本文件）与 maintain 的
+/// `dated_tables_cover_business_tables` 测试守住，新增表漏登记立刻红。
+/// 教训：backup 自己抄的那份清单漏登了 v1.7.0 新增的 focus_sessions，
+/// 残缺备份照常通过校验——清单漂移不能再靠人眼对齐。
+pub(crate) const BUSINESS_TABLES: &[&str] = &[
+    "ot_records",
+    "act_hourly",
+    "act_keys",
+    "app_usage",
+    "app_usage_hourly",
+    "audio_usage",
+    "audio_usage_hourly",
+    "focus_sessions",
+];
+
 /// 全部建表语句（幂等，重复执行无副作用）。
 ///
 /// 按表拆开而非常量拼接：`concat!` 只接受字面量、无法组合 `const &str`；
@@ -214,6 +231,11 @@ pub fn conn() -> &'static Mutex<Connection> {
         let db = Connection::open(db_path()).expect("无法打开 niuma.db");
         let _ = db.busy_timeout(Duration::from_secs(5));
         let _ = db.pragma_update(None, "journal_mode", "WAL");
+        // WAL 下 synchronous=NORMAL（SQLite 官方推荐组合）：提交不再逐次 fsync，
+        // 断电最多丢最近几笔提交、绝不会损坏库。此前从未设置过该 pragma（一直是
+        // 默认 FULL），app_usage.rs 里「WAL + synchronous=NORMAL」的注释先行、
+        // 本行直到现在才落地。
+        let _ = db.pragma_update(None, "synchronous", "NORMAL");
         init_tables(&db);
         Mutex::new(db)
     })
@@ -302,5 +324,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "老库应补上 cross_midnight 列");
+    }
+
+    /// BUSINESS_TABLES 与 TABLE_DDL 实际建出的表必须**双向等价**：名单里有而
+    /// 库里没有（名字写错）或库里有而名单漏登（新增表忘登记，备份校验/保留期
+    /// 清理双双失守）都立刻红。
+    #[test]
+    fn business_tables_match_ddl() {
+        let db = Connection::open_in_memory().unwrap();
+        init_tables(&db);
+        let mut actual: Vec<String> = db
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        actual.sort();
+        let mut expected: Vec<&str> = super::BUSINESS_TABLES.to_vec();
+        expected.sort();
+        assert_eq!(actual, expected, "实际建表与业务表名单不一致");
     }
 }

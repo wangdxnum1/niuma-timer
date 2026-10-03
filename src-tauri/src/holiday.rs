@@ -1,8 +1,8 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config;
 
@@ -63,18 +63,62 @@ fn cache_path(year: i32) -> PathBuf {
     config::config_dir().join(format!("holiday_{}.json", year))
 }
 
-/// 读取本地缓存
+/// 读取本地缓存。读失败 / 解析失败一律 None（上层走联网 → 内置表 → weekday_count 兜底），
+/// 但解析失败必须留痕：先备份成 `.corrupt-时间戳.bak` 再返回 None——写坏的文件若原样
+/// 留在磁盘上，会天天静默压住真实数据（断电写半截的场景），速率偏差 ~18% 用户无从知晓。
+/// 错误消息经 debug_log 落盘（放外壳是为了单测不往真实 debug.log 写行）。
 pub fn load_cache(year: i32) -> Option<HolidayCache> {
-    let s = fs::read_to_string(cache_path(year)).ok()?;
-    let c = serde_json::from_str::<HolidayCache>(&s).ok()?;
-    Some(c)
+    match load_cache_inner(&cache_path(year)) {
+        Ok(c) => c,
+        Err(msg) => {
+            crate::db::debug_log(&msg);
+            None
+        }
+    }
 }
 
-/// 写入本地缓存
+/// [`load_cache`] 的可测内核：Err(String) = 文件在但读不了/解析失败（已尽力备份），
+/// Ok(None) = 文件不存在，Ok(Some) = 合法缓存。
+fn load_cache_inner(path: &Path) -> Result<Option<HolidayCache>, String> {
+    let s = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("[holiday] {} 读取失败: {e}", path.display())),
+    };
+    match serde_json::from_str::<HolidayCache>(&s) {
+        Ok(c) => Ok(Some(c)),
+        Err(e) => {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("holiday.json");
+            let ts = Local::now().format("%Y%m%d-%H%M%S");
+            let bak = path.with_file_name(format!("{name}.corrupt-{ts}.bak"));
+            let renamed = fs::rename(path, &bak).is_ok();
+            Err(format!(
+                "[holiday] {} 解析失败（{e}），{}，改用联网/内置兜底",
+                path.display(),
+                if renamed {
+                    format!("已备份为 {}", bak.display())
+                } else {
+                    "备份失败（原文件保留在磁盘）".to_string()
+                }
+            ))
+        }
+    }
+}
+
+/// 写入本地缓存：走 [`config::atomic_write`] 原子写（断电不留半截文件），
+/// 失败记 debug_log——缓存写不进去下次启动只是重新拉网，静默失败才最难排查。
 pub fn save_cache(c: &HolidayCache) {
     let _ = fs::create_dir_all(config::config_dir());
-    if let Ok(s) = serde_json::to_string(c) {
-        let _ = fs::write(cache_path(c.year), s);
+    match serde_json::to_string(c) {
+        Ok(s) => {
+            if let Err(e) = config::atomic_write(&cache_path(c.year), &s) {
+                crate::db::debug_log(&format!("[holiday] holiday_{}.json 写入失败: {e}", c.year));
+            }
+        }
+        Err(e) => crate::db::debug_log(&format!("[holiday] 节假日缓存序列化失败: {e}")),
     }
 }
 
@@ -367,5 +411,57 @@ mod tests {
             let dim = NaiveDate::from_ymd_opt(y, 12, 31).unwrap().ordinal() as usize;
             assert_eq!(c.days.len(), dim, "{y} 年天数不完整");
         }
+    }
+
+    // ---- load_cache_inner：缓存读侧四分类（holiday.json 的防损坏同 config.json）----
+    // 用临时目录，绝不碰真实的 %APPDATA%/niuma-timer/holiday_*.json。
+
+    #[test]
+    fn load_cache_missing_is_none() {
+        let dir = std::env::temp_dir().join(format!("niuma-hol-miss-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let p = dir.join("holiday_2099.json");
+        // HolidayCache 未实现 PartialEq，用 matches! 而非 assert_eq!
+        assert!(matches!(load_cache_inner(&p), Ok(None)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_cache_valid_json_roundtrips() {
+        let dir = std::env::temp_dir().join(format!("niuma-hol-ok-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let p = dir.join("holiday_2026.json");
+        fs::write(
+            &p,
+            r#"{"year":2026,"fetched_at":5,"days":{"2026-10-01":3}}"#,
+        )
+        .unwrap();
+        let c = load_cache_inner(&p).unwrap().expect("应解析成功");
+        assert_eq!(c.year, 2026);
+        assert_eq!(c.day_type(d("2026-10-01")), Some(3));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 解析失败 = Err 且**已备份**：原文件改名 .corrupt-*.bak，不再原样留盘
+    /// 天天静默压住兜底数据。这正是 config.json 走过的同一条修复路径。
+    #[test]
+    fn load_cache_corrupt_is_backed_up() {
+        let dir = std::env::temp_dir().join(format!("niuma-hol-bad-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let p = dir.join("holiday_2026.json");
+        fs::write(&p, "{ half written").unwrap();
+        let err = load_cache_inner(&p).unwrap_err();
+        assert!(err.contains("解析失败"), "实际: {err}");
+        assert!(err.contains("已备份"), "实际: {err}");
+        // 原文件已改名；备份内容 = 原始损坏内容
+        assert!(!p.exists());
+        let baks: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|q| q.extension().map(|x| x == "bak").unwrap_or(false))
+            .collect();
+        assert_eq!(baks.len(), 1, "应恰好一个备份: {baks:?}");
+        assert_eq!(fs::read_to_string(&baks[0]).unwrap(), "{ half written");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

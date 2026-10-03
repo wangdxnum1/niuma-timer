@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=86d7b7a0" />
+    <link rel="stylesheet" href="styles.css?v=9121af67" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -423,6 +423,13 @@
     <div class="app hidden" id="viewSettings">
       <div class="page-head">
         <h2>设置</h2>
+      </div>
+
+      <!-- 配置加载失败横幅：显示期间自动保存被门闸暂停（settings.js configLoaded），
+           防止空白表单把真实配置覆盖掉。load() 成功后自动隐藏。 -->
+      <div class="cfg-load-error hidden" id="cfgLoadError">
+        <span>设置加载失败：为防止用空表单覆盖真实配置，自动保存已暂停。</span>
+        <button id="cfgRetryBtn" class="cfg-retry-btn">重新加载</button>
       </div>
 
       <!-- 卡①：怎么算钱（原「基础配置」拆出） -->
@@ -895,16 +902,16 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=86d7b7a0"></script>
-    <script src="js/settings.js?v=86d7b7a0"></script>
-    <script src="js/hero.js?v=86d7b7a0"></script>
-    <script src="js/overtime.js?v=86d7b7a0"></script>
-    <script src="js/monitor.js?v=86d7b7a0"></script>
-    <script src="js/bill.js?v=86d7b7a0"></script>
-    <script src="js/insights.js?v=86d7b7a0"></script>
-    <script src="js/storage.js?v=86d7b7a0"></script>
-    <script src="js/update.js?v=86d7b7a0"></script>
-    <script src="js/boot.js?v=86d7b7a0"></script>
+    <script src="js/core.js?v=9121af67"></script>
+    <script src="js/settings.js?v=9121af67"></script>
+    <script src="js/hero.js?v=9121af67"></script>
+    <script src="js/overtime.js?v=9121af67"></script>
+    <script src="js/monitor.js?v=9121af67"></script>
+    <script src="js/bill.js?v=9121af67"></script>
+    <script src="js/insights.js?v=9121af67"></script>
+    <script src="js/storage.js?v=9121af67"></script>
+    <script src="js/update.js?v=9121af67"></script>
+    <script src="js/boot.js?v=9121af67"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

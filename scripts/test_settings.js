@@ -217,5 +217,59 @@ ok(
     appSrc
   )
 );
-console.log(pass + " passed, " + fail + " failed");
-process.exit(fail ? 1 : 0);
+
+console.log("== 配置加载门闸（load 失败 → 拒绝自动保存）==");
+// 1) load() 成功解锁、失败上闸并挂横幅
+ok(
+  "load 成功后 configLoaded = true",
+  /lastSaved = JSON\.stringify\(readCfg\(\)\);[\s\S]{0,80}configLoaded = true;[\s\S]{0,60}showCfgLoadError\(false\)/.test(
+    appSrc
+  )
+);
+ok(
+  "load 失败后 configLoaded = false 并显示横幅",
+  /configLoaded = false;[\s\S]{0,60}showCfgLoadError\(true\)/.test(appSrc)
+);
+// 2) 横幅结构 + 重试按钮重新走 load()
+ok(
+  "设置页有加载失败横幅与重试按钮",
+  htmlSrc.indexOf('id="cfgLoadError"') >= 0 && htmlSrc.indexOf('id="cfgRetryBtn"') >= 0
+);
+ok(
+  "重试按钮重新调用 load()",
+  /\$\("cfgRetryBtn"\)\.addEventListener\("click", async \(\) => \{ await load\(\); \}\)/.test(appSrc)
+);
+// 3) 行为：configLoaded=false 时 doSave 不发 save_config、不更新快照
+const gateCode =
+  "let configLoaded = false;\n" +
+  pick(/async function doSave\(\{ silent = false \} = \{\}\) \{[\s\S]*?\n\}/, "doSave") +
+  "\n; return { doSave, setLoaded: (v) => { configLoaded = v; } };";
+const saveCalls = [];
+const toasts = [];
+const gateApi = new Function(
+  "invoke", "showToast", "flog", "silentRefresh",
+  "return (function(){\n" + gateCode + "\n})();"
+)(
+  (cmd) => { saveCalls.push(cmd); return Promise.resolve(); },
+  (msg, type) => toasts.push(msg + "|" + type),
+  () => {},
+  () => {}
+);
+global.readCfg = () => ({ workdays_override: null }); // doSave 成功路径引用，沙盒给空配置
+(async () => {
+  await gateApi.doSave({});
+  ok("未加载时 doSave 不发 save_config", saveCalls.length === 0);
+  ok("未加载时给出阻止提示", toasts.some((t) => t.indexOf("阻止自动保存") >= 0));
+  await gateApi.doSave({ silent: true });
+  ok("未加载时静默保存同样拒绝", saveCalls.length === 0 && toasts.length === 1);
+  gateApi.setLoaded(true);
+  await gateApi.doSave({});
+  ok("加载成功后 doSave 正常保存", saveCalls.length === 1 && saveCalls[0] === "save_config");
+  summary();
+})();
+
+function summary() {
+  console.log("");
+  console.log(pass + " passed, " + fail + " failed");
+  process.exit(fail ? 1 : 0);
+}

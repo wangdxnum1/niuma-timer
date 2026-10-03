@@ -37,7 +37,10 @@ pub(crate) fn save_config(
     let merged = {
         let mut existing = sync::lock(&state.config, "state.config");
         let merged = config::merge_from_value(&existing, &cfg)?;
-        config::save(&merged);
+        // 先落盘、后更新内存：写盘失败必须把 Err 抛给前端（前端弹「保存失败」、
+        // 快照不前移，下次失焦自动重试），绝不能照常改内存假装成功——
+        // 那样内存与磁盘分叉，重启即回滚，是「配置静默丢失」的假成功变体。
+        config::save(&merged)?;
         *existing = merged.clone();
         merged
     };

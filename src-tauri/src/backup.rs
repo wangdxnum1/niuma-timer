@@ -237,16 +237,7 @@ pub fn list_backups() -> Vec<BackupEntry> {
 
 use rusqlite::Connection;
 
-/// 7 张业务表：解出的库必须齐全，少一张就不是完整备份。
-const REQUIRED_TABLES: &[&str] = &[
-    "ot_records",
-    "act_hourly",
-    "act_keys",
-    "app_usage",
-    "app_usage_hourly",
-    "audio_usage",
-    "audio_usage_hourly",
-];
+use crate::db::BUSINESS_TABLES;
 
 /// 还原第一步：校验 + 铺 pending。校验任一环失败即 Err 且零磁盘副作用。
 pub fn stage_restore(name: &str, current_version: &str) -> Result<String, String> {
@@ -332,7 +323,10 @@ fn validate_archive(zip_path: &Path, check_db: &Path) -> Result<Option<Vec<u8>>,
     if check != "ok" {
         return Err(format!("完整性检查未通过：{check}"));
     }
-    for table in REQUIRED_TABLES {
+    // 解出的库必须含全部业务表（db::BUSINESS_TABLES 单一真相源，随建表同步），
+    // 少一张就不是完整备份。此前这里是本文件手抄的清单，漏登 v1.7.0 新增的
+    // focus_sessions——缺专注表的残缺备份照常通过校验，还原后专注历史静默清零。
+    for table in BUSINESS_TABLES {
         let exists: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",

@@ -30,7 +30,9 @@ const ICON_MAX_AGE_DAYS: i64 = 180;
 /// 全部为 `date TEXT` 且以 `YYYY-MM-DD` 存储，字典序即时间序，可直接字符串比较。
 ///
 /// 表名/列名都是编译期常量、不涉及用户输入，故 `format!` 拼 SQL 无注入风险。
-const DATED_TABLES: &[(&str, &str)] = &[
+/// 表集合必须与 [`crate::db::BUSINESS_TABLES`] 等价（等价性测试见本模块尾部）：
+/// 漏登的表既不进保留期清理、也不进备份完整性校验。
+pub(crate) const DATED_TABLES: &[(&str, &str)] = &[
     ("ot_records", "date"),
     ("act_hourly", "date"),
     ("act_keys", "date"),
@@ -597,6 +599,18 @@ mod tests {
             cutoff_for(&cfg_with_retention(365), t),
             Some(NaiveDate::from_ymd_opt(2026, 9, 11).unwrap())
         );
+    }
+
+    /// DATED_TABLES 必须与 db::BUSINESS_TABLES（建表 DDL 的伴生名单）双向等价：
+    /// 新增表只登一边就立刻红——漏登 DATED_TABLES 的表会无限增长且不过保留期
+    /// 清理，漏登 BUSINESS_TABLES 的表在备份完整性校验里是隐形表。
+    #[test]
+    fn dated_tables_cover_business_tables() {
+        let mut dated: Vec<&str> = DATED_TABLES.iter().map(|(t, _)| *t).collect();
+        dated.sort_unstable();
+        let mut biz: Vec<&str> = crate::db::BUSINESS_TABLES.to_vec();
+        biz.sort_unstable();
+        assert_eq!(dated, biz, "DATED_TABLES 与 db::BUSINESS_TABLES 不一致");
     }
 
     /// 回归：删除只影响早于 cutoff 的日期，当天与未来数据不受影响

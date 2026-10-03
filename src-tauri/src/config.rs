@@ -318,7 +318,8 @@ pub fn load() -> Config {
     match read_config_file(&path) {
         LoadResult::Loaded(mut cfg) => {
             if stamp_override_month(&mut cfg) {
-                save(&cfg);
+                // 补「所属月」戳属维护性落盘，失败由 save 记日志，不影响本次加载
+                let _ = save(&cfg);
             }
             cfg
         }
@@ -331,7 +332,7 @@ pub fn load() -> Config {
                 bak.display()
             );
             let cfg = Config::default();
-            save(&cfg);
+            let _ = save(&cfg);
             cfg
         }
         LoadResult::Unreadable(e) => {
@@ -343,43 +344,49 @@ pub fn load() -> Config {
         }
         LoadResult::Missing => {
             let cfg = Config::default();
-            save(&cfg);
+            let _ = save(&cfg);
             cfg
         }
     }
 }
 
-/// 写入配置（原子写：先写临时文件再 rename 覆盖）。
-/// 避免写到一半崩溃 / 断电，残留半截文件导致下次启动解析失败、整份配置被默认值替换。
-/// Windows 下 rename 不能覆盖已存在目标，故先删旧文件再移动（极小时间窗，单机可接受）；
-/// 任一环节失败均退回直接覆盖写，至少保证内存态落盘。
-///
-/// 全部失败路径都会记入 debug.log——配置写不进去 = 用户改动静默丢失，
+/// 原子写：先写同目录临时文件，再 rename 覆盖目标。config.json 与 holiday_{year}.json
+/// 共用。两步之间崩溃最多残留 .tmp——目标文件要么是旧内容要么是新内容，绝无半截。
+/// Rust 的 fs::rename 在 Windows 走 MoveFileExW(MOVEFILE_REPLACE_EXISTING)，可直接
+/// 覆盖已存在目标（旧实现「先删再改名」基于 rename 不能覆盖的错误假设，反而制造了
+/// 一个两步间崩溃后目标文件缺失、下次启动被当首跑的窗口）；rename 失败（跨卷 /
+/// 目标被占用等）退回直接覆盖写。返回 Err 时目标文件内容未被破坏。
+pub(crate) fn atomic_write(target: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = target.with_extension("json.tmp");
+    match fs::write(&tmp, contents).and_then(|()| fs::rename(&tmp, target)) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let _ = fs::remove_file(&tmp);
+            fs::write(target, contents)
+        }
+    }
+}
+
+/// 写入配置（原子写，见 [`atomic_write`]）。**失败返回 Err**，调用方必须让用户知道，
+/// 不得假装保存成功——磁盘满 / 被杀软占用时，内存态与磁盘态分叉，重启即回滚，
+/// 「已自动保存」的假成功正是配置静默丢失的变体。
+/// 全部失败路径同时记入 debug.log——配置写不进去 = 用户改动静默丢失，
 /// 这类问题绝不允许无声无息（曾实测「标签保存成功但 config 没落盘」无从排查）。
-pub fn save(cfg: &Config) {
+pub fn save(cfg: &Config) -> Result<(), String> {
     let dir = config_dir();
     let _ = fs::create_dir_all(&dir);
-    if let Ok(s) = serde_json::to_string_pretty(cfg) {
-        let tmp = config_path().with_extension("json.tmp");
-        if fs::write(&tmp, &s).is_ok() {
-            let removed = fs::remove_file(config_path());
-            if fs::rename(&tmp, config_path()).is_ok() {
-                return;
-            }
-            // rename 失败（如跨卷）：退回直接覆盖写
-            if fs::write(config_path(), &s).is_ok() {
-                return;
-            }
-            crate::db::debug_log(&format!(
-                "[config] 配置保存失败：rename 与直接写均失败（remove={:?}）",
-                removed.map(|_| "ok").map_err(|e| e.to_string())
-            ));
-            return;
+    let s = match serde_json::to_string_pretty(cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::db::debug_log("[config] 配置保存失败：序列化失败");
+            return Err(format!("配置序列化失败: {e}"));
         }
-        crate::db::debug_log("[config] 配置保存失败：临时文件写入失败");
-    } else {
-        crate::db::debug_log("[config] 配置保存失败：序列化失败");
+    };
+    if let Err(e) = atomic_write(&config_path(), &s) {
+        crate::db::debug_log("[config] 配置保存失败：临时文件与直接写均未成功");
+        return Err(format!("配置写入失败: {e}"));
     }
+    Ok(())
 }
 
 /// 把前端传来的部分字段合并进现有配置。失败时返回 Err，调用方不得假装保存成功。
@@ -549,5 +556,23 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         assert!(matches!(read_config_file(&p), LoadResult::Unreadable(_)));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 原子写必须能直接覆盖已存在目标（rename 走 MOVEFILE_REPLACE_EXISTING），
+    /// 且成功后不留 .tmp。 holiday_{year}.json 与 config.json 共用此函数。
+    #[test]
+    fn atomic_write_replaces_existing_file() {
+        let dir = tmp_dir("atomic");
+        let p = dir.join("t.json");
+        fs::write(&p, "old").unwrap();
+        atomic_write(&p, "new").unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "new");
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "残留临时文件: {leftovers:?}");
+        cleanup(&p, &dir);
     }
 }

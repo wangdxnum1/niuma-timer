@@ -67,6 +67,7 @@
 - **WAL 必须显式 `PRAGMA wal_checkpoint(TRUNCATE)` 才收缩**（`maintain.rs::checkpoint_wal`）：自动 checkpoint 只复用空间；托盘常驻使「最后一个连接关闭」永不发生，实测 WAL 停在 4.15MB 而主库只有 245KB。
 - `run_daily` 顺序是**收缩 → 删数据 → 再收缩**：DELETE 自己会写 WAL，只在开头收缩的话用户点「立即整理」看不到效果。
 - `retention_days` 默认 **0 = 永久保留**，唯一落点是 `cutoff_for`（有单测）。清理表清单是 `DATED_TABLES`（当前 8 张，含 `focus_sessions`）——新增按日期分桶的表要同时改这里。
+- **新增业务表必须登记两处**：`db.rs` 的 `TABLE_DDL`（建表）与 `db::BUSINESS_TABLES`（名单真相源，备份完整性校验 `backup::stage_restore` 与保留期清理都从它取表集合）。「名单 ↔ 实际建表」「DATED_TABLES ↔ BUSINESS_TABLES」两条等价性测试让漏登记立刻红——backup 手抄清单漏登 focus_sessions 的既成事实就是这么来的。
 - **加班归属日由锁屏时刻自己决定**（`resolve_overtime_day`：早于 06:00 归前一天且 +24h）。`calc_record_auto` 故意**不接收日期参数**：调用方传「检测时刻的日期」会把凌晨锁屏记到第二天，通宵加班直接丢失。
 - `DayKind` 三档（补班日算 Workday）；休息日/节假日用独立起算 `weekend_ot_start`（默认 `DEFAULT_REST_OT_START = "09:00"`，**不能沿用 pm_end**，否则上午来下午走的人一分钱算不到）与独立费率（法定节假日 → 休息日 → 工作日逐级回退）。
 - **远程会话判定不能用「进程是否存在」**：第三方远程软件常驻（开着 UU 没连）会被误判成远程，自动加班被永久关掉。现判定 = `remote::is_remote_active` = `SM_REMOTESESSION` ∪ 最近 `REMOTE_WINDOW`(60s) 内有远程虚拟设备输入，接入点 `main.rs` 的 `overtime_exclude_remote` 闸门与 `focus.rs`。

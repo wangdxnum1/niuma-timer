@@ -142,8 +142,13 @@ fn last_day_of(year: i32, month: u32) -> u32 {
 
 /// 跨度 + 偏移 → 闭区间 [start, end]（偏移 0 = 当前周期；负值不合法按 0 处理，未来封顶）。
 /// Week 分支与原 insights::week_bounds 逐位等价（B5 删除原函数后以此为准）。
+///
+/// offset 是前端经 IPC 直达的 i64，**必须钳制**：极端值会在 Month 分支经 `as i32`
+/// 截断成任意年份，让 `from_ymd_opt` 返回 None 后 unwrap panic——异步命令的 panic
+/// 被任务边界吞掉，前端 invoke 永不 resolve，对应视图静默死亡且无任何日志。
+/// 1200 个周期 ≈ 百年，远超 UI 箭头可达的翻页深度。
 pub fn period_bounds(span: Span, offset: i64, today: NaiveDate) -> (NaiveDate, NaiveDate) {
-    let off = offset.max(0);
+    let off = offset.clamp(0, 1200);
     match span {
         Span::Week => {
             let ws = week_start_of(today - Duration::weeks(off));
@@ -1008,6 +1013,26 @@ mod tests {
                 NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
             )
         );
+    }
+
+    /// 回归：offset 是前端经 IPC 直达的 i64，极端值必须被钳制而不是 panic。
+    /// 此前 i64::MAX 在 Month 分支经 `as i32` 截断会造出任意年份，
+    /// `from_ymd_opt` 返回 None 后 unwrap 直接炸——异步命令的 panic 被吞掉，
+    /// 前端 invoke 永不 resolve（热力图/身体账单静默死亡）。
+    #[test]
+    fn period_bounds_extreme_offset_is_clamped_not_panics() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        for span in [Span::Week, Span::Month, Span::Year] {
+            // i64::MAX 钳到 1200：结果与显式传 1200 完全一致，且区间合法
+            let (s, e) = period_bounds(span, i64::MAX, today);
+            assert_eq!((s, e), period_bounds(span, 1200, today));
+            assert!(s <= e, "{span:?}: start {s} > end {e}");
+            // 负值与 0 等价（未来封顶）
+            assert_eq!(
+                period_bounds(span, -9_223_372_036_854_775_808, today),
+                period_bounds(span, 0, today)
+            );
+        }
     }
 
     #[test]

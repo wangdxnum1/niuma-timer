@@ -2281,3 +2281,28 @@ button:active {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ====== 设置加载失败横幅：自动保存被门闸暂停时的可见提示（toast.err 同色系）====== */
+.cfg-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #ff8a8a;
+  background: #2d1f1f;
+  border: 1px solid rgba(255, 138, 138, 0.35);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.cfg-retry-btn {
+  background: rgba(255, 138, 138, 0.12);
+  color: #ff8a8a;
+  border: 1px solid rgba(255, 138, 138, 0.35);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}

@@ -150,7 +150,8 @@ fn payday_tick(app: &tauri::AppHandle, cfg: &Config) {
             return;
         }
         current.remind_payday_last_date = Some(today.to_string());
-        crate::config::save(&current);
+        // 时间戳性质的记账：落盘失败由 save 记 debug.log，内存态已戳、当天不会重放
+        let _ = crate::config::save(&current);
         PAYDAY_DONE.store(true, Ordering::SeqCst);
     }
     let month = bill

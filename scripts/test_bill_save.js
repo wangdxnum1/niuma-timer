@@ -16,6 +16,7 @@ function fn(name) {
   const button = {dataset: {span: 'month'}, addEventListener: (_, cb) => {click = cb;}};
   const ctx = {
     lastSaved: JSON.stringify(cfg), lastOverride: null, weekOffset: 3,
+    configLoaded: true, // 设置加载成功的常态；门闸行为（false 拒存）由 test_settings.js 钉
     readCfg: () => ({...cfg}),
     invoke: async (command, args) => {calls.push({command, args}); if (fail) throw Error('disk unavailable');},
     showToast: (...args) => toasts.push(args), silentRefresh() {}, loadBillTab() {},

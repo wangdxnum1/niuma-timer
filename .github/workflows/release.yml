@@ -114,7 +114,9 @@ jobs:
         run: node scripts/run_all.js
 
       - name: Release-engine tests
-        run: python scripts/test_publish_release.py
+        run: |
+          python scripts/test_publish_release.py
+          python scripts/test_push_via_api.py
 
       - name: cargo deny (security advisories)
         working-directory: src-tauri

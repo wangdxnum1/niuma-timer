@@ -778,7 +778,8 @@ pub fn take_announcement(app: &tauri::AppHandle) -> Option<String> {
     let mut cfg = crate::sync::lock(&state.config, "state.config");
     let changed = is_just_upgraded(cfg.update_last_run_version.as_deref(), current);
     cfg.update_last_run_version = Some(current.to_string());
-    crate::config::save(&cfg);
+    // 时间戳性质的记账，落盘失败由 save 记 debug.log，公告展示不受影响
+    let _ = crate::config::save(&cfg);
     if !changed {
         return None;
     }
@@ -837,7 +838,8 @@ pub fn check_and_notify(app: &tauri::AppHandle) -> Option<String> {
         let state = app.state::<crate::AppState>();
         let mut cfg = crate::sync::lock(&state.config, "state.config");
         cfg.update_last_check = Some(chrono::Local::now().to_rfc3339());
-        crate::config::save(&cfg);
+        // 时间戳性质的记账，落盘失败由 save 记 debug.log，检查流程照常
+        let _ = crate::config::save(&cfg);
         cfg.update_skipped_version.clone()
     };
     let current = env!("CARGO_PKG_VERSION");
