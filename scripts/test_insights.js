@@ -44,14 +44,9 @@ has("结构体 WeekTrend", rsInsights, "pub struct WeekTrend");
 has("结构体 BodyDay", rsInsights, "pub struct BodyDay");
 has("结构体 BodyBill", rsInsights, "pub struct BodyBill");
 has("events 口径常量（滚轮格数不计）", rsInsights, 'const EVENTS_EXPR: &str = "SUM(moves)+SUM(`left`)+SUM(dbl)+SUM(`right`)+SUM(wheel)+SUM(mid)+SUM(xbtn)+SUM(keys)"');
-has("中文星期表 WEEKDAYS_CN", rsInsights, 'const WEEKDAYS_CN: [&str; 7]');
+has("中文星期表引用 weekbill 单一实现（2026-10-03 三份拷贝收口）", rsInsights, "use crate::weekbill::{is_workday_of, period_bill, period_bounds, weekday_cn, Span, WEEKDAYS_CN};");
 has("热力图纯函数 assemble", rsInsights, "pub fn hour_heatmap_assemble(");
 has("热力图 with_db 入口", rsInsights, "pub fn hour_heatmap(span: Span, offset: i64)");
-has(
-  "趋势复用 weekbill::period_bill（同源 import，含 v1.6.0 时间线借用的 is_workday_of）",
-  rsInsights,
-  "use crate::weekbill::{is_workday_of, period_bill, period_bounds, Span};"
-);
 has("摸鱼率纯函数 slack_rate_of", rsInsights, "fn slack_rate_of(front: i64, slack: i64)");
 has("前台 0 → 摸鱼率 None（断线不画 0）", rsInsights, "fn slack_rate_of");
 has("身体账单纯函数 assemble", rsInsights, "pub fn body_bill_assemble(");

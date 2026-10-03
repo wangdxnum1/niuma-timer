@@ -4,13 +4,11 @@
 //!   访问一律走 [`with_db`]，不要自己 `conn().lock().unwrap()`；
 //! - WAL 模式：崩溃/断电不损坏数据，读写不互斥；
 //! - 数据库文件：`%APPDATA%/niuma-timer/niuma.db`；
-//! - config.json / holiday_cache.json 保持 JSON（固定体量、一次性读写，迁移无收益）。
+//! - config.json / `holiday_{year}.json`（按年缓存）保持 JSON（固定体量、一次性
+//!   读写，迁移无收益）。
 //!
-//! 表结构：
-//! - `ot_records`   加班记录，date 主键（跨月归档自然消失——按年月过滤即可），
-//!   另有 `source` 列区分自动(0)/手动(1)，手动记录不会被自动 upsert 覆盖
-//! - `act_hourly`   活动统计小时桶，(date, hour) 主键
-//! - `act_keys`     活动统计按键明细，(date, vk) 主键
+//! 表结构以 [`BUSINESS_TABLES`] 为单一真相源（与 TABLE_DDL、备份校验、保留期
+//! 清理的等价性均有测试钉住），本注释不再手抄清单。
 
 use std::fs;
 use std::path::PathBuf;
@@ -140,6 +138,21 @@ pub(crate) const BUSINESS_TABLES: &[&str] = &[
     "focus_sessions",
 ];
 
+/// 业务表引入版本（备份校验向前兼容用）：旧版本备份**合法地**没有后来新增的
+/// 表，缺表仅当「备份 app_version ≥ 引入版本」才判定残缺（见 backup::
+/// backup_should_have_table）。与 BUSINESS_TABLES 一一对应由
+/// `table_since_covers_business_tables` 测试钉住，新增表必须同步登记。
+pub(crate) const TABLE_SINCE: &[(&str, &str)] = &[
+    ("ot_records", "1.0.0"),
+    ("act_hourly", "1.0.0"),
+    ("act_keys", "1.0.0"),
+    ("app_usage", "1.0.0"),
+    ("app_usage_hourly", "1.0.0"),
+    ("audio_usage", "1.0.0"),
+    ("audio_usage_hourly", "1.0.0"),
+    ("focus_sessions", "1.7.0"),
+];
+
 /// 全部建表语句（幂等，重复执行无副作用）。
 ///
 /// 按表拆开而非常量拼接：`concat!` 只接受字面量、无法组合 `const &str`；
@@ -156,13 +169,25 @@ const TABLE_DDL: &[&str] = &[
     CREATE_FOCUS_SESSIONS_IDX,
 ];
 
+/// 开库/建表失败的可见反馈：release 无控制台，裸 panic 只写 panic.log，
+/// 用户侧表现为「双击无反应」——先弹系统消息框给人话提示，再 panic 留档。
+fn fatal_db_error(msg: &str) -> ! {
+    #[cfg(windows)]
+    crate::diag::show_fatal(msg);
+    #[cfg(not(windows))]
+    eprintln!("{msg}");
+    panic!("{msg}");
+}
+
 /// 建全部数据表（幂等，重复执行无副作用）。
 ///
 /// v1.0.0 起已有真实用户库，schema 变更**不能**再靠删库重建：建表后再按
 /// [`EXTRA_COLUMNS`] 幂等补列（见 [`ensure_column`]）。
 pub(crate) fn init_tables(db: &Connection) {
     for ddl in TABLE_DDL {
-        db.execute_batch(ddl).expect("初始化数据库表失败");
+        if let Err(e) = db.execute_batch(ddl) {
+            fatal_db_error(&format!("初始化数据库表失败：{e}"));
+        }
     }
     for (table, col, decl) in EXTRA_COLUMNS {
         ensure_column(db, table, col, decl);
@@ -231,7 +256,12 @@ pub fn conn() -> &'static Mutex<Connection> {
     C.get_or_init(|| {
         let dir = crate::config::config_dir();
         let _ = fs::create_dir_all(&dir);
-        let db = Connection::open(db_path()).expect("无法打开 niuma.db");
+        let db = match Connection::open(db_path()) {
+            Ok(db) => db,
+            Err(e) => fatal_db_error(&format!(
+                "无法打开 niuma.db：{e}（可能被杀毒软件占用、磁盘已满或目录无权限）"
+            )),
+        };
         let _ = db.busy_timeout(Duration::from_secs(5));
         let _ = db.pragma_update(None, "journal_mode", "WAL");
         // WAL 下 synchronous=NORMAL（SQLite 官方推荐组合）：提交不再逐次 fsync，
@@ -349,5 +379,16 @@ mod tests {
         let mut expected: Vec<&str> = super::BUSINESS_TABLES.to_vec();
         expected.sort();
         assert_eq!(actual, expected, "实际建表与业务表名单不一致");
+    }
+
+    /// TABLE_SINCE 引入版本登记与 BUSINESS_TABLES 必须一一对应：新表漏登记，
+    /// 备份校验的向前兼容判定无从谈起（兜底从严、会误拒老备份的合法缺表）。
+    #[test]
+    fn table_since_covers_business_tables() {
+        let mut since: Vec<&str> = super::TABLE_SINCE.iter().map(|(t, _)| *t).collect();
+        since.sort();
+        let mut tables: Vec<&str> = super::BUSINESS_TABLES.to_vec();
+        tables.sort();
+        assert_eq!(since, tables, "TABLE_SINCE 与 BUSINESS_TABLES 不一致");
     }
 }

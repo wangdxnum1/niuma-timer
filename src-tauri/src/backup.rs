@@ -272,7 +272,7 @@ pub fn list_backups() -> Vec<BackupEntry> {
 
 use rusqlite::Connection;
 
-use crate::db::BUSINESS_TABLES;
+use crate::db::{BUSINESS_TABLES, TABLE_SINCE};
 
 /// 还原第一步：校验 + 铺 pending。校验任一环失败即 Err 且零磁盘副作用。
 pub fn stage_restore(name: &str, current_version: &str) -> Result<String, String> {
@@ -320,6 +320,27 @@ fn version_is_newer(v: &str, base: &str) -> bool {
     };
     match (parse(v), parse(base)) {
         (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// 缺表判定：备份 app_version ≥ 表引入版本（db::TABLE_SINCE）才视为「本应含此表」。
+/// 两侧任一解析失败 = 无法确定，按「不拒绝」处理；表不在登记名单里则从严拒绝
+/// （TABLE_SINCE 与 BUSINESS_TABLES 的等价性有测试钉住，这里是双保险兜底）。
+fn backup_should_have_table(backup_version: &str, table: &str) -> bool {
+    let parse = |s: &str| -> Option<Vec<u64>> {
+        let parts: Option<Vec<u64>> = s.split('.').map(|p| p.parse::<u64>().ok()).collect();
+        match parts {
+            Some(v) if v.len() == 3 => Some(v),
+            _ => None,
+        }
+    };
+    let since = match TABLE_SINCE.iter().find(|(t, _)| *t == table) {
+        Some((_, v)) => *v,
+        None => return true,
+    };
+    match (parse(backup_version), parse(since)) {
+        (Some(a), Some(b)) => a >= b,
         _ => false,
     }
 }
@@ -389,6 +410,12 @@ fn validate_archive(zip_path: &Path, check_db: &Path) -> Result<Option<Vec<u8>>,
     // 解出的库必须含全部业务表（db::BUSINESS_TABLES 单一真相源，随建表同步），
     // 少一张就不是完整备份。此前这里是本文件手抄的清单，漏登 v1.7.0 新增的
     // focus_sessions——缺专注表的残缺备份照常通过校验，还原后专注历史静默清零。
+    //
+    // 向前兼容（2026-10-03）：旧版本备份**合法地**没有后来新增的表。缺表仅当
+    // 「备份 app_version ≥ 该表引入版本」（TABLE_SINCE，即这份备份本应含此表）
+    // 才判定残缺拒绝；老备份的合法缺表、版本解析失败一律放行（与
+    // version_is_newer 同哲学）。放行的缺表由启动期 conn() → init_tables 幂等
+    // 补建空表（main.rs 中 apply_pending_on_startup 先于首次 db::conn()）。
     for table in BUSINESS_TABLES {
         let exists: bool = conn
             .query_row(
@@ -397,7 +424,7 @@ fn validate_archive(zip_path: &Path, check_db: &Path) -> Result<Option<Vec<u8>>,
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
-        if !exists {
+        if !exists && backup_should_have_table(&manifest.app_version, table) {
             return Err(format!("备份缺少业务表：{table}"));
         }
     }
@@ -683,6 +710,92 @@ mod tests {
             "解析失败不拒绝"
         );
         assert!(!version_is_newer("1.8", "1.7.0"), "段数不足按解析失败处理");
+    }
+
+    /// 造一个能过 manifest/条目数校验的备份包：manifest（可指定 app_version）+
+    /// init_tables 建全表后 DROP 掉 keep 之外的表，用于向前兼容缺表判定测试。
+    fn make_backup_zip(tag: &str, app_version: &str, keep: &[&str]) -> PathBuf {
+        let dir = tmp_dir(tag);
+        let db_path = dir.join("snap.db");
+        let conn = Connection::open(&db_path).unwrap();
+        crate::db::init_tables(&conn);
+        for t in BUSINESS_TABLES {
+            if !keep.contains(t) {
+                conn.execute_batch(&format!("DROP TABLE {t}")).unwrap();
+            }
+        }
+        drop(conn);
+        let manifest = format!(
+            r#"{{"app":"niuma-timer","app_version":"{app_version}","created_at":"2026-01-01 00:00:00","db_bytes":{},"has_config":false}}"#,
+            std::fs::metadata(&db_path).unwrap().len()
+        );
+        let db_bytes = std::fs::read(&db_path).unwrap();
+        let bytes = make_zip(&[(ENTRY_MANIFEST, manifest.as_bytes()), (ENTRY_DB, &db_bytes)]);
+        let p = write_tmp_zip(tag, &bytes);
+        let _ = std::fs::remove_dir_all(&dir);
+        p
+    }
+
+    /// 向前兼容：表引入之前的备份合法缺表，放行（缺表由启动期建表补齐）
+    #[test]
+    fn validate_allows_old_backup_missing_newer_table() {
+        let p = make_backup_zip(
+            "fwd-old",
+            "1.6.0",
+            &[
+                "ot_records",
+                "act_hourly",
+                "act_keys",
+                "app_usage",
+                "app_usage_hourly",
+                "audio_usage",
+                "audio_usage_hourly",
+            ],
+        );
+        let check = std::env::temp_dir().join(format!("niuma-va-old-{}.db", std::process::id()));
+        let r = validate_archive(&p, &check);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&check);
+        assert!(
+            r.is_ok(),
+            "1.6.0 备份缺 focus_sessions（1.7.0 引入）必须放行：{:?}",
+            r.err()
+        );
+    }
+
+    /// 同代备份缺表 = 真残缺，仍拒绝（旧语义对「本应含此表」的场景不回退）
+    #[test]
+    fn validate_rejects_contemporary_backup_missing_table() {
+        let p = make_backup_zip(
+            "fwd-same",
+            "1.8.1",
+            &[
+                "act_hourly",
+                "act_keys",
+                "app_usage",
+                "app_usage_hourly",
+                "audio_usage",
+                "audio_usage_hourly",
+                "focus_sessions",
+            ],
+        );
+        let check = std::env::temp_dir().join(format!("niuma-va-same-{}.db", std::process::id()));
+        let r = validate_archive(&p, &check);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&check);
+        let err = r.unwrap_err();
+        assert!(err.contains("备份缺少业务表"), "实际：{err}");
+    }
+
+    /// 备份版本解析失败 → 无法判定 → fail-open 放行（与 version_is_newer 同哲学）
+    #[test]
+    fn validate_fails_open_on_unparsable_version() {
+        let p = make_backup_zip("fwd-badver", "not-a-version", &["ot_records"]);
+        let check = std::env::temp_dir().join(format!("niuma-va-bad-{}.db", std::process::id()));
+        let r = validate_archive(&p, &check);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&check);
+        assert!(r.is_ok(), "版本无法解析时不得误拒：{:?}", r.err());
     }
 
     #[test]

@@ -40,7 +40,7 @@ has("工作日口径复用 weekbill::is_workday_of", rsInsights, "is_workday_of(
 
 console.log("== 命令（cmds_bill.rs + 注册链） ==");
 has("命令 get_day_timeline", rsBill, "pub(crate) fn get_day_timeline(");
-has("offset 负值钳 0（未来封顶语义）", rsBill, "let off = offset.max(0);");
+has("offset 钳 0..=1200（防 IPC 入参触发 chrono 日期运算 panic，period_bounds 同口径）", rsBill, "let off = offset.clamp(0, 1200);");
 has("锁内取快照、锁外查询", rsBill, "sync::lock(&state.config, \"state.config\").clone()");
 has("注册进 generate_handler", rsMain, "get_day_timeline,");
 has("capabilities 自动补齐 allow-get-day-timeline", caps, "allow-get-day-timeline");

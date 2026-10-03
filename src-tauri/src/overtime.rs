@@ -5,6 +5,7 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::calc::to_min;
 use crate::config::Config;
 
 /// 记录来源：自动（锁屏离开时生成）。可被后续自动记录覆盖。
@@ -209,18 +210,6 @@ pub fn calc_valid_hours(raw_hours: f64) -> f64 {
         return 0.0;
     }
     (raw_hours * 2.0).floor() / 2.0
-}
-
-/// "HH:MM" → 当天分钟数
-fn to_min(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() == 2 {
-        let h = parts[0].parse::<f64>().ok()?;
-        let m = parts[1].parse::<f64>().ok()?;
-        Some(h * 60.0 + m)
-    } else {
-        None
-    }
 }
 
 /// 分钟数 → "HH:MM"
@@ -585,7 +574,10 @@ mod tests {
         assert!(approx(to_min("18:30").expect("some"), 1110.0));
         assert!(to_min("abc").is_none());
         assert!(to_min("18:xx").is_none());
-        assert!(to_min("18").is_none());
+        assert!(
+            approx(to_min("18").expect("裸小时数"), 1080.0),
+            "与 calc::to_min 统一后兼容裸小时数"
+        );
     }
 
     #[test]

@@ -232,7 +232,7 @@ fn offwork_tick(app: &tauri::AppHandle, cfg: &Config) {
         OFFWORK_DONE.load(Ordering::Relaxed),
         st.is_workday,
         now_min,
-        crate::calc::to_min(&cfg.pm_end),
+        crate::calc::cfg_to_min("pm_end", &cfg.pm_end, "18:00"),
         has_record_today(),
     ) {
         return;

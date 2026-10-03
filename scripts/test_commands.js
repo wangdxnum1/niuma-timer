@@ -110,6 +110,21 @@ while ((m = syncRe.exec(rsSrc)) !== null) {
 }
 eq("同步命令体内不做 DB 查询", syncSlow.length ? syncSlow.join(", ") : "无", "无");
 
+console.log("== get_day_timeline offset 必须钳制 ==");
+// offset 是前端 IPC 直达的 i64：只挡负值时极端大值会让 chrono 日期运算 panic、
+// 异步命令被任务边界吞掉、invoke 永不 resolve（period_bounds 同类漏网，2026-10-03 收口）。
+const tlAt = rsSrc.indexOf("fn get_day_timeline");
+const tlEnd = (() => {
+  if (tlAt === -1) return -1;
+  const next = rsSrc.indexOf("#[tauri::command", tlAt);
+  return next === -1 ? tlAt + 2000 : next;
+})();
+eq(
+  "get_day_timeline 用 clamp(0, 1200) 钳制 offset",
+  tlAt !== -1 && /offset\.clamp\(0,\s*1200\)/.test(rsSrc.slice(tlAt, tlEnd)) ? "是" : "否",
+  "是"
+);
+
 console.log("");
 console.log(
   "  共 " + commands.length + " 个命令，permissions " + cap.permissions.length + " 项"

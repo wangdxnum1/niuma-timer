@@ -101,9 +101,10 @@ pub struct PeriodInput<'a> {
     pub today_earned: f64,
 }
 
-const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+/// 星期中文口径单一实现（insights / focus 均引用此处，勿再各抄一份）。
+pub(crate) const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
-fn weekday_cn(d: NaiveDate) -> &'static str {
+pub(crate) fn weekday_cn(d: NaiveDate) -> &'static str {
     WEEKDAYS_CN[d.weekday().num_days_from_monday() as usize]
 }
 

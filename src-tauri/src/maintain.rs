@@ -236,11 +236,15 @@ pub fn cutoff_for(cfg: &Config, today: NaiveDate) -> Option<NaiveDate> {
 /// 若加班记录比监控明细更需要留久，用户应把保留期设长——分两套策略反而难解释。
 pub fn purge_before_conn(conn: &rusqlite::Connection, cutoff: NaiveDate) -> rusqlite::Result<u32> {
     let cut = cutoff.format("%Y-%m-%d").to_string();
+    // 单事务包整体：八张表逐条 autocommit 时中途失败（磁盘错/偶发 busy）会留下
+    // 「前几张已删、后几张未删」的半截状态——事务化后失败零副作用，等下轮重试。
+    let tx = conn.unchecked_transaction()?;
     let mut total = 0u32;
     for (table, col) in DATED_TABLES {
         let sql = format!("DELETE FROM {table} WHERE {col} < ?1");
-        total += conn.execute(&sql, rusqlite::params![cut])? as u32;
+        total += tx.execute(&sql, rusqlite::params![cut])? as u32;
     }
+    tx.commit()?;
     Ok(total)
 }
 

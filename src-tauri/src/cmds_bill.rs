@@ -103,7 +103,10 @@ pub(crate) fn get_day_timeline(
     state: State<'_, AppState>,
     offset: i64,
 ) -> Result<insights::DayTimeline, String> {
-    let off = offset.max(0);
+    // offset 是前端 IPC 直达的 i64：只挡负值不够，极端大值会让 chrono 日期运算
+    // panic（异步命令 panic 被任务边界吞掉、前端 invoke 永不 resolve）。与
+    // weekbill::period_bounds 同口径钳制——时间线按天翻，1200 天封顶。
+    let off = offset.clamp(0, 1200);
     let today = Local::now().date_naive();
     let date = today - Duration::days(off);
     let cfg = sync::lock(&state.config, "state.config").clone();

@@ -31,11 +31,7 @@ use crate::weekbill::{is_workday_of, period_bounds, period_label_of, Span};
 /// 无输入多久视为离开（毫秒）。与守护提醒的 idle 口径一致。
 const IDLE_GAP_MS: u64 = 5 * 60 * 1000;
 
-const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-
-fn weekday_cn(d: NaiveDate) -> &'static str {
-    WEEKDAYS_CN[d.weekday().num_days_from_monday() as usize]
-}
+use crate::weekbill::weekday_cn;
 
 fn now_ms() -> i64 {
     Local::now().timestamp_millis()

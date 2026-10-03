@@ -13,13 +13,7 @@ use crate::app_usage;
 use crate::config::Config;
 use crate::db;
 use crate::holiday::HolidayCache;
-use crate::weekbill::{is_workday_of, period_bill, period_bounds, Span};
-
-const WEEKDAYS_CN: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-
-fn weekday_cn(d: NaiveDate) -> &'static str {
-    WEEKDAYS_CN[d.weekday().num_days_from_monday() as usize]
-}
+use crate::weekbill::{is_workday_of, period_bill, period_bounds, weekday_cn, Span, WEEKDAYS_CN};
 
 /// 键鼠总事件口径（与周账单 act_events 一致），SQL 里逐列 SUM 拼不出就传值算
 const EVENTS_EXPR: &str =

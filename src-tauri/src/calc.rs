@@ -63,17 +63,31 @@ pub fn format_duration(minutes: f64, fmt: &str) -> String {
     }
 }
 
-pub fn to_min(s: &str) -> f64 {
+/// "HH:MM"（或裸小时数 "9"）→ 当天分钟数；解析失败返 None。
+/// 单一实现（overtime 亦引用此处）：此前 calc 版失败静默返 0.0，坏配置会让
+/// 工时/计费全线静默算错且无日志——调用方必须显式处理 None（配置类用 [`cfg_to_min`]）。
+pub fn to_min(s: &str) -> Option<f64> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() == 2 {
         if let (Ok(h), Ok(m)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
-            return h * 60.0 + m;
+            return Some(h * 60.0 + m);
         }
     }
-    if let Ok(h) = s.parse::<f64>() {
-        return h * 60.0;
+    s.parse::<f64>().ok().map(|h| h * 60.0)
+}
+
+/// 配置里的作息时间解析：坏值记 debug.log 并回退默认值，而不是静默按 0 分钟
+/// 参与工时/计费（时薪折算全线失真且查不到原因）。
+pub fn cfg_to_min(field: &str, value: &str, default: &str) -> f64 {
+    match to_min(value) {
+        Some(m) => m,
+        None => {
+            crate::db::debug_log(&format!(
+                "配置项 {field}={value:?} 不是合法作息时间，回退默认 {default}"
+            ));
+            to_min(default).unwrap_or(0.0)
+        }
     }
-    0.0
 }
 
 /// 落在 [s, e] 时段内的分钟数（now 为当前分钟，含小数）
@@ -89,8 +103,10 @@ fn overlap(now: f64, s: f64, e: f64) -> f64 {
 
 /// 当日总工时（小时）
 pub fn daily_hours(cfg: &Config) -> f64 {
-    let am = to_min(&cfg.am_end) - to_min(&cfg.am_start);
-    let pm = to_min(&cfg.pm_end) - to_min(&cfg.pm_start);
+    let am = cfg_to_min("am_end", &cfg.am_end, "12:00")
+        - cfg_to_min("am_start", &cfg.am_start, "09:00");
+    let pm = cfg_to_min("pm_end", &cfg.pm_end, "18:00")
+        - cfg_to_min("pm_start", &cfg.pm_start, "13:00");
     ((am + pm).max(0.0)) / 60.0
 }
 
@@ -160,10 +176,10 @@ pub fn compute(
     let rate_per_min = hourly_rate / 60.0;
 
     let now_min = now.hour() as f64 * 60.0 + now.minute() as f64 + now.second() as f64 / 60.0;
-    let am_s = to_min(&cfg.am_start);
-    let am_e = to_min(&cfg.am_end);
-    let pm_s = to_min(&cfg.pm_start);
-    let pm_e = to_min(&cfg.pm_end);
+    let am_s = cfg_to_min("am_start", &cfg.am_start, "09:00");
+    let am_e = cfg_to_min("am_end", &cfg.am_end, "12:00");
+    let pm_s = cfg_to_min("pm_start", &cfg.pm_start, "13:00");
+    let pm_e = cfg_to_min("pm_end", &cfg.pm_end, "18:00");
 
     // 休息日不计时、不计薪：周末与法定节假日即使程序开着，也不该显示「今日已赚 /
     // 已工作」——那会让人以为休息日也在赚钱。补班日（holiday type=2）由
@@ -259,12 +275,16 @@ mod tests {
 
     #[test]
     fn to_min_variants() {
-        assert!(approx(to_min("09:00"), 540.0));
-        assert!(approx(to_min("18:30"), 1110.0));
-        assert!(approx(to_min("9"), 540.0));
-        assert!(approx(to_min("abc"), 0.0));
-        assert!(approx(to_min(""), 0.0));
-        assert!(approx(to_min("9:"), 0.0));
+        assert!(approx(to_min("09:00").unwrap(), 540.0));
+        assert!(approx(to_min("18:30").unwrap(), 1110.0));
+        assert!(approx(to_min("9").unwrap(), 540.0), "裸小时数仍兼容");
+        assert!(to_min("abc").is_none(), "坏值显式暴露，不得静默按 0 分钟");
+        assert!(to_min("").is_none());
+        assert!(to_min("9:").is_none());
+        assert!(
+            approx(cfg_to_min("am_end", "garbage", "12:00"), 720.0),
+            "坏配置回退默认值"
+        );
     }
 
     #[test]
