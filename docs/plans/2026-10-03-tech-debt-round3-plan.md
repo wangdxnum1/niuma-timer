@@ -111,7 +111,9 @@
 
 ---
 
-### Task 3: 批次三——前端体验
+### Task 3: 批次三——前端体验 ✅ 已完成（2026-10-03，提交见 git log 批次三，build.bat test 全绿）
+
+> 执行记录：①hero tick catch 补 flog；②core.js 补 unhandledrejection + saveBillImage 补 catch（toast+日志）；③报告图标题随 model.span 映射周/月；④fmtDist 收口 core.js（monitor 删本地、insights 删 fmtMeters 改引用，单位档位统一为 m 一位小数/≥1km 显 km）；⑤fmtDurCN 移 core.js、insights tlDur 删除改引用（措辞统一「分钟」）；⑥appIconHTML src 过 escapeHtml；⑦hover_card quipDelay 登记并在 stopQuips 清理；⑧test_frontend_split.js 补第 5 项检查（js/ 目录==CHUNKS 双向）。既有测试同步：test_insights/test_bill_runtime（fmtMeters→fmtDist）/test_report_image（+标题断言）。**偏差 2 条：insights *Data「死状态」经核实是误报（paint 函数有读点，注释准确），维持现状；SLACK_QUIPS/WEEK_BILL_QUIPS 重叠仅一处字面量，收口收益低于间接成本，维持现状。**已 cargo build 触发 build.rs 回写（index.html FE_VER + tray.rs）并随本批提交。
 
 **Files:** `frontend/js/hero.js`、`frontend/js/core.js`、`frontend/js/bill.js`、`frontend/js/monitor.js`、`frontend/js/insights.js`、`frontend/hover_card.html`、`scripts/test_frontend_split.js`、`scripts/test_report_image.js`、`scripts/test_insights.js`、`scripts/test_hover_card.js`
 
@@ -144,7 +146,9 @@
 
 ---
 
-### Task 4: 批次四——依赖升级（每小步独立可回退）
+### Task 4: 批次四——依赖升级 ✅ 已完成（2026-10-03/04，六个独立提交 9ce4a95…0822abc，全量回归绿）
+
+> 执行记录：png 0.17→0.18（Encoder API 不变）、dirs 5→6、zip 2→4（17 条备份测试验证）、rusqlite 0.32→0.38（**0.33 起移除 u64 FromSql，activity.rs HourBucket 十列改 i64 读取再转 u64**）、tauri 系→2.12.x（**windows 直连 0.61→0.62 消除树内双版本；Error::from_win32 移除→from_hresult(HRESULT::from_win32(GetLastError().0))；HRESULT 移到 windows::core**）、reqwest 0.12→0.13（json/blocking 不变，与 plugin-updater 同栈）。**验证注记：deny 线上拉取 advisory-db 依赖 github.com（当前被墙、Clash 未开），本地以 `cargo deny --offline check advisories`（当日缓存）验证通过，CI 线上门禁不受影响；另 Git Bash 裸跑 cargo test 有 25 个环境假阳性失败（HKCU/锁/TMP），正规 cmd 语境全绿。**
 
 **Files:** `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/src/backup.rs`（zip 使用点）、reqwest 使用点（holiday.rs / update.rs）
 
