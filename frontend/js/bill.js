@@ -35,14 +35,16 @@ function moneyConfigured() {
 }
 
 function readBillStyle() {
-  const active = document.querySelector("#billStyleSeg .mon-seg-item.active");
+  const active = document.querySelector("#billStyleSeg .bill-style-card.active");
   return active ? active.dataset.bill : "receipt";
 }
 
 function setBillStyleUI(style) {
   billStyle = style === "dashboard" ? "dashboard" : "receipt";
-  document.querySelectorAll("#billStyleSeg .mon-seg-item").forEach((b) => {
-    b.classList.toggle("active", b.dataset.bill === billStyle);
+  document.querySelectorAll("#billStyleSeg .bill-style-card").forEach((b) => {
+    const on = b.dataset.bill === billStyle;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-checked", on ? "true" : "false");
   });
 }
 

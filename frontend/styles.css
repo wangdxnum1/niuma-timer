@@ -810,10 +810,129 @@ button:active {
 .mon-head h2 {
   flex-shrink: 0;
 }
+/* ====== 外观：账单风格视觉选择卡（两张迷你预览卡，选中金框） ====== */
+.bill-style-picker {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.bill-style-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: left;
+  color: #c9c9cf;
+  transition: border-color 0.15s, background 0.15s;
+}
+.bill-style-card:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.bill-style-card.active {
+  border-color: #ffd650;
+  background: rgba(255, 214, 80, 0.07);
+  color: #f2f2f4;
+}
+.bill-style-card.active .bsc-name {
+  color: #ffd650;
+}
+.bsc-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f2f2f4;
+}
+.bsc-desc {
+  font-size: 11px;
+  color: #8a8a93;
+}
+.bsc-shot {
+  display: block;
+  position: relative;
+  height: 74px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  margin-bottom: 4px;
+  overflow: hidden;
+}
+/* 小票预览：纸条 + 行目 + 金色合计条 */
+.bsc-receipt::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 7px;
+  bottom: 7px;
+  width: 46%;
+  transform: translateX(-50%);
+  background: #f5f2ea;
+  border-radius: 3px;
+}
+.bsc-line {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
+  z-index: 1;
+}
+.bsc-receipt .bsc-line { top: 18px; }
+.bsc-receipt .bsc-line.w62 { width: 28%; }
+.bsc-receipt .bsc-line.w84 { top: 28px; width: 38%; }
+.bsc-receipt .bsc-line.w50 { top: 38px; width: 23%; }
+.bsc-receipt .bsc-line.w74 { top: 48px; width: 34%; }
+.bsc-total {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  width: 34%;
+  height: 9px;
+  border-radius: 2px;
+  background: #ffd650;
+  z-index: 1;
+}
+/* 仪表盘预览：金色柱状图 + 统计片 */
+.bsc-bars {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 12px;
+  bottom: 12px;
+  width: 46%;
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+}
+.bsc-bars i {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: rgba(255, 214, 80, 0.45);
+}
+.bsc-bars i:nth-child(3) { background: rgba(255, 214, 80, 0.7); }
+.bsc-bars i:nth-child(4) { background: #ffd650; }
+.bsc-stat {
+  position: absolute;
+  right: 8px;
+  top: 12px;
+  width: 42%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.bsc-chip {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.bsc-chip.short { width: 70%; }
 .mon-seg {
   flex-shrink: 0;
-  display: flex;
-  gap: 1px;
+  display: flex;  gap: 1px;
   background: rgba(255, 255, 255, 0.07);
   border-radius: 6px;
   padding: 2px;

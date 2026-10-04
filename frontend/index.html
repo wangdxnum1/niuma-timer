@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=033d6f87" />
+    <link rel="stylesheet" href="styles.css?v=f78af6ec" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -643,14 +643,26 @@
           <summary>详情</summary>
           <p>副标题显示在主界面顶部。选「动态状态」会随未开工、午休、快下班（剩 30 分钟内）、已下班、休息日自动切换</p>
         </details>
-        <div class="switch-row">
-          <span>账单风格</span>
-          <div class="mon-seg" id="billStyleSeg" role="tablist" aria-label="账单风格切换">
-            <button class="mon-seg-item" data-bill="receipt">小票</button>
-            <button class="mon-seg-item" data-bill="dashboard">仪表盘</button>
-          </div>
+        <div class="switch-row"><span>账单风格</span></div>
+        <div class="bill-style-picker" id="billStyleSeg" role="radiogroup" aria-label="账单风格选择">
+          <button class="bill-style-card" data-bill="receipt" role="radio" aria-checked="false" type="button">
+            <span class="bsc-shot bsc-receipt" aria-hidden="true">
+              <i class="bsc-line w62"></i><i class="bsc-line w84"></i><i class="bsc-line w50"></i><i class="bsc-line w74"></i>
+              <i class="bsc-total"></i>
+            </span>
+            <span class="bsc-name">小票</span>
+            <span class="bsc-desc">晒单情绪 · 一张纸条...</span>
+          </button>
+          <button class="bill-style-card" data-bill="dashboard" role="radio" aria-checked="false" type="button">
+            <span class="bsc-shot bsc-dashboard" aria-hidden="true">
+              <span class="bsc-bars"><i style="height:38%"></i><i style="height:72%"></i><i style="height:52%"></i><i style="height:88%"></i></span>
+              <span class="bsc-stat"><i class="bsc-chip"></i><i class="bsc-chip short"></i></span>
+            </span>
+            <span class="bsc-name">仪表盘</span>
+            <span class="bsc-desc">数据复盘 · 一块看板</span>
+          </button>
         </div>
-        <p class="hint">小票 = 晒单情绪；仪表盘 = 数据复盘。切换后返回账单页生效</p>
+        <p class="hint">切换后返回账单页生效</p>
         <label class="switch-row">
           <span>托盘悬停显示彩色卡片</span>
           <input id="tray_hover_card" type="checkbox" class="switch" />
@@ -900,17 +912,17 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=033d6f87"></script>
-    <script src="js/tl_math.js?v=033d6f87"></script>
-    <script src="js/settings.js?v=033d6f87"></script>
-    <script src="js/hero.js?v=033d6f87"></script>
-    <script src="js/overtime.js?v=033d6f87"></script>
-    <script src="js/monitor.js?v=033d6f87"></script>
-    <script src="js/bill.js?v=033d6f87"></script>
-    <script src="js/insights.js?v=033d6f87"></script>
-    <script src="js/storage.js?v=033d6f87"></script>
-    <script src="js/update.js?v=033d6f87"></script>
-    <script src="js/boot.js?v=033d6f87"></script>
+    <script src="js/core.js?v=f78af6ec"></script>
+    <script src="js/tl_math.js?v=f78af6ec"></script>
+    <script src="js/settings.js?v=f78af6ec"></script>
+    <script src="js/hero.js?v=f78af6ec"></script>
+    <script src="js/overtime.js?v=f78af6ec"></script>
+    <script src="js/monitor.js?v=f78af6ec"></script>
+    <script src="js/bill.js?v=f78af6ec"></script>
+    <script src="js/insights.js?v=f78af6ec"></script>
+    <script src="js/storage.js?v=f78af6ec"></script>
+    <script src="js/update.js?v=f78af6ec"></script>
+    <script src="js/boot.js?v=f78af6ec"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>
