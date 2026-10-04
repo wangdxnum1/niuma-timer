@@ -613,15 +613,13 @@ fn watch_thread() {
     // 不会再出现「提前 return 漏卸载」的手工配对问题（收口于 win::WinEventHookGuard）。
     let Some(_hook) = crate::win::WinEventHookGuard::install_foreground_hook(Some(win_event_proc))
     else {
-        // release 无控制台，必须同时落 debug.log（理由同 audio_usage::tick_loop）
-        eprintln!(
-            "[app_usage] 前台窗口事件钩子安装失败: {}",
-            windows::core::Error::from_win32()
-        );
-        crate::db::debug_log(&format!(
-            "[app_usage] 前台窗口事件钩子安装失败: {}",
-            windows::core::Error::from_win32()
+        // windows 0.62 移除了 Error::from_win32()：改走 HRESULT::from_win32(GetLastError())
+        let hook_err = windows::core::Error::from_hresult(windows::core::HRESULT::from_win32(
+            unsafe { windows::Win32::Foundation::GetLastError() }.0,
         ));
+        // release 无控制台，必须同时落 debug.log（理由同 audio_usage::tick_loop）
+        eprintln!("[app_usage] 前台窗口事件钩子安装失败: {hook_err}");
+        crate::db::debug_log(&format!("[app_usage] 前台窗口事件钩子安装失败: {hook_err}"));
         WATCH_OK.store(false, Ordering::SeqCst);
         return;
     };

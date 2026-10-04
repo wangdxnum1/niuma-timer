@@ -32,7 +32,7 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 # 注册 AppUserModelID（HKCU）：绿色 exe 发系统 toast 的前置条件，见 win.rs register_aumid
 winreg = "0.55"
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input",
