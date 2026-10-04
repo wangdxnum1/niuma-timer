@@ -736,53 +736,112 @@ fn flush_pending_mem() {
     flush_pending_impl(false);
 }
 
+/// 上一次 flush 的时刻（epoch ms，0=首拍）。增量发生在 [prev, now] 区间内，
+/// 按区间时长切进小时桶——此前整笔记入结算时刻，23:59:55→00:00:05 的活动
+/// 全落新一天 0 点桶，与 app_usage 的归属口径不可比（2026-10-04 批次六）。
+static LAST_FLUSH_MS: AtomicU64 = AtomicU64::new(0);
+
 fn flush_pending_impl(persist: bool) {
     let now = Local::now();
-    let date = now.date_naive().format("%Y-%m-%d").to_string();
-    let hour = now.hour().min(23) as usize;
+    let now_ms = now.timestamp_millis().max(0) as u64;
+    let prev_ms = LAST_FLUSH_MS.swap(now_ms, Ordering::Relaxed);
 
-    let mut d = sync::lock(day(), "activity::DAY");
-    if d.date != date {
-        save_day(&mut d); // 跨天：先把旧一天剩余增量落盘，再开新的一天
-        *d = DayState::new(date.clone());
-    }
-    let dm = C_MOVES.swap(0, Ordering::Relaxed);
-    let dp = C_PIXELS.swap(0, Ordering::Relaxed);
-    let dl = C_LEFT.swap(0, Ordering::Relaxed);
-    let dd = C_DBL.swap(0, Ordering::Relaxed);
-    let dr = C_RIGHT.swap(0, Ordering::Relaxed);
-    let dw = C_WHEEL.swap(0, Ordering::Relaxed);
-    let dt = C_WHEEL_TICKS.swap(0, Ordering::Relaxed);
-    let dmi = C_MID.swap(0, Ordering::Relaxed);
-    let dx = C_XBTN.swap(0, Ordering::Relaxed);
-    let dk = C_KEYS.swap(0, Ordering::Relaxed);
-    // 位或判断「本轮是否有任何增量」：计数恒为非负，任一非零则结果非零
-    let gained = dm | dp | dl | dd | dr | dw | dt | dmi | dx | dk;
-    {
-        let b = &mut d.hourly[hour];
-        b.moves += dm;
-        b.pixels += dp;
-        b.left += dl;
-        b.dbl += dd;
-        b.right += dr;
-        b.wheel += dw;
-        b.wheel_ticks += dt;
-        b.mid += dmi;
-        b.xbtn += dx;
-        b.keys += dk;
-    }
-    if gained > 0 {
-        d.dirty_hours[hour] = true; // 只把当前小时标脏，其余 23 桶保持干净
-    }
-
+    // 原子计数器整体取走，先攒进本地增量桶，再按区间权重分发
+    let inc = HourBucket {
+        moves: C_MOVES.swap(0, Ordering::Relaxed),
+        pixels: C_PIXELS.swap(0, Ordering::Relaxed),
+        left: C_LEFT.swap(0, Ordering::Relaxed),
+        dbl: C_DBL.swap(0, Ordering::Relaxed),
+        right: C_RIGHT.swap(0, Ordering::Relaxed),
+        wheel: C_WHEEL.swap(0, Ordering::Relaxed),
+        wheel_ticks: C_WHEEL_TICKS.swap(0, Ordering::Relaxed),
+        mid: C_MID.swap(0, Ordering::Relaxed),
+        xbtn: C_XBTN.swap(0, Ordering::Relaxed),
+        keys: C_KEYS.swap(0, Ordering::Relaxed),
+    };
     // 取走键盘增量：遍历 256 个原子键槽，swap(0) 收归到 key_detail（vkCode 即数组下标）。
     // 锁无关：合并线程不再与钩子回调在每次按键时抢 KEY_STATE 锁，消除输入卡顿的并发来源。
-    // 同一份增量也记进 key_dirty——落盘时只写这几个键的增量，不再全量重插当天明细。
+    let mut key_inc: Vec<(u32, u64)> = Vec::new();
     for (vk, slot) in key_pending().iter().enumerate() {
         let v = slot.swap(0, Ordering::Relaxed);
         if v > 0 {
-            *d.key_detail.entry(vk as u32).or_insert(0) += v;
-            *d.key_dirty.entry(vk as u32).or_insert(0) += v;
+            key_inc.push((vk as u32, v));
+        }
+    }
+
+    // 目标桶列表：区间可切则按权重切（跨小时/跨天），否则整笔记入当前桶。
+    // 权重切分把十类计数与按键增量各自按比例摊开（整数余数归最后一段）。
+    let spans = crate::app_usage::interval_weights(prev_ms, now_ms);
+    let weights: Vec<u64>;
+    let targets: Vec<(String, i64)> = match &spans {
+        Some(parts) => {
+            weights = parts.iter().map(|p| p.2).collect();
+            parts.iter().map(|p| (p.0.clone(), p.1)).collect()
+        }
+        None => {
+            weights = Vec::new();
+            vec![(
+                now.date_naive().format("%Y-%m-%d").to_string(),
+                now.hour().min(23) as i64,
+            )]
+        }
+    };
+    let parts_of = |count: u64| -> Vec<u64> {
+        if weights.is_empty() {
+            vec![count]
+        } else {
+            crate::app_usage::split_count(count, &weights)
+        }
+    };
+    // 十类计数各自按权重拆分
+    let counter_parts = [
+        parts_of(inc.moves),
+        parts_of(inc.pixels),
+        parts_of(inc.left),
+        parts_of(inc.dbl),
+        parts_of(inc.right),
+        parts_of(inc.wheel),
+        parts_of(inc.wheel_ticks),
+        parts_of(inc.mid),
+        parts_of(inc.xbtn),
+        parts_of(inc.keys),
+    ];
+    // 按键增量按权重拆分（vk → 每个目标桶的份数）
+    let key_parts: Vec<(u32, Vec<u64>)> = key_inc
+        .into_iter()
+        .map(|(vk, v)| (vk, parts_of(v)))
+        .collect();
+
+    let mut d = sync::lock(day(), "activity::DAY");
+    for i in 0..targets.len() {
+        let (date, hour) = &targets[i];
+        let hour = (*hour).clamp(0, 23) as usize;
+        if d.date != *date {
+            save_day(&mut d); // 跨天：先把旧一天剩余增量落盘，再开新的一天
+            *d = DayState::new(date.clone());
+        }
+        let piece = HourBucket {
+            moves: counter_parts[0][i],
+            pixels: counter_parts[1][i],
+            left: counter_parts[2][i],
+            dbl: counter_parts[3][i],
+            right: counter_parts[4][i],
+            wheel: counter_parts[5][i],
+            wheel_ticks: counter_parts[6][i],
+            mid: counter_parts[7][i],
+            xbtn: counter_parts[8][i],
+            keys: counter_parts[9][i],
+        };
+        if piece.total_events() > 0 {
+            d.hourly[hour].add(&piece);
+            d.dirty_hours[hour] = true; // 只把有增量的桶标脏
+        }
+        for (vk, parts) in &key_parts {
+            let v = parts[i];
+            if v > 0 {
+                *d.key_detail.entry(*vk).or_insert(0) += v;
+                *d.key_dirty.entry(*vk).or_insert(0) += v;
+            }
         }
     }
 

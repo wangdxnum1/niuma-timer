@@ -642,6 +642,28 @@ mod tests {
         assert_eq!(dated, biz, "DATED_TABLES 与 db::BUSINESS_TABLES 不一致");
     }
 
+    /// TABLE_GROUPS（存储页展示分组）与 BUSINESS_TABLES 必须双向等价：三份登记
+    /// 清单（BUSINESS_TABLES / DATED_TABLES / TABLE_GROUPS）里它此前是唯一没有
+    /// 守卫的一份——新表漏登分组时行数与字节静默滑进「索引与空闲页」切片。
+    #[test]
+    fn table_groups_cover_business_tables() {
+        let mut grouped: Vec<&str> = TABLE_GROUPS.iter().map(|(t, _, _)| *t).collect();
+        grouped.sort_unstable();
+        grouped.dedup();
+        let mut biz: Vec<&str> = crate::db::BUSINESS_TABLES.to_vec();
+        biz.sort_unstable();
+        assert_eq!(grouped, biz, "TABLE_GROUPS 与 db::BUSINESS_TABLES 不一致");
+        // 展示顺序里的每个分类 key 都必须真的出现在 TABLE_GROUPS 分组里
+        let gkeys: std::collections::HashSet<&str> =
+            TABLE_GROUPS.iter().map(|(_, k, _)| *k).collect();
+        for (k, _) in GROUP_ORDER {
+            assert!(
+                gkeys.contains(k),
+                "GROUP_ORDER 里的分类 {k} 不在 TABLE_GROUPS 中"
+            );
+        }
+    }
+
     /// 回归：删除只影响早于 cutoff 的日期，当天与未来数据不受影响
     #[test]
     fn purge_only_removes_rows_before_cutoff() {

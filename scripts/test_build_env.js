@@ -125,6 +125,92 @@ lines.forEach(function (l, i) {
   );
 });
 
+// ---- package flavor（2026-10-04 批次六补覆盖）：桩掉 `cargo tauri build`，
+// 伪造带当前版本号（APPVER 由 build.bat 导出）的安装包/签名/便携 exe，验证
+// ① 版本过滤（陈旧 9.9.9 产物不得混入 bin\package）；② 签名随包同拷；
+// ③ cargo 失败时 build.bat package 如实失败（不再打印 Done 报喜）。
+// 此前 package 段只有当天人肉验证，产物拷贝/版本过滤零自动化覆盖。
+const PKG = fs.mkdtempSync(path.join(os.tmpdir(), "niuma package env-"));
+const PKG_TMP = path.join(PKG, ".tmp");
+fs.mkdirSync(path.join(PKG, "src-tauri"), { recursive: true });
+fs.mkdirSync(PKG_TMP, { recursive: true });
+fs.copyFileSync(path.join(ROOT, "build.bat"), path.join(PKG, "build.bat"));
+fs.copyFileSync(path.join(ROOT, "common.bat"), path.join(PKG, "common.bat"));
+fs.writeFileSync(path.join(PKG, "src-tauri", "Cargo.toml"), '[package]\r\nversion = "0.0.0"\r\n');
+const PKG_LOG = path.join(PKG_TMP, "pkg-env.log");
+
+// 桩只认 `tauri build`（package flavor 的调用形态）。注意：桩内避免多行
+// 括号块——%PD% 在块内会于解析期展开成空串（与 test_bat_vars 同款陷阱）。
+const PKG_STUB_SRC = [
+  "@echo off",
+  'if /i not "%~1"=="tauri" exit /b 0',
+  'if exist "%BUILD_ENV_PKG_FIXTURE%\\.tmp\\fail-tauri" exit /b 3',
+  'set "PD=%BUILD_ENV_PKG_FIXTURE%\\src-tauri\\target\\%TRIPLE%\\release"',
+  'mkdir "%PD%\\bundle\\nsis" 2>nul',
+  'mkdir "%PD%\\bundle\\msi" 2>nul',
+  'echo stub > "%PD%\\bundle\\nsis\\niuma-timer_%APPVER%_x64-setup.exe"',
+  'echo sig > "%PD%\\bundle\\nsis\\niuma-timer_%APPVER%_x64-setup.exe.sig"',
+  'echo stale > "%PD%\\bundle\\nsis\\niuma-timer_9.9.9_x64-setup.exe"',
+  'echo stub > "%PD%\\bundle\\msi\\niuma-timer_%APPVER%_x64_zh-CN.msi"',
+  'echo sig > "%PD%\\bundle\\msi\\niuma-timer_%APPVER%_x64_zh-CN.msi.sig"',
+  'echo stub > "%PD%\\niuma-timer.exe"',
+  'echo sig > "%PD%\\niuma-timer.exe.sig"',
+  '>>"%PKG_LOG%" echo TAURI_BUILD APPVER=[%APPVER%]',
+  "exit /b 0",
+  "",
+].join("\r\n");
+fs.writeFileSync(path.join(PKG_TMP, "stubtauri.bat"), PKG_STUB_SRC, "ascii");
+
+const PKG_RUNNER = path.join(PKG_TMP, "run-package.bat");
+fs.writeFileSync(
+  PKG_RUNNER,
+  [
+    "@echo off",
+    'set "VSCMD_SKIP_SENDTELEMETRY=1"',
+    'set "CARGO_BIN=call ..\\.tmp\\stubtauri.bat"',
+    'set "PKG_LOG=' + PKG_LOG + '"',
+    'set "BUILD_ENV_PKG_FIXTURE=' + PKG + '"',
+    'cd /d "' + PKG + '"',
+    "call build.bat package",
+    "",
+  ].join("\r\n"),
+  "ascii"
+);
+const pkgRun = spawnSync("cmd", ["/c", PKG_RUNNER], { cwd: ROOT, stdio: "inherit" });
+ok("build.bat package 整体退出码 0", pkgRun.status === 0, "exit=" + pkgRun.status);
+
+const pkgDir = path.join(PKG, "bin", "package");
+const expectArtifacts = [
+  "niuma-timer_0.0.0_x64-setup.exe",
+  "niuma-timer_0.0.0_x64-setup.exe.sig",
+  "niuma-timer_0.0.0_x64_zh-CN.msi",
+  "niuma-timer_0.0.0_x64_zh-CN.msi.sig",
+  "niuma-timer-0.0.0-portable.exe",
+  "niuma-timer-0.0.0-portable.exe.sig",
+];
+for (const name of expectArtifacts) {
+  const p = path.join(pkgDir, name);
+  ok(
+    "package 产物 " + name + " 就位",
+    fs.existsSync(p) && fs.readFileSync(p, "utf8").trim() === (name.endsWith(".sig") ? "sig" : "stub")
+  );
+}
+ok(
+  "陈旧版本 9.9.9 的产物不混入 bin\\package（版本过滤生效）",
+  !fs.existsSync(path.join(pkgDir, "niuma-timer_9.9.9_x64-setup.exe"))
+);
+ok(
+  "未伪造 PDB 时不产出 pdb.zip（tar 步骤的 if exist 守卫）",
+  !fs.existsSync(path.join(pkgDir, "niuma-timer-0.0.0-portable.pdb.zip"))
+);
+
+// 失败传播：标记文件让桩以 3 退出，build.bat package 必须如实失败
+fs.writeFileSync(path.join(PKG_TMP, "fail-tauri"), "x");
+const pkgFail = spawnSync("cmd", ["/c", PKG_RUNNER], { cwd: ROOT, stdio: "inherit" });
+ok("cargo tauri build 失败时 build.bat package 如实失败", pkgFail.status !== 0, "exit=" + pkgFail.status);
+
+fs.rmSync(PKG, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+
 // Windows runners can briefly keep the just-exited cmd.exe working directory
 // open. Node's recursive removal retries EBUSY with linear backoff.
 fs.rmSync(FIXTURE, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

@@ -797,6 +797,66 @@ fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64
     out
 }
 
+/// 跨小时/跨天归属的权重切分上限：增量采集周期（活动 10 秒、音频 5 秒）的 3 倍。
+/// 区间超过它意味着断档（休眠/线程停顿）——期间不可能产生真实事件，整笔记入
+/// 当前桶，不按区间摊（否则睡眠 8 小时会把醒来后的事件摊进睡眠时段的桶里）。
+pub(crate) const INTERVAL_SPLIT_CAP_MS: u64 = 30_000;
+
+/// 把 [prev,now] 区间按毫秒时长切成 (date, hour, 权重)（权重即该桶覆盖的毫秒数，
+/// 总和恒等于区间长度）。超出 [`INTERVAL_SPLIT_CAP_MS`]、首拍（prev=0）或时钟
+/// 回拨时返回 None——调用方整笔记入当前桶。与 [`split_by_hour`] 的归属口径一致，
+/// 但按毫秒粒度切分（split_by_hour 是整秒粒度，当权重用会失真）。
+pub(crate) fn interval_weights(prev_ms: u64, now_ms: u64) -> Option<Vec<(String, i64, u64)>> {
+    if prev_ms == 0 || now_ms <= prev_ms || now_ms - prev_ms > INTERVAL_SPLIT_CAP_MS {
+        return None;
+    }
+    let mut out: Vec<(String, i64, u64)> = Vec::new();
+    let mut cur = prev_ms;
+    while cur < now_ms {
+        // 时间戳越界：放弃切分
+        let dt = Local.timestamp_millis_opt(cur as i64).single()?;
+        // 本子段所属小时桶的结束时刻（下一个整点）；chrono 自动处理跨天
+        let next_ms = (dt + chrono::Duration::hours(1))
+            .with_minute(0)
+            .and_then(|d| d.with_second(0))
+            .and_then(|d| d.with_nanosecond(0))
+            .map(|d| d.timestamp_millis().max(0) as u64)
+            .unwrap_or(now_ms);
+        let seg_end = next_ms.min(now_ms);
+        if seg_end <= cur {
+            return None; // 防御：时钟异常时不要死循环
+        }
+        out.push((
+            dt.date_naive().format("%Y-%m-%d").to_string(),
+            dt.hour().min(23) as i64,
+            seg_end - cur,
+        ));
+        cur = seg_end;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 按权重把 count 拆成多份（整数除法，余数补给最后一份）；权重为空/全零时
+/// 整份给唯一槽位。与 [`interval_weights`] 配套使用。
+pub(crate) fn split_count(count: u64, weights: &[u64]) -> Vec<u64> {
+    let total: u64 = weights.iter().sum();
+    if weights.is_empty() || total == 0 {
+        return vec![count];
+    }
+    let mut out: Vec<u64> = weights
+        .iter()
+        .map(|&w| (u128::from(count) * u128::from(w) / u128::from(total)) as u64)
+        .collect();
+    let assigned: u64 = out.iter().sum();
+    let last = out.len() - 1;
+    out[last] += count - assigned;
+    out
+}
+
 /// 每 10 秒结算一次：把自上次结算以来的时长结给当前前台应用。
 /// 正常无切换时等价旧行为；有切换时由切换回调先结过账，这里只切段兜底。
 fn tick() {
@@ -1147,6 +1207,53 @@ mod tests {
 
     /// 跨小时 / 跨天必须按边界分桶，且切分前后总秒数守恒（A5）。
     ///
+    /// 不碰 `CUR`，无需抢 TEST_LOCK。
+    #[test]
+    fn interval_weights_splits_and_caps() {
+        // 跨午夜：23:59:55 → 00:00:05，切两桶各 5 秒
+        let start = Local
+            .with_ymd_and_hms(2026, 3, 10, 23, 59, 55)
+            .unwrap()
+            .timestamp_millis() as u64;
+        let end = Local
+            .with_ymd_and_hms(2026, 3, 11, 0, 0, 5)
+            .unwrap()
+            .timestamp_millis() as u64;
+        let parts = interval_weights(start, end).expect("跨午夜应可切分");
+        assert_eq!(parts.len(), 2, "跨午夜切两桶");
+        assert_eq!(parts[0].0, "2026-03-10");
+        assert_eq!(parts[0].1, 23);
+        assert_eq!(parts[1].0, "2026-03-11");
+        assert_eq!(parts[1].1, 0);
+        let half = parts.iter().map(|p| p.2).sum::<u64>() / 2;
+        assert!(
+            parts[0].2.abs_diff(half) < 3,
+            "5s/5s 区间权重应近似对半（取整误差 <3）"
+        );
+        // 断档（>30s 上限）不切分：休眠期间不可能有真实事件
+        assert!(
+            interval_weights(start, end + 40_000).is_none(),
+            "超上限返回 None"
+        );
+        // 首拍（prev=0）与时钟回拨不切分
+        assert!(interval_weights(0, end).is_none());
+        assert!(interval_weights(end + 1_000, end).is_none());
+    }
+
+    #[test]
+    fn split_count_preserves_total() {
+        assert_eq!(split_count(10, &[5, 5]), vec![5, 5]);
+        assert_eq!(split_count(10, &[3, 7]), vec![3, 7]);
+        assert_eq!(split_count(7, &[1, 1, 1]), vec![2, 2, 3], "余数归最后一份");
+        assert_eq!(split_count(7, &[]), vec![7], "空权重整份给唯一槽位");
+        assert_eq!(split_count(7, &[0]), vec![7], "全零权重整份给唯一槽位");
+        assert_eq!(
+            split_count(1000, &[1, 2, 7]).iter().sum::<u64>(),
+            1000,
+            "拆分必须保总量"
+        );
+    }
+
     /// 不碰 `CUR`，无需抢 TEST_LOCK。
     #[test]
     fn split_by_hour_splits_across_hour_and_day() {

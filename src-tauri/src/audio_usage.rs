@@ -13,7 +13,7 @@
 
 use crate::sync;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -140,6 +140,11 @@ fn sample_round(meters: &[(String, crate::win::AudioMeter)]) -> HashMap<String, 
     acc
 }
 
+/// 上一次 credit 的时刻（epoch ms，0=首拍）：pending 里结转的整秒发生在
+/// [prev, now] 区间，按区间时长切进小时桶——此前整笔记入结算时刻，跨点
+/// （尤其午夜）的播放秒会系统性落错桶（2026-10-04 批次六，与 activity 同口径）。
+static LAST_CREDIT_MS: AtomicU64 = AtomicU64::new(0);
+
 /// 把本轮采样到的「各应用有声毫秒」记入数据库：满 1 秒才落盘，余量跨轮结转。
 /// 写库失败时把已扣除的整秒加回 pending，避免静默丢播放时长。
 fn credit(played_ms: &HashMap<String, u64>) {
@@ -149,10 +154,51 @@ fn credit(played_ms: &HashMap<String, u64>) {
     if due.is_empty() {
         return;
     }
-    let now_dt = Local::now();
-    let date = now_dt.date_naive().format("%Y-%m-%d").to_string();
-    let hour = now_dt.hour().min(23) as i64;
-    if crate::db::with_db(|g| write_audio_due(g, &date, hour, &due)).is_err() {
+    let now = Local::now();
+    let now_ms = now.timestamp_millis().max(0) as u64;
+    let prev_ms = LAST_CREDIT_MS.swap(now_ms, Ordering::Relaxed);
+    let spans = crate::app_usage::interval_weights(prev_ms, now_ms);
+    // 每个应用的秒数按区间权重拆到各桶（首拍/断档/时钟异常时单桶全记）
+    /// (date, hour, 该桶应记的 (应用, 秒) 列表)
+    type BucketDue = (String, i64, Vec<(String, i64)>);
+    let per_bucket: Vec<BucketDue> = match &spans {
+        Some(parts) => {
+            let weights: Vec<u64> = parts.iter().map(|p| p.2).collect();
+            parts
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    (
+                        p.0.clone(),
+                        p.1,
+                        due.iter()
+                            .map(|(app, secs)| {
+                                (
+                                    app.clone(),
+                                    crate::app_usage::split_count(*secs as u64, &weights)[i] as i64,
+                                )
+                            })
+                            .filter(|(_, s)| *s > 0)
+                            .collect(),
+                    )
+                })
+                .collect()
+        }
+        None => vec![(
+            now.date_naive().format("%Y-%m-%d").to_string(),
+            now.hour().min(23) as i64,
+            due.clone(),
+        )],
+    };
+    // 全部桶一次 with_db 写完；任一失败整体回滚 pending，下轮重试
+    if crate::db::with_db(|g| {
+        for (date, hour, due_i) in &per_bucket {
+            write_audio_due(g, date, *hour, due_i)?;
+        }
+        Ok(())
+    })
+    .is_err()
+    {
         let mut pending = sync::lock(pending_ms(), "audio_usage::PENDING_MS");
         restore_due(&mut pending, &due);
     }
