@@ -457,17 +457,20 @@ fn query_day_from_db(date: &str) -> (Vec<HourBucket>, BTreeMap<u32, u64>) {
         )?;
         let rows = stmt.query_map(params![date], |r| {
             let hour: i64 = r.get(0)?;
+            // rusqlite 0.33 起移除了 u64 的 FromSql（SQLite 整数本就是 i64，u64
+            // 会静默截断高位）——计数列按 i64 读出再转 u64，各列均为非负计数。
+            let cnt = |i: usize| r.get::<_, i64>(i).map(|v| v as u64);
             let b = HourBucket {
-                moves: r.get(1)?,
-                pixels: r.get(2)?,
-                left: r.get(3)?,
-                dbl: r.get(4)?,
-                right: r.get(5)?,
-                wheel: r.get(6)?,
-                wheel_ticks: r.get(7)?,
-                mid: r.get(8)?,
-                xbtn: r.get(9)?,
-                keys: r.get(10)?,
+                moves: cnt(1)?,
+                pixels: cnt(2)?,
+                left: cnt(3)?,
+                dbl: cnt(4)?,
+                right: cnt(5)?,
+                wheel: cnt(6)?,
+                wheel_ticks: cnt(7)?,
+                mid: cnt(8)?,
+                xbtn: cnt(9)?,
+                keys: cnt(10)?,
             };
             Ok((hour, b))
         })?;
