@@ -80,6 +80,8 @@
 
 ### Task 2: 批次二——发版链路 ✅ 已完成（2026-10-03，提交见 git log 批次二，build.bat test 七步全绿）
 
+> **追加（2026-10-04，用户发起「无代理可用性」优化，提交 73b049a）**：① `scripts/deny_check.js`——advisory-db 从被墙的 github.com 拉取，在线检查失败且缓存新鲜（≤7 天）时降级 `cargo deny --offline`，过期仍 fail-closed；build.bat deny 步改走此包装。② push_via_api.py 新增 `--tag`（远端 head 上创建轻量 tag 引用，触发 release.yml；已存在且同 sha 幂等成功、不一致拒绝——发布 tag 不可变）+ `REMOTE_SHA:` 机读行；**release.bat push 失败自动转 API 备援，分支+tag 同次调用**——API 重建提交 sha 与本地不同，本地 tag 绝不能再走 git push（会指向远端不存在的提交并触发 CI 构建它）。测试：test_push_via_api 8 条（+3 tag 用例）、test_local_gate 13 条。CONVENTIONS.md 同步。
+
 > 执行记录：cargo-deny 本地已有 0.20.2（钉同版）；新增 scripts/test_local_gate.js（9 条）；build.bat :do_test 现为 fmt→clippy→deny→test→run_all→双 Python 七步，与 tests.yml 逐字同 flag、cargo-deny 缺失 fail-closed；release.yml PDB 步骤补 continue-on-error + tauri-cli@2 钉版；release.bat GIT 回退拒绝 PortableGit/WorkBuddy；REPO 两处交叉注释；CONVENTIONS.md build.bat test 描述同步为六步对齐版。**注意：clippy 曾红两次——① 收口 weekday_cn 后 focus/insights 的 Datelike 变未使用导入（已删）；② 在 Git Bash 裸跑 cargo clippy 会绕过 common.bat 自持 TMP 触发 cc D8050，必须在 build.bat/cmd 语境跑。**
 
 **Files:** `.github/workflows/release.yml`、`.github/workflows/tests.yml`、`build.bat`、`release.bat`、`scripts/push_via_api.py`、`scripts/test_publish_release.py`、新建 `scripts/test_local_gate.js`
