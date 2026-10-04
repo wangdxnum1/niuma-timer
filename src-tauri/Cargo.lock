@@ -2405,7 +2405,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "niuma-timer"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
