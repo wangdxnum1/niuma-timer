@@ -2419,7 +2419,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
- "png 0.17.16",
+ "png 0.18.1",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

@@ -24,7 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 dirs = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
-png = "0.17"
+png = "0.18"
 base64 = "0.22"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
