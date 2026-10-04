@@ -132,7 +132,7 @@ async fn start_update_portable(app: tauri::AppHandle) -> Result<(), String> {
         return Err("已是最新版本".to_string());
     }
     let sums_url = update::sums_url_for(&url);
-    let sums = tauri::async_runtime::spawn_blocking(move || update::fetch_text(&sums_url))
+    let sums = tauri::async_runtime::spawn_blocking(move || update::fetch_text_fallback(&sums_url))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;

@@ -551,11 +551,7 @@ pub fn is_installed() -> bool {
 
 /// 本轮所有网络请求的唯一入口（15 秒超时 + 显式 UA：GitHub 对无 UA 请求会限流）。
 pub fn fetch_text(url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent(concat!("niuma-timer/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_client(Duration::from_secs(15))?;
     let resp = client.get(url).send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -563,9 +559,81 @@ pub fn fetch_text(url: &str) -> Result<String, String> {
     resp.text().map_err(|e| e.to_string())
 }
 
+fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .user_agent(concat!("niuma-timer/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// api.github.com 根：github.com 被墙时直连稳定的备援通道（与发布链的
+/// push_via_api.py 同一事实）。未认证配额 60 次/时/IP，对更新检查（每次 2 个
+/// 请求）绰绰有余。API 对所有请求强制要求 User-Agent（http_client 已带）。
+const API_ROOT: &str = "https://api.github.com/repos/wangdxnum1/niuma-timer";
+
+/// 在 release JSON 的 assets 里按完整文件名找资产 id。
+fn asset_id_in_release(rel: &serde_json::Value, name: &str) -> Option<u64> {
+    rel.get("assets")?.as_array()?.iter().find_map(|a| {
+        let name_match = a.get("name").and_then(|n| n.as_str()) == Some(name);
+        let id = a.get("id").and_then(|i| i.as_u64());
+        name_match.then_some(()).and(id)
+    })
+}
+
+/// 取「最新 release」的 JSON（api.github.com）。
+fn latest_release_json(client: &reqwest::blocking::Client) -> Result<serde_json::Value, String> {
+    client
+        .get(format!("{API_ROOT}/releases/latest"))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|e| format!("api.github.com 不可达: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("api.github.com HTTP {e}"))?
+        .json()
+        .map_err(|e| format!("release JSON 解析失败: {e}"))
+}
+
+/// 经 api.github.com 读 release 资产内容（octet-stream，GitHub 原样返回字节）。
+/// 只用于一次性读入内存的小文件（latest.json / SHA256SUMS.txt）。
+fn fetch_asset_via_api(name: &str) -> Result<Vec<u8>, String> {
+    let client = http_client(Duration::from_secs(15))?;
+    let rel = latest_release_json(&client)?;
+    let id = asset_id_in_release(&rel, name)
+        .ok_or_else(|| format!("最新 release 里没有名为 {name} 的资产"))?;
+    let bytes = client
+        .get(format!("{API_ROOT}/releases/assets/{id}"))
+        .header("Accept", "application/octet-stream")
+        .send()
+        .map_err(|e| format!("资产 {name} 下载失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("资产 {name} HTTP {e}"))?
+        .bytes()
+        .map_err(|e| e.to_string())?;
+    Ok(bytes.to_vec())
+}
+
+/// fetch_text 的双通道版：直连 github.com 失败时，把 url 尾段（latest.json /
+/// SHA256SUMS.txt 都是 release 资产）交给 api.github.com 备援。两个通道的错误
+/// 都拼进返回值，用户看得见「为什么两个都不行」。
+pub fn fetch_text_fallback(url: &str) -> Result<String, String> {
+    match fetch_text(url) {
+        Ok(t) => Ok(t),
+        Err(direct_err) => {
+            let name = url.rsplit('/').next().unwrap_or("");
+            if name.is_empty() {
+                return Err(direct_err);
+            }
+            fetch_asset_via_api(name)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map_err(|api_err| format!("{direct_err}；API 备援也不可用：{api_err}"))
+        }
+    }
+}
+
 /// 拉取并解析远端清单。
 pub fn fetch_remote() -> Result<RemoteRelease, String> {
-    let text = fetch_text(DEFAULT_ENDPOINT)?;
+    let text = fetch_text_fallback(DEFAULT_ENDPOINT)?;
     parse_latest_json(&text)
 }
 
@@ -631,9 +699,86 @@ pub trait Fetcher {
 /// buf 非空时带 Range 续传；服务端不支持（回 200 全量）则清空重来。
 pub struct RealFetcher;
 
+/// 从 release 下载 URL 提取 (tag, 文件名)：…/releases/download/v1.8.2/xxx.exe
+/// → Some(("v1.8.2", "xxx.exe"))。非该形状（如镜像地址）返回 None，不备援。
+fn split_release_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.split("/releases/download/").nth(1)?;
+    let mut it = rest.splitn(3, '/');
+    let tag = it.next()?;
+    let name = it.next()?;
+    let has_no_trailing = it.next().is_none();
+    (!tag.is_empty() && !name.is_empty() && has_no_trailing).then_some((tag, name))
+}
+
+/// 经 api.github.com 流式下载指定 tag 的 release 资产（进度回调口径与直连一致）。
+/// api 资产通道不支持可靠的 Range 续传：buf 非空时清空从头收（download_with_retry
+/// 的重试语义不变，只是放弃半截）。
+fn stream_asset_via_api(
+    tag: &str,
+    name: &str,
+    buf: &mut Vec<u8>,
+    on_chunk: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), String> {
+    let client = http_client(Duration::from_secs(300))?;
+    let rel: serde_json::Value = client
+        .get(format!("{API_ROOT}/releases/tags/{tag}"))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|e| format!("api.github.com 不可达: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("api.github.com HTTP {e}"))?
+        .json()
+        .map_err(|e| format!("release JSON 解析失败: {e}"))?;
+    let id = asset_id_in_release(&rel, name)
+        .ok_or_else(|| format!("release {tag} 里没有名为 {name} 的资产"))?;
+    let mut resp = client
+        .get(format!("{API_ROOT}/releases/assets/{id}"))
+        .header("Accept", "application/octet-stream")
+        .send()
+        .map_err(|e| format!("资产 {name} 下载失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("资产 {name} HTTP {e}"))?;
+    buf.clear();
+    let total = resp.content_length();
+    on_chunk(0, total);
+    let mut chunk = [0u8; 65536];
+    loop {
+        let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok(());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        on_chunk(buf.len() as u64, total);
+    }
+}
+
 impl Fetcher for RealFetcher {
     fn fetch(
         &self,
+        url: &str,
+        buf: &mut Vec<u8>,
+        on_chunk: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String> {
+        match Self::fetch_direct(url, buf, on_chunk) {
+            Ok(()) => Ok(()),
+            Err(direct_err) => match split_release_url(url) {
+                Some((tag, name)) => {
+                    crate::db::debug_log(&format!(
+                        "直连下载失败（{direct_err}），走 api.github.com 备援：{tag}/{name}"
+                    ));
+                    stream_asset_via_api(tag, name, buf, on_chunk)
+                        .map_err(|api_err| format!("{direct_err}；API 备援：{api_err}"))
+                }
+                None => Err(direct_err),
+            },
+        }
+    }
+}
+
+impl RealFetcher {
+    /// 真实下载：15 秒连接超时 + 300 秒总超时 + 显式 UA（GitHub 对无 UA 请求限流）。
+    /// buf 非空时带 Range 续传；服务端不支持（回 200 全量）则清空重来。
+    fn fetch_direct(
         url: &str,
         buf: &mut Vec<u8>,
         on_chunk: &mut dyn FnMut(u64, Option<u64>),
@@ -897,6 +1042,66 @@ pub fn spawn_update_checker(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_release_url_extracts_tag_and_name() {
+        assert_eq!(
+            split_release_url("https://github.com/wangdxnum1/niuma-timer/releases/download/v1.8.2/niuma-timer-1.8.2-portable.exe"),
+            Some(("v1.8.2", "niuma-timer-1.8.2-portable.exe"))
+        );
+        // 非该形状（镜像地址 / 根地址）不备援，返回 None
+        assert_eq!(
+            split_release_url("https://mirror.example.com/pkg.exe"),
+            None
+        );
+        assert_eq!(
+            split_release_url(
+                "https://github.com/wangdxnum1/niuma-timer/releases/download/v1.8.2/"
+            ),
+            None,
+            "缺文件名不得命中"
+        );
+        assert_eq!(
+            split_release_url(
+                "https://github.com/wangdxnum1/niuma-timer/releases/download/v1.8.2/a/b.exe"
+            ),
+            None,
+            "路径多出层级不得命中（防止把奇怪地址当资产）"
+        );
+    }
+
+    #[test]
+    fn asset_id_in_release_finds_exact_name() {
+        let rel = serde_json::json!({
+            "assets": [
+                {"id": 111, "name": "latest.json"},
+                {"id": 222, "name": "niuma-timer-1.8.2-portable.exe"}
+            ]
+        });
+        assert_eq!(asset_id_in_release(&rel, "latest.json"), Some(111));
+        assert_eq!(
+            asset_id_in_release(&rel, "niuma-timer-1.8.2-portable.exe"),
+            Some(222)
+        );
+        assert_eq!(
+            asset_id_in_release(&rel, "SHA256SUMS.txt"),
+            None,
+            "缺失资产返回 None"
+        );
+        // 前缀相同的名字不算命中
+        let tricky = serde_json::json!({
+            "assets": [{"id": 333, "name": "niuma-timer-1.8.2-portable.exe.pdb.zip"}]
+        });
+        assert_eq!(
+            asset_id_in_release(&tricky, "niuma-timer-1.8.2-portable.exe"),
+            None
+        );
+        // 没有 assets 字段也不 panic
+        assert_eq!(
+            asset_id_in_release(&serde_json::json!({}), "latest.json"),
+            None
+        );
+    }
 
     #[test]
     fn installation_must_match_running_executable() {

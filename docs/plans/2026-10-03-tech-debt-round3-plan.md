@@ -177,10 +177,9 @@
 
 ---
 
-### Task 5: 收尾与发版 v1.8.2 ⏸ 材料就绪，仅剩发版命令（阻塞：github.com 不通、Clash 未开）
+### Task 5: 收尾与发版 v1.8.2 ✅ 发版完成（2026-10-04，云端 Release workflow 构建发布中）
 
-> 已完成：CHANGELOG [1.8.2] 段（用户视角摘要 + 四批归段）、README 双语 1.8.2 对齐、版本三处同步（Cargo.toml / tauri.conf.json / README == 1.8.2，提交 439b3b5）、run_all 36 套件全绿。
-> **剩余唯一一步：网络恢复（开 Clash 或 github.com 可达）后运行 `release.bat 1.8.2 /y`**——本地七步门禁会完整重跑（deny 步需要线上拉 advisory-db；当前 github.com 被墙、7890 未监听，曾以 `cargo deny --offline check advisories` 用当日缓存离线验证通过）。发版后：云端 success + 8 资产 + latest.json 可拉；若 git push 失败走 `scripts/push_via_api.py` 备援（api.github.com 稳定），事后 fetch+reset 对齐。最后更新记忆 tech-debt-round3-2026-10 清偿状态。
+> 执行记录：CHANGELOG [1.8.2] 段、README 双语、版本三处同步（439b3b5）；`release.bat 1.8.2 /y` 全程通过——本地七步门禁绿（deny 经新包装离线兜底）、打包 NSIS+MSI+portable+签名+latest.json 校验齐、tag v1.8.2 已推、云端 run 37167511685 触发。**插曲两则**：① push 时 github.com 直连恢复（探活时尚不通，网络波动），API 备援未实际启用——但接线已在，下次被墙自动生效；② 首版备援 echo 文本里 `(api.github.com...):` 的右括号在 cmd 括号块内提前闭合 if-block，tag push 未执行即报「此时不应有 ：」中止——tag 手工补推（指向远端 head 527ee95，安全），echo 文本重写去括号/去 &&（0fe9893）。教训已含：**bat 括号块内的 echo 文本禁用 `(` `)` `&&` 等块结构字符。**
 
 - [ ] `build.bat test`（此时为六步对齐版）全绿
 - [ ] CHANGELOG 增 `[1.8.2]` 段：开头一句用户视角摘要（v1.8.1 惯例），四批按「修复/变更」归段，依赖升级记体积变化
