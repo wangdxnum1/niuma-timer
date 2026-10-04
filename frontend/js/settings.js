@@ -336,3 +336,100 @@ function showToast(msg, type) {
 // 加载失败横幅的「重新加载」按钮：属于本文件的加载职责，绑在这里而非 monitor.js。
 // 脚本在 body 末尾加载，DOM 此时已就绪，可直接绑定。
 $("cfgRetryBtn").addEventListener("click", async () => { await load(); });
+
+// ---- 设置页控件绑定（自 monitor.js 迁回，2026-10-04 批次五：设置域逻辑与绑定同文件）----
+
+// 文本/数字/时间控件：失去焦点时自动保存
+[
+  "monthly_salary",
+  "hourly_wage",
+  "am_start",
+  "am_end",
+  "pm_start",
+  "pm_end",
+  "payday",
+  "workdays_override",
+  "weekend_ot_start",
+  "overtime_rate_weekend",
+  "overtime_rate_holiday",
+].forEach((id) => $(id).addEventListener("blur", saveIfChanged));
+// 计薪方式分段（v1.6.0）：切换即保存并显隐月聘/时薪字段
+document.querySelectorAll("#salaryModeSeg .mon-seg-item").forEach((b) => {
+  b.addEventListener("click", () => {
+    setSalaryModeUI(b.dataset.salaryMode);
+    saveNow();
+  });
+});
+// 下拉框：选择即保存
+$("duration_format").addEventListener("change", saveIfChanged);
+// 副标题风格：立即保存，并用最近一次状态重画（不发 IPC）
+$("tagline_style").addEventListener("change", () => {
+  applyTaglineCustomVisibility($("tagline_style").value);
+  saveNow();
+  if (lastStatus) renderTagline(lastStatus);
+  else tick();
+});
+// 自定义文案：输入时实时预览，失焦才写盘
+$("tagline_custom").addEventListener("input", () => {
+  if (taglineStyle() === "custom" && lastStatus) renderTagline(lastStatus);
+});
+$("tagline_custom").addEventListener("blur", saveIfChanged);
+// 开关：立即保存
+$("tray_hover_card").addEventListener("change", saveNow);
+// 守护设置（v1.3.0）：开关即存；阈值失焦存
+$("remind_sedentary_enabled").addEventListener("change", saveNow);
+$("remind_offwork_enabled").addEventListener("change", saveNow);
+$("remind_payday_enabled").addEventListener("change", saveNow);
+// 专注段（v1.7.0）：开关即存，阈值失焦存
+$("focus_enabled").addEventListener("change", () => {
+  applyFocusVisibility($("focus_enabled").checked);
+  saveNow();
+});
+
+// 专注统计关闭时隐藏达标线输入（同 overtime.js applyOvertimeVisibility 模式）：
+// 此前开关只存盘不联动，焦点行永远显示——像坏了的开关
+function applyFocusVisibility(enabled) {
+  const row = $("focusMinutesRow");
+  if (row) row.classList.toggle("hidden", !enabled);
+}
+$("focus_min_minutes").addEventListener("blur", saveIfChanged);
+$("shortcuts_enabled").addEventListener("change", saveNow);
+$("update_auto_check").addEventListener("change", saveNow);
+$("remind_sedentary_minutes").addEventListener("blur", saveIfChanged);
+// 加班设置：输入框失焦保存，开关立即保存
+["overtime_start", "overtime_rate", "overtime_meal"].forEach((id) =>
+  $(id).addEventListener("blur", saveIfChanged),
+);
+$("overtime_enabled").addEventListener("change", () => {
+  const on = $("overtime_enabled").checked;
+  // 关闭时立即隐藏主界面加班卡片；开启时立即重新拉取并展示
+  applyOvertimeVisibility(on);
+  saveNow();
+  if (on) loadOvertime();
+});
+$("overtime_meal_enabled").addEventListener("change", saveNow);
+$("overtime_exclude_remote").addEventListener("change", saveNow);
+$("weekend_overtime").addEventListener("change", () => {
+  applyRestOvertimeVisibility($("weekend_overtime").checked);
+  saveNow();
+});
+// 应用使用白名单：开关立即保存；添加按钮/回车新增 chip 并保存
+$("app_whitelist_enabled").addEventListener("change", saveNow);
+$("appWhitelistAdd").addEventListener("click", addWhitelistItem);
+$("appWhitelistInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addWhitelistItem();
+  }
+});
+// 监控开关：立即保存（后端即时生效）+ 同步内存状态刷新首页卡片
+["monitor_activity", "monitor_app_usage", "monitor_audio"].forEach((id) =>
+  $(id).addEventListener("change", () => {
+    syncMonitorState();
+    saveNow();
+    // 立即刷新一次对应卡片（显示数据或停用提示）
+    if (id === "monitor_activity") loadActivity();
+    else if (id === "monitor_app_usage") loadAppUsage();
+    else loadAudioUsage();
+  }),
+);

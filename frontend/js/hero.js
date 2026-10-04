@@ -24,7 +24,7 @@ async function tick() {
   try {
     const s = await invoke("get_status_cmd");
     lastStatus = s;
-    $("earned").textContent = "¥" + s.earned.toFixed(2);
+    $("earned").textContent = fmtMoney(s.earned);
     renderBadge(s);
     renderSparkline(s);
     renderTimeline(s);
@@ -36,10 +36,10 @@ async function tick() {
       const pct = Math.min(100, (s.earned / target) * 100);
       liveProgress.classList.remove("hidden");
       $("lpFill").style.width = pct.toFixed(1) + "%";
-      $("lpTarget").textContent = "¥" + target.toFixed(2);
+      $("lpTarget").textContent = fmtMoney(target);
       $("lpPct").textContent = Math.round(pct) + "%";
       $("lpMeta").textContent =
-        "速率 ¥" + s.rate_per_min.toFixed(2) + "/分 · 距发薪 " + s.days_to_pay + " 天";
+        "速率 " + fmtMoney(s.rate_per_min) + "/分 · 距发薪 " + s.days_to_pay + " 天";
     } else {
       liveProgress.classList.add("hidden");
     }
@@ -76,10 +76,7 @@ function renderBadge(s) {
   }
 }
 
-// 落在 [s,e] 时段内的分钟数（与后端 calc::overlap 同口径，只服务本文件可视化）
-function overlapMin(t, s, e) {
-  return t <= s ? 0 : t >= e ? e - s : t - s;
-}
+// overlapMin / minutesOf 收口到 tl_math.js（与 hover_card 共享，勿再本文件自抄）
 
 // 赚钱走势：以配置时段 + 当前时薪重建「今日已赚」曲线（0 时 → 现在，15 分钟步长）。
 // 已赚随时段的函数是确定的（分段线性），因此无需新命令、无需存储——
@@ -149,7 +146,7 @@ function renderTimeline(s) {
   }
   box.classList.remove("hidden");
   const span = pmE - amS;
-  const pct = (v) => (Math.min(Math.max(v, 0), span) / span) * 100 + "%";
+  const pct = (v) => spanPct(v, span);
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const amWorked = overlapMin(nowMin, amS, amE);
@@ -182,16 +179,8 @@ function taglineStyle() {
   return v || "dynamic"; // 控件还没填好时退回动态，不显示空白
 }
 
-// "HH:MM" -> 当日分钟数；空值或格式不合法返回 null。
-// 不能用 0 兜底：否则「上午下班 00:00」这类合法值会被当成无效而跳过午休判断。
-function minutesOf(hhmm) {
-  const p = String(hhmm || "").split(":");
-  if (p.length !== 2) return null;
-  const h = parseInt(p[0], 10);
-  const m = parseInt(p[1], 10);
-  if (isNaN(h) || isNaN(m)) return null;
-  return h * 60 + m;
-}
+// minutesOf 收口到 tl_math.js（与 hover_card 共享）：不能用 0 兜底，否则
+// 「上午下班 00:00」这类合法值会被当成无效而跳过午休判断——null 语义保留。
 
 // 动态副标题：把「实时」这个卖点用起来，而不是写死一句说明文。
 // 全部基于 tick 已拿到的状态，不发额外 IPC。

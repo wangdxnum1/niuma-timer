@@ -408,6 +408,9 @@
       <div class="otrow"><span class="k">本月加班战果</span><span class="v" id="otTotal">¥0 · 0 天</span></div>
       <div class="foot" id="foot"><i class="dot"></i><span id="footText">—</span></div>
     </div>
+    <!-- tl_math.js 与主界面共享时间轴数学（minutesOf/overlapMin/spanPct）；
+         ?v=4d19b212 缓存戳由 build.rs 与 index.html 同源回写 -->
+    <script src="js/tl_math.js?v=4d19b212"></script>
     <script>
       // ===== 前端错误上报（emit 到 Rust 端 eprintln 打印，便于排查"不显示"类问题）=====
       function reportErr(msg) {
@@ -481,13 +484,10 @@
       var cfg = null;
       var otFetchedAt = 0;
 
-      function toMin(hhmm) {
-        var p = String(hhmm || "").split(":");
-        if (p.length !== 2) return null;
-        var h = parseInt(p[0], 10);
-        var m = parseInt(p[1], 10);
-        if (isNaN(h) || isNaN(m)) return null;
-        return h * 60 + m;
+      // 金额口径与主界面 fmtMoney（core.js）逐字一致——独立文档无法加载 core.js，
+      // 由 test_hover_card 断言两份实现同步，改动必须两处同改
+      function fmtMoney(n) {
+        return "¥" + (Number(n) || 0).toFixed(2);
       }
 
       function loadCfg() {
@@ -507,7 +507,7 @@
         window.__TAURI_INTERNALS__.invoke("get_overtime_records")
           .then(function (ot) {
             document.getElementById("otTotal").textContent =
-              "¥" + ot.total_all.toFixed(0) + " · " + ot.days + " 天";
+              fmtMoney(ot.total_all) + " · " + ot.days + " 天";
           })
           .catch(function (err) {
             reportErr("get_overtime_records: " + err);
@@ -518,10 +518,10 @@
       // 每秒随 hover_data 刷新；休息日或配置异常时整块隐藏
       function renderTimeline(s) {
         var wrap = document.getElementById("tl");
-        var amS = cfg ? toMin(cfg.am_start) : null;
-        var amE = cfg ? toMin(cfg.am_end) : null;
-        var pmS = cfg ? toMin(cfg.pm_start) : null;
-        var pmE = cfg ? toMin(cfg.pm_end) : null;
+        var amS = cfg ? minutesOf(cfg.am_start) : null;
+        var amE = cfg ? minutesOf(cfg.am_end) : null;
+        var pmS = cfg ? minutesOf(cfg.pm_start) : null;
+        var pmE = cfg ? minutesOf(cfg.pm_end) : null;
         if (
           !s.is_workday ||
           amS === null ||
@@ -537,21 +537,17 @@
         var span = pmE - amS;
         var now = new Date();
         var nowMin = now.getHours() * 60 + now.getMinutes();
-        function ov(t, a, b) {
-          return t <= a ? 0 : t >= b ? b - a : t - a;
-        }
-        function pc(v) {
-          return (Math.min(Math.max(v, 0), span) / span) * 100 + "%";
-        }
-        var amW = ov(nowMin, amS, amE);
-        var pmW = ov(nowMin, pmS, pmE);
-        document.getElementById("tlAmDone").style.width = pc(amW);
-        document.getElementById("tlAmTodo").style.width = pc(amE - amS - amW);
-        document.getElementById("tlRest").style.width = pc(pmS - amE);
-        document.getElementById("tlPmDone").style.width = pc(pmW);
-        document.getElementById("tlPmTodo").style.width = pc(pmE - pmS - pmW);
-        document.getElementById("tlNow").style.left = pc(
-          Math.min(Math.max(nowMin, amS), pmE)
+        // ov/pc 收口到 tl_math.js 共享实现（overlapMin / spanPct）
+        var amW = overlapMin(nowMin, amS, amE);
+        var pmW = overlapMin(nowMin, pmS, pmE);
+        document.getElementById("tlAmDone").style.width = spanPct(amW, span);
+        document.getElementById("tlAmTodo").style.width = spanPct(amE - amS - amW, span);
+        document.getElementById("tlRest").style.width = spanPct(pmS - amE, span);
+        document.getElementById("tlPmDone").style.width = spanPct(pmW, span);
+        document.getElementById("tlPmTodo").style.width = spanPct(pmE - pmS - pmW, span);
+        document.getElementById("tlNow").style.left = spanPct(
+          Math.min(Math.max(nowMin, amS), pmE),
+          span
         );
         document.getElementById("tlAmStart").textContent = cfg.am_start;
         document.getElementById("tlAmEnd").textContent = cfg.am_end;
@@ -570,7 +566,7 @@
         curEarned = s.earned;
         // 补账滚动动画进行中时跳过金额写入（动画结束写入精确终值）
         if (!animating) {
-          document.getElementById("earned").textContent = "¥" + s.earned.toFixed(2);
+          document.getElementById("earned").textContent = fmtMoney(s.earned);
         }
 
         // 全天进度条：已赚 / 全天应赚（时薪 × 日工时，DayStatus 现成字段）。
@@ -582,7 +578,7 @@
           lp.classList.remove("hidden");
           var pct = Math.min(100, (s.earned / target) * 100);
           document.getElementById("lpFill").style.width = pct.toFixed(1) + "%";
-          lpCapL.textContent = "今日已赚 · 全天 ¥" + target.toFixed(0);
+          lpCapL.textContent = "今日已赚 · 全天 " + fmtMoney(target);
           document.getElementById("lpPct").textContent = Math.round(pct) + "%";
         } else {
           lp.classList.add("hidden");
@@ -597,7 +593,7 @@
         document.getElementById("toff").textContent = s.is_workday
           ? s.off_work ? "已下班" : fmtDur(s.to_off_h)
           : "休息中";
-        document.getElementById("rate").textContent = "¥" + s.rate_per_min.toFixed(2) + "/分";
+        document.getElementById("rate").textContent = fmtMoney(s.rate_per_min) + "/分";
         document.getElementById("pay").textContent = s.days_to_pay + " 天";
 
         var now = new Date();
@@ -608,19 +604,16 @@
         // 下班预告价值（C1）：剩余工时 × 时薪——「还要熬多久」直接换算成钱的期待
         var c1 = document.getElementById("c1");
         if (s.is_workday && !s.off_work && !s.paused && cfg && s.hourly_rate > 0) {
-          var amS = toMin(cfg.am_start);
-          var amE = toMin(cfg.am_end);
-          var pmS = toMin(cfg.pm_start);
-          var pmE = toMin(cfg.pm_end);
+          var amS = minutesOf(cfg.am_start);
+          var amE = minutesOf(cfg.am_end);
+          var pmS = minutesOf(cfg.pm_start);
+          var pmE = minutesOf(cfg.pm_end);
           if (amS !== null && amE !== null && pmS !== null && pmE !== null) {
             var nMin = now.getHours() * 60 + now.getMinutes();
-            function ov2(t, a, b) {
-              return t <= a ? 0 : t >= b ? b - a : t - a;
-            }
-            var remainMin = ov2(nMin, amS, amE) + ov2(nMin, pmS, pmE);
+            var remainMin = overlapMin(nMin, amS, amE) + overlapMin(nMin, pmS, pmE);
             if (remainMin > 0) {
               c1.textContent =
-                "熬到 " + cfg.pm_end + "，还能再赚 ¥" + Math.round((remainMin / 60) * s.hourly_rate);
+                "熬到 " + cfg.pm_end + "，还能再赚 " + fmtMoney((remainMin / 60) * s.hourly_rate);
               c1.style.visibility = "visible";
             } else {
               c1.style.visibility = "hidden";
@@ -676,7 +669,7 @@
         ) {
           var gain = curEarned - last;
           var mins = Math.max(1, Math.round((Date.now() - lastT) / 60000));
-          showQuip("离开 " + mins + " 分钟 · 又赚 ¥" + gain.toFixed(2), false);
+          showQuip("离开 " + mins + " 分钟 · 又赚 " + fmtMoney(gain), false);
           catchupHoldUntil = Date.now() + 4000;
           if (!reducedMotion()) {
             animating = true;
@@ -687,12 +680,12 @@
               var k = Math.min(1, (t - t0) / DUR);
               var eased = 1 - Math.pow(1 - k, 3); // ease-out cubic
               document.getElementById("earned").textContent =
-                "¥" + (from + gain * eased).toFixed(2);
+                fmtMoney(from + gain * eased);
               if (k < 1) {
                 requestAnimationFrame(step);
               } else {
                 animating = false;
-                document.getElementById("earned").textContent = "¥" + curEarned.toFixed(2);
+                document.getElementById("earned").textContent = fmtMoney(curEarned);
               }
             }
             requestAnimationFrame(step);

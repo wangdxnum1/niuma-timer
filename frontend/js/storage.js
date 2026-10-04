@@ -222,10 +222,4 @@ $("backupList").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-backup]");
   if (btn) doRestore(btn.dataset.backup);
 });
-// 加班记录增删改
-$("otAddBtn").addEventListener("click", openOtForm);
-$("otExportBtn").addEventListener("click", exportOvertimeCsv);
-$("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
-$("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
-$("otfSave").addEventListener("click", submitOtForm);
-$("otfCancel").addEventListener("click", hideOtForm);
+// 加班记录的按钮绑定归位 overtime.js（此前寄宿在 storage.js，与「数据存储」职责无关）

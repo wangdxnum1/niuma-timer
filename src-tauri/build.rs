@@ -26,6 +26,7 @@ const FE_VER_PREFIX: &str = "const FE_VER = \"";
 /// 需要同步缓存戳的文件（路径相对 build.rs 的工作目录，即 src-tauri/）
 const TARGETS: &[&str] = &[
     "../frontend/index.html",
+    "../frontend/hover_card.html",
     "../frontend/js/core.js",
     "tauri.conf.json",
     "src/tray.rs",

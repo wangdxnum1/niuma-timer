@@ -24,10 +24,6 @@ let billStyle = "receipt";
 let curBillSpan = "week";
 let billRequestGeneration = 0;
 
-function fmtMoney(n) {
-  return "¥" + (Number(n) || 0).toFixed(2);
-}
-
 // 有效时薪未配置：工资与摸鱼成本口径不成立，相关行一律隐藏。
 // 统一口径「有效时薪 > 0」：月聘看月薪输入框，时薪模式（v1.6.0）看时薪输入框
 function moneyConfigured() {

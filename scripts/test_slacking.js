@@ -86,7 +86,7 @@ has("停用时同步隐藏", appSrc, "renderSlackBurn(); // 停用时 hero 烧�
 // 3.5 明细构成金额化
 has("构成金额行 class", appSrc, "cat-money");
 has("摸鱼类金额高亮按 key 拼接", appSrc, "cat-money cat-money-");
-has("构成金额同口径公式", appSrc, '((c.seconds / 3600) * rate).toFixed(2)');
+has("构成金额同口径公式（fmtMoney 单一金额口径）", appSrc, "fmtMoney((c.seconds / 3600) * rate)");
 
 // 3.6 styles.css 样式
 has("CSS：烧钱行容器", css, ".slack-burn {");

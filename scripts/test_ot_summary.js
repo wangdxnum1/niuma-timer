@@ -36,7 +36,7 @@ eq("HTML: 不再用旧类 mn-summary 包裹",
   html.includes('id="otMonthSummary" class="mn-summary"'), false);
 
 // ---------------------------------------------------------------- 2. 前端渲染逻辑
-has("app: 渲染金额 total_all", appSrc, "ot.total_all.toFixed(0)");
+has("app: 渲染金额 total_all（fmtMoney 单一口径，两位小数）", appSrc, "fmtMoney(ot.total_all)");
 has("app: 渲染时长 total_hours", appSrc, "ot.total_hours.toFixed(1)");
 has("app: 渲染天数 days", appSrc, "ot.days");
 has("app: 金卡结构 os-amount", appSrc, "os-amount");

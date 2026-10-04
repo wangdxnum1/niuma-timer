@@ -160,6 +160,19 @@ has("提示窗口不抢键盘焦点", traySrc, ".focusable(false)");
 has("只有已显示状态才启用卡片保持区", traySrc, "let on_card = self.state.is_shown()");
 has("保持区确认卡片窗口确实可见", traySrc, 'app.get_webview_window("hover_card").is_some_and(|w| w.is_visible().unwrap_or(false))');
 has("卡片保持区随 DPI 换算透明边距", traySrc, "hover_state::in_card((pos.x, pos.y), rect, rect.2 / HOVER_CARD_W)");
+
+// ---- 金额口径同步（2026-10-04 批次五）：hover_card 是独立文档，fmtMoney 与
+// core.js 的单源实现各持一份——两份函数体必须逐字一致，改一处必改另一处；
+// 时间轴数学（minutesOf/overlapMin/spanPct）则经 tl_math.js 真共享，禁再本地自抄。
+const coreSrc = fs.readFileSync(path.join(ROOT, "frontend", "js", "core.js"), "utf8");
+const heroSrc = fs.readFileSync(path.join(ROOT, "frontend", "js", "hero.js"), "utf8");
+const moneyBody = 'return "¥" + (Number(n) || 0).toFixed(2);';
+eq("hover_card 自持 fmtMoney 与 core.js 函数体逐字一致", html.includes(moneyBody) && coreSrc.includes(moneyBody), true);
+has("hover_card 引入共享时间轴数学 tl_math.js", html, 'js/tl_math.js?v=');
+lacks("hover_card 不得再本地自抄 toMin", html, "function toMin(");
+lacks("hover_card 不得再本地自抄 ov2", html, "function ov2(");
+lacks("hero.js 不得再本地自抄 overlapMin", heroSrc, "function overlapMin(");
+lacks("hero.js 不得再本地自抄 minutesOf", heroSrc, "function minutesOf(");
 has("托盘触发区和卡片保持区分别传入状态机", traySrc, "self.state.observe(Instant::now(), inside, on_card, blocked)");
 
 console.log("");

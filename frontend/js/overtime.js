@@ -70,13 +70,13 @@ function shiftOtMonth(delta) {
   loadOvertime();
 }
 
-// 主界面「本月加班战果」金色卡：只吃当月数据（¥ 符号在模板里，这里只写数值）
+// 主界面「本月加班战果」金色卡：只吃当月数据（¥ 符号在模板里，这里只写数值——
+// 两位小数与全局 fmtMoney 口径一致，只是不带符号）
 function renderOtHome(ot) {
-  $("otMonthTotal").textContent = ot.total_all.toFixed(0);
+  $("otMonthTotal").textContent = ot.total_all.toFixed(2);
   $("otMonthHours").textContent = ot.total_hours.toFixed(1) + "h";
   $("otMonthDays").textContent = ot.days + " 天";
-  $("otMonthAvg").textContent =
-    "¥" + (ot.days > 0 ? (ot.total_all / ot.days).toFixed(0) : "0");
+  $("otMonthAvg").textContent = fmtMoney(ot.days > 0 ? ot.total_all / ot.days : 0);
 }
 
 // 加班明细页：表格 + 所选月份小计，跟随 otView
@@ -90,14 +90,14 @@ function renderOtTable(ot) {
       sum.classList.remove("empty");
       const avg = ot.days > 0 ? ot.total_all / ot.days : 0;
       sum.innerHTML =
-        '<div class="os-amount">¥' + ot.total_all.toFixed(0) + '</div>' +
+        '<div class="os-amount">' + fmtMoney(ot.total_all) + '</div>' +
         '<div class="os-meta">' +
           '<div class="cell"><div class="k">有效时长</div><div class="v">' +
             ot.total_hours.toFixed(1) + 'h</div></div>' +
           '<div class="cell"><div class="k">加班天数</div><div class="v">' +
             ot.days + ' 天</div></div>' +
-          '<div class="cell"><div class="k">日均进账</div><div class="v">¥' +
-            avg.toFixed(0) + '</div></div>' +
+          '<div class="cell"><div class="k">日均进账</div><div class="v">' +
+            fmtMoney(avg) + '</div></div>' +
         '</div>';
     } else {
       sum.classList.add("empty");
@@ -126,9 +126,9 @@ function renderOtTable(ot) {
       // 跨午夜的离开时刻是次日凌晨，光看 "01:30" 会被误读成当天凌晨
       r.cross_midnight ? "次日 " + r.lock_time : r.lock_time,
       r.valid_hours.toFixed(1) + "h",
-      "¥" + r.fee.toFixed(0),
-      r.meal > 0 ? "¥" + r.meal.toFixed(0) : "—",
-      "¥" + r.total.toFixed(0),
+      fmtMoney(r.fee),
+      r.meal > 0 ? fmtMoney(r.meal) : "—",
+      fmtMoney(r.total),
       isManual ? "手动" : "自动",
     ];
     cells.forEach((c, i) => {
@@ -353,3 +353,11 @@ async function deleteOtRecord(date) {
     showToast("删除失败：" + e, "err");
   }
 }
+
+// 加班记录的按钮绑定（自 storage.js 迁回，2026-10-04 批次五：按钮与加班域逻辑同文件）
+$("otAddBtn").addEventListener("click", openOtForm);
+$("otExportBtn").addEventListener("click", exportOvertimeCsv);
+$("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
+$("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
+$("otfSave").addEventListener("click", submitOtForm);
+$("otfCancel").addEventListener("click", hideOtForm);

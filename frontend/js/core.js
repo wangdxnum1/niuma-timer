@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "vd7171e17";
+const FE_VER = "v4d19b212";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -67,6 +67,13 @@ function fmtDurCN(sec) {
   if (h > 0) return h + "小时" + (m > 0 ? m + "分" : "");
   if (m > 0) return m + "分钟";
   return sec + "秒";
+}
+
+// 金额单一口径：¥ + 两位小数（此前 17 处内联 toFixed(0)/toFixed(2) 漂移，
+// 同一「全天应赚」主界面 ¥123.45、悬停卡 ¥123）。hover_card 是独立文档，
+// 自持一份同体实现，由 test_hover_card 断言逐字一致。
+function fmtMoney(n) {
+  return "¥" + (Number(n) || 0).toFixed(2);
 }
 
 const $ = (id) => document.getElementById(id);

@@ -10,7 +10,7 @@ const FRONTEND = path.join(ROOT, "frontend");
 
 // 加载序：boot.js 必须最后
 const CHUNKS = [
-  "core.js", "settings.js", "hero.js", "overtime.js", "monitor.js",
+  "core.js", "tl_math.js", "settings.js", "hero.js", "overtime.js", "monitor.js",
   "bill.js", "insights.js", "storage.js", "update.js", "boot.js",
 ];
 
