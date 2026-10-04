@@ -175,7 +175,10 @@
 
 ---
 
-### Task 5: 收尾与发版 v1.8.2
+### Task 5: 收尾与发版 v1.8.2 ⏸ 材料就绪，仅剩发版命令（阻塞：github.com 不通、Clash 未开）
+
+> 已完成：CHANGELOG [1.8.2] 段（用户视角摘要 + 四批归段）、README 双语 1.8.2 对齐、版本三处同步（Cargo.toml / tauri.conf.json / README == 1.8.2，提交 439b3b5）、run_all 36 套件全绿。
+> **剩余唯一一步：网络恢复（开 Clash 或 github.com 可达）后运行 `release.bat 1.8.2 /y`**——本地七步门禁会完整重跑（deny 步需要线上拉 advisory-db；当前 github.com 被墙、7890 未监听，曾以 `cargo deny --offline check advisories` 用当日缓存离线验证通过）。发版后：云端 success + 8 资产 + latest.json 可拉；若 git push 失败走 `scripts/push_via_api.py` 备援（api.github.com 稳定），事后 fetch+reset 对齐。最后更新记忆 tech-debt-round3-2026-10 清偿状态。
 
 - [ ] `build.bat test`（此时为六步对齐版）全绿
 - [ ] CHANGELOG 增 `[1.8.2]` 段：开头一句用户视角摘要（v1.8.1 惯例），四批按「修复/变更」归段，依赖升级记体积变化

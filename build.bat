@@ -194,7 +194,10 @@ if errorlevel 1 (
   echo [ERROR] cargo-deny not found - install it once with: cargo install cargo-deny --locked
   exit /b 1
 )
-%CARGO_BIN% deny check advisories
+rem deny_check.js: advisory-db fetch goes to github.com, which is unreachable
+rem without a proxy on this machine - on failure it falls back to the cached db
+rem only when fresh (<= 7 days), otherwise fails closed. CI is always online.
+node "%ROOT%scripts\deny_check.js"
 set "ERRCODE=%errorlevel%"
 if %ERRCODE% neq 0 (
   echo [ERROR] cargo deny failed with code %ERRCODE%

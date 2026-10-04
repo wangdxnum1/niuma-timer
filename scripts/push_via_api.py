@@ -91,7 +91,7 @@ def blob_sha1(raw: bytes) -> str:
     return h.hexdigest()
 
 
-def push_branch(branch, base_ref, force=False):
+def push_branch(branch, base_ref, force=False, tag=None):
     commits = git("rev-list", "--reverse", f"{base_ref}..{branch}").split()
     if not commits:
         print("nothing to push")
@@ -165,7 +165,30 @@ def push_branch(branch, base_ref, force=False):
         r = api("PATCH", "/git/refs/heads/" + branch, {"sha": parent, "force": bool(force)})
     ok = isinstance(r.get("object"), dict)
     print("ref:", ("-> " + r["object"]["sha"][:10]) if ok else r)
-    return 0 if ok else 1
+    if not ok:
+        return 1
+    # 机读行：release.bat 的 API 备援路径据此确认远端 head（人读的 ref: 行保留）
+    print("REMOTE_SHA: " + parent)
+    if tag:
+        # tag 必须与分支同一次调用创建：远端 head sha 是 API 重建的，与本地不同，
+        # 回去用 git push 推本地 tag 会指向一个远端不存在的提交并触发 CI 构建它。
+        # 轻量 tag（ref 直指提交）足以触发 release.yml 的 on: push: tags。
+        tr = api("POST", "/git/refs", {"ref": "refs/tags/" + tag, "sha": parent})
+        if isinstance(tr.get("object"), dict):
+            print("tag:", tag, "->", parent[:10])
+        else:
+            # 已存在 → 只读核验：指向同一提交才算幂等成功；发布 tag 不可变，
+            # 指向不一致时如实报错并要求换新版本号，绝不强改。
+            cur = api("GET", "/git/ref/tags/" + tag)
+            cur_sha = (cur.get("object") or {}).get("sha")
+            if cur_sha == parent:
+                print("tag:", tag, "already at", parent[:10], "(idempotent)")
+            else:
+                print("TAG FAIL: refs/tags/" + tag, "already exists at", cur_sha,
+                      "but this push head is", parent,
+                      "- release tags are immutable, use a new version")
+                return 1
+    return 0
 
 
 def main():
@@ -175,13 +198,17 @@ def main():
     ap.add_argument("--base", default="origin/main", help="基线引用（默认 origin/main）")
     ap.add_argument("--force", action="store_true",
                     help="远端分支已存在且非快进时强制覆盖（默认拒绝）")
+    ap.add_argument("--tag", metavar="NAME",
+                    help="分支推送成功后在远端 head 上创建轻量 tag 引用"
+                         "（refs/tags/NAME，触发 release.yml 的 on: push: tags）；"
+                         "已存在且指向一致视为幂等成功，指向不一致则报错拒绝")
     a = ap.parse_args()
     TOK = token()
     if not TOK:
         print("no GitHub token: set NIUMA_GITHUB_TOKEN / GITHUB_TOKEN, "
               "or store one for github.com in the git credential manager")
         return 1
-    return push_branch(a.branch, a.base, a.force)
+    return push_branch(a.branch, a.base, a.force, a.tag)
 
 
 if __name__ == "__main__":

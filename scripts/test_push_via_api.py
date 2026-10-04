@@ -8,6 +8,7 @@ push_via_api.py 的历史坑都钉在这里：
 """
 import base64
 import contextlib
+import io
 import os
 import pathlib
 import shutil
@@ -64,18 +65,22 @@ class FakeApi:
     the uploaded content (so only byte-exact uploads pass), everything else is
     recorded. POST /git/refs fails like an existing branch, forcing the PATCH path."""
 
-    def __init__(self, parent, tree, blob_sha_override=None):
+    def __init__(self, parent, tree, blob_sha_override=None, tag_exists_at=None):
         self.parent = parent
         self.tree = tree
         self.blob_sha_override = blob_sha_override
+        self.tag_exists_at = tag_exists_at
         self.blob_payloads = []
         self.calls = []
+        self.ref_payloads = []
         self.patch_force = None
 
     def __call__(self, method, url, payload=None):
         self.calls.append(method + " " + url)
         if method == "GET" and url.startswith("/git/ref/heads/"):
             return {"object": {"sha": self.parent}}
+        if method == "GET" and url.startswith("/git/ref/tags/"):
+            return {"object": {"sha": self.tag_exists_at}}
         if method == "GET" and url.startswith("/commits/"):
             return {"commit": {"tree": {"sha": self.tree}}}
         if method == "POST" and url == "/git/blobs":
@@ -87,6 +92,12 @@ class FakeApi:
         if method == "POST" and url == "/git/commits":
             return {"sha": "fake-commit-" + str(len(self.calls))}
         if method == "POST" and url.startswith("/git/refs"):
+            self.ref_payloads.append(dict(payload))
+            if payload.get("ref", "").startswith("refs/tags/"):
+                # tag POST 成功与否由 tag_exists_at 模拟：None=创建成功
+                if self.tag_exists_at is not None:
+                    return {"message": "Reference already exists"}
+                return {"object": {"sha": payload["sha"]}}
             return {"message": "Reference already exists"}  # 触发 PATCH 路径
         if method == "PATCH" and url.startswith("/git/refs/heads/"):
             self.patch_force = payload.get("force")
@@ -158,6 +169,46 @@ class PushViaApiTests(unittest.TestCase):
             with mock.patch.object(push, "api", fake):
                 self.assertEqual(push.push_branch("main", "baseline", force=True), 0)
             self.assertIs(fake.patch_force, True, "--force 必须真实传递给 PATCH")
+
+    def test_tag_created_at_remote_head(self):
+        with git_repo() as (d, base):
+            self._add_second_commit(d)
+            fake = self._fake_for_baseline(d, base)
+            buf = io.StringIO()
+            with mock.patch.object(push, "api", fake), contextlib.redirect_stdout(buf):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 0)
+            out = buf.getvalue()
+            self.assertIn("REMOTE_SHA: ", out, "机读行必须输出远端 head sha")
+            head = [l for l in out.splitlines() if l.startswith("REMOTE_SHA: ")][0].split(": ", 1)[1]
+            tag_posts = [p for p in fake.ref_payloads if p.get("ref", "").startswith("refs/tags/")]
+            self.assertEqual(len(tag_posts), 1, "tag 引用应恰好 POST 一次")
+            self.assertEqual(tag_posts[0]["ref"], "refs/tags/v9.9.9")
+            self.assertEqual(tag_posts[0]["sha"], head,
+                             "tag 必须落在 API 重建后的远端 head 上（与本地 sha 不同）")
+
+    def test_tag_existing_same_sha_is_idempotent(self):
+        with git_repo() as (d, base):
+            self._add_second_commit(d)
+            fake1 = self._fake_for_baseline(d, base)
+            buf1 = io.StringIO()
+            with mock.patch.object(push, "api", fake1), contextlib.redirect_stdout(buf1):
+                self.assertEqual(push.push_branch("main", "baseline"), 0)
+            head = [l for l in buf1.getvalue().splitlines() if l.startswith("REMOTE_SHA: ")][0].split(": ", 1)[1]
+            fake2 = self._fake_for_baseline(d, base, tag_exists_at=head)
+            buf2 = io.StringIO()
+            with mock.patch.object(push, "api", fake2), contextlib.redirect_stdout(buf2):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 0)
+            self.assertIn("(idempotent)", buf2.getvalue(), "同 sha 的已存 tag 应幂等成功")
+
+    def test_tag_existing_different_sha_refuses(self):
+        with git_repo() as (d, base):
+            self._add_second_commit(d)
+            fake = self._fake_for_baseline(d, base, tag_exists_at="some-other-sha")
+            buf = io.StringIO()
+            with mock.patch.object(push, "api", fake), contextlib.redirect_stdout(buf):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 1,
+                                 "tag 已存在且指向不一致必须拒绝（发布 tag 不可变）")
+            self.assertIn("TAG FAIL", buf.getvalue())
 
 
 if __name__ == "__main__":

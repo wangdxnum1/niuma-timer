@@ -32,8 +32,17 @@ const pushPy = read("scripts/push_via_api.py");
 console.log("== build.bat :do_test 本地门禁对齐云端六步 ==");
 has("cargo fmt --all -- --check", buildBat, "%CARGO_BIN% fmt --all -- --check");
 has("cargo clippy --all-targets -- -D warnings", buildBat, "%CARGO_BIN% clippy --all-targets -- -D warnings");
-has("cargo deny check advisories", buildBat, "deny check advisories");
+has("deny 步走 deny_check.js 包装（无代理时离线兜底）", buildBat, "scripts\\deny_check.js");
 has("cargo-deny 缺失时 fail-closed 并给安装指引", buildBat, "cargo install cargo-deny --locked");
+
+console.log("== deny_check.js 离线兜底契约 ==");
+const denyJs = read("scripts/deny_check.js");
+has("在线失败降级 --offline 检查", denyJs, '"deny", "--offline", "check", "advisories"');
+has("缓存新鲜度守卫（7 天）", denyJs, "MAX_AGE_DAYS = 7");
+
+console.log("== release.bat push 的 API 备援接线 ==");
+has("push 失败转 push_via_api.py（分支+tag 同次调用）", relBat, 'push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"');
+has("API 路径不走本地 git push tag（防 tag 指向不存在的远端提交）", relBat, "nonexistent commit");
 
 console.log("== workflow 工具钉版 ==");
 has("tests.yml cargo-deny 精确钉版", testsYml, "tool: cargo-deny@0.20.2");
