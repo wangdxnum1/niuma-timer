@@ -148,26 +148,71 @@ async function loadBackups() {
   }
 }
 
+let lastBackupList = [];
+let showAllBackups = false;
+const BACKUP_PREVIEW = 3; // 默认只展开最近几份，长列表靠「展开全部」
+
 function renderBackups(list) {
+  lastBackupList = list;
   const box = $("backupList");
   box.textContent = "";
   if (!list || list.length === 0) {
     box.textContent = "还没有备份";
     return;
   }
-  list.forEach((b) => {
+  // 摘要行先给全局状态：多少份、占多少空间、自动轮转策略——用户最常问的三个问题
+  const totalBytes = list.reduce((s, b) => s + (b.bytes || 0), 0);
+  const summary = document.createElement("p");
+  summary.className = "hint";
+  summary.textContent =
+    "共 " + list.length + " 份 · 占用 " + fmtBytes(totalBytes) + " · 自动轮转只保留最近 20 份";
+  box.append(summary);
+  const shown = showAllBackups ? list : list.slice(0, BACKUP_PREVIEW);
+  shown.forEach((b) => {
     const row = document.createElement("div");
     row.className = b.broken ? "backup-row broken" : "backup-row";
-    const button = document.createElement("button");
-    button.disabled = !!b.broken;
-    button.textContent = "还原";
-    button.dataset.backup = b.name;
     const label = document.createElement("span");
     label.textContent = b.broken ? b.name + " · 不可用" :
       b.created_at + " · v" + b.app_version + " · " + fmtBytes(b.bytes);
-    row.append(label, button);
+    const actions = document.createElement("span");
+    if (!b.broken) {
+      const restore = document.createElement("button");
+      restore.textContent = "还原";
+      restore.dataset.backup = b.name;
+      actions.append(restore);
+    }
+    // 删除：不可用的残缺包也允许清掉（此前残缺包只能永远躺在列表里）
+    const del = document.createElement("button");
+    del.textContent = "删除";
+    del.dataset.backupDelete = b.name;
+    actions.append(del);
+    row.append(label, actions);
     box.append(row);
   });
+  if (list.length > BACKUP_PREVIEW) {
+    const toggle = document.createElement("button");
+    toggle.className = "ghost";
+    toggle.textContent = showAllBackups ? "收起列表" : "展开全部 " + list.length + " 份";
+    toggle.addEventListener("click", () => {
+      showAllBackups = !showAllBackups;
+      renderBackups(lastBackupList);
+    });
+    box.append(toggle);
+  }
+}
+
+async function doDeleteBackup(name) {
+  const yes = await showConfirm("删除备份 " + name + "？删除后无法恢复，不影响当前数据。");
+  if (!yes) return;
+  try {
+    await invoke("delete_backup", { name });
+    showToast("备份已删除", "ok");
+    await loadBackups();
+  } catch (e) {
+    const detail = e && e.message ? e.message : String(e);
+    flog("delete_backup ERR: " + detail);
+    showToast("删除失败：" + detail, "err");
+  }
 }
 
 async function doBackupNow() {
@@ -219,7 +264,9 @@ async function doRestore(name) {
 }
 $("backupNowBtn").addEventListener("click", doBackupNow);
 $("backupList").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-backup]");
-  if (btn) doRestore(btn.dataset.backup);
+  const restore = e.target.closest("button[data-backup]");
+  if (restore) doRestore(restore.dataset.backup);
+  const del = e.target.closest("button[data-backup-delete]");
+  if (del) doDeleteBackup(del.dataset.backupDelete);
 });
 // 加班记录的按钮绑定归位 overtime.js（此前寄宿在 storage.js，与「数据存储」职责无关）

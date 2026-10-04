@@ -270,6 +270,31 @@ pub fn list_backups() -> Vec<BackupEntry> {
     good
 }
 
+/// 删除一份备份 zip（用户手动清理；自动轮转只保数量，给用户手动腾空间的口子）。
+/// 名字校验与 stage_restore 同款：只收单一路径分量、拒绝分隔符与 `..`——
+/// 该参数经 IPC 直达，绝不能拼出备份目录之外的路径。
+/// 目标已不存在视为成功（幂等）：界面删除后另一处再删同一份时不必报错。
+pub fn delete_backup(name: &str) -> Result<(), String> {
+    delete_backup_in(&backup_dir(), name)
+}
+
+pub(crate) fn delete_backup_in(dir: &Path, name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || Path::new(name).components().count() != 1
+        || name.contains(['/', '\\', ':'])
+        || name.contains("..")
+        || !name.ends_with(".zip")
+    {
+        return Err("备份名不合法".to_string());
+    }
+    match std::fs::remove_file(dir.join(name)) {
+        Ok(()) => Ok(()),
+        // 已被删过/从未存在：幂等成功
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("删除失败：{e}")),
+    }
+}
+
 use rusqlite::Connection;
 
 use crate::db::{BUSINESS_TABLES, TABLE_SINCE};
@@ -796,6 +821,25 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(&check);
         assert!(r.is_ok(), "版本无法解析时不得误拒：{:?}", r.err());
+    }
+
+    /// 手动删除备份：非法名（路径穿越/分隔符/非 zip）一律拒绝；合法名删除成功
+    /// 且再删一次幂等成功——文件已不在不该报错，界面刷新后自然消失。
+    #[test]
+    fn delete_backup_validates_name_and_is_idempotent() {
+        let dir = tmp_dir("del");
+        for bad in ["../x.zip", "a/b.zip", "a\\b.zip", "a:b.zip", "x.txt", ""] {
+            assert!(delete_backup_in(&dir, bad).is_err(), "非法名应拒绝：{bad}");
+        }
+        let p = dir.join("niuma-backup-2026-10-04.zip");
+        std::fs::write(&p, b"zip").unwrap();
+        assert!(delete_backup_in(&dir, "niuma-backup-2026-10-04.zip").is_ok());
+        assert!(!p.exists(), "文件应被删除");
+        assert!(
+            delete_backup_in(&dir, "niuma-backup-2026-10-04.zip").is_ok(),
+            "已不存在应幂等成功"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

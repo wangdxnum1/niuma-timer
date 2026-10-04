@@ -153,8 +153,9 @@ ok(
 );
 ok("renderBackups 空态文案为「还没有备份」", appSrc.indexOf("还没有备份") >= 0);
 ok(
-  "broken 条目标不可用且还原按钮禁用",
-  appSrc.indexOf("不可用") >= 0 && /b\.broken[\s\S]{0,260}disabled/.test(appSrc)
+  "broken 条目标不可用且不再渲染还原按钮（只留删除）",
+  appSrc.indexOf("不可用") >= 0 &&
+    /if \(!b\.broken\) \{[\s\S]{0,220}dataset\.backup = b\.name/.test(appSrc)
 );
 ok(
   "还原二次确认同时说清「覆盖」与「自动备份」",
@@ -167,6 +168,27 @@ ok(
 ok(
   "备份列表只在启动拉一次、不进 tick（无 setInterval 备份轮询）",
   !/setInterval\([^)]*loadBackups/.test(appSrc)
+);
+
+// ---- 备份区使用逻辑重排（2026-10-04）：摘要 + 折叠 + 手动删除 ----
+ok(
+  "摘要行说清份数/占用/轮转策略",
+  appSrc.indexOf("自动轮转只保留最近 20 份") >= 0 && appSrc.indexOf("占用") >= 0
+);
+ok(
+  "长列表默认折叠（最近 3 份）+ 展开全部/收起",
+  appSrc.indexOf("BACKUP_PREVIEW = 3") >= 0 &&
+    appSrc.indexOf("展开全部 ") >= 0 &&
+    appSrc.indexOf("收起列表") >= 0
+);
+ok(
+  "每行带删除按钮（含残缺包）+ 二次确认 + 不影响当前数据",
+  appSrc.indexOf("data-backup-delete") >= 0 &&
+    appSrc.indexOf("删除后无法恢复，不影响当前数据") >= 0
+);
+ok(
+  "删除走 delete_backup 命令并在成功后刷新列表",
+  /invoke\("delete_backup"[\s\S]{0,120}loadBackups/.test(appSrc)
 );
 
 console.log("== 计薪方式（v1.6.0 时薪模式） ==");

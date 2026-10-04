@@ -64,7 +64,9 @@ use cmds_debug::{
     test_sedentary_trigger,
 };
 use cmds_monitor::{get_activity_summary, get_app_usage_summary, get_audio_usage_summary};
-use cmds_storage::{backup_now, get_storage_info, list_backups, restore_backup, run_maintenance};
+use cmds_storage::{
+    backup_now, delete_backup, get_storage_info, list_backups, restore_backup, run_maintenance,
+};
 use cmds_update::{check_update, skip_update_version, start_update, take_update_announcement};
 
 /// 装载节假日数据并刷新托盘。
@@ -471,6 +473,7 @@ fn main() {
             take_update_announcement,
             backup_now,
             list_backups,
+            delete_backup,
             restore_backup
         ])
         .build(tauri::generate_context!());

@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=4d19b212" />
+    <link rel="stylesheet" href="styles.css?v=033d6f87" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -657,14 +657,9 @@
         </label>
       </section>
 
-      <!-- 卡⑥：系统与数据（原「数据存储」+ 基础配置的开机自启合并） -->
+      <!-- 卡⑥：系统与数据（数据区的保留/整理/备份在前，系统行为开关在后） -->
       <section class="card">
         <h2>系统与数据</h2>
-        <label class="switch-row">
-          <span>开机自动启动</span>
-          <input id="launch_on_boot" type="checkbox" class="switch" />
-        </label>
-        <p class="hint">写入系统启动项（注册表 Run），登录 Windows 时自动在托盘运行</p>
         <div class="sub-section">
           <label>
             <span>历史数据保留</span>
@@ -692,9 +687,14 @@
           <p id="backupDirHint" class="hint"></p>
           <details class="hint-details">
             <summary>详情</summary>
-            <p>备份为单个 zip（数据库 + 设置 + 清单），存到「文档\niuma-timer-backup\」；自己挪走的备份不会出现在列表里。还原前会先自动备份当前数据，校验通过后重启生效；旧库留存在 niuma.db.pre-restore.bak</p>
+            <p>备份为单个 zip（数据库 + 设置 + 清单），存到「文档\niuma-timer-backup\」；自动轮转只保留最近 20 份，也可以手动删除某几份腾空间。还原前会先自动备份当前数据，校验通过后重启生效；旧库留存在 niuma.db.pre-restore.bak。自己挪走的备份不会出现在列表里。</p>
           </details>
         </div>
+        <label class="switch-row">
+          <span>开机自动启动</span>
+          <input id="launch_on_boot" type="checkbox" class="switch" />
+        </label>
+        <p class="hint">写入系统启动项（注册表 Run），登录 Windows 时自动在托盘运行</p>
         <label class="switch-row">
           <span>自动检查更新</span>
           <input id="update_auto_check" type="checkbox" class="switch" />
@@ -901,17 +901,17 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=4d19b212"></script>
-    <script src="js/tl_math.js?v=4d19b212"></script>
-    <script src="js/settings.js?v=4d19b212"></script>
-    <script src="js/hero.js?v=4d19b212"></script>
-    <script src="js/overtime.js?v=4d19b212"></script>
-    <script src="js/monitor.js?v=4d19b212"></script>
-    <script src="js/bill.js?v=4d19b212"></script>
-    <script src="js/insights.js?v=4d19b212"></script>
-    <script src="js/storage.js?v=4d19b212"></script>
-    <script src="js/update.js?v=4d19b212"></script>
-    <script src="js/boot.js?v=4d19b212"></script>
+    <script src="js/core.js?v=033d6f87"></script>
+    <script src="js/tl_math.js?v=033d6f87"></script>
+    <script src="js/settings.js?v=033d6f87"></script>
+    <script src="js/hero.js?v=033d6f87"></script>
+    <script src="js/overtime.js?v=033d6f87"></script>
+    <script src="js/monitor.js?v=033d6f87"></script>
+    <script src="js/bill.js?v=033d6f87"></script>
+    <script src="js/insights.js?v=033d6f87"></script>
+    <script src="js/storage.js?v=033d6f87"></script>
+    <script src="js/update.js?v=033d6f87"></script>
+    <script src="js/boot.js?v=033d6f87"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

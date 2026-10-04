@@ -46,6 +46,11 @@ pub(crate) fn list_backups() -> Vec<backup::BackupEntry> {
 }
 
 #[tauri::command(async)]
+pub(crate) fn delete_backup(name: String) -> Result<(), String> {
+    backup::delete_backup(&name)
+}
+
+#[tauri::command(async)]
 pub(crate) fn restore_backup(app: AppHandle, name: String) -> Result<String, String> {
     let summary = {
         let state = app.state::<AppState>();
