@@ -2155,6 +2155,27 @@ button:active {
 .backup-row.broken button[disabled] {
   cursor: not-allowed;
 }
+.backup-row .row-actions {
+  display: flex;
+  gap: 6px;
+}
+.backup-row .row-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #c9c9cf;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 3px 10px;
+}
+.backup-row .row-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f2f2f4;
+}
+.backup-row .row-btn.danger:hover {
+  border-color: rgba(229, 72, 77, 0.45);
+  color: #ff8a8d;
+  background: rgba(229, 72, 77, 0.08);
+}
 
 /* ====== 自动更新：下载进度条（由 update-progress 事件驱动） ====== */
 /* 通用 .hidden 为 display:none!important；此处按规约对自带 display 的容器再显式兜底一层，防工具类日后调整 */

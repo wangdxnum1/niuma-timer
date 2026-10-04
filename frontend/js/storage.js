@@ -175,14 +175,17 @@ function renderBackups(list) {
     label.textContent = b.broken ? b.name + " · 不可用" :
       b.created_at + " · v" + b.app_version + " · " + fmtBytes(b.bytes);
     const actions = document.createElement("span");
+    actions.className = "row-actions";
     if (!b.broken) {
       const restore = document.createElement("button");
+      restore.className = "row-btn";
       restore.textContent = "还原";
       restore.dataset.backup = b.name;
       actions.append(restore);
     }
     // 删除：不可用的残缺包也允许清掉（此前残缺包只能永远躺在列表里）
     const del = document.createElement("button");
+    del.className = "row-btn danger";
     del.textContent = "删除";
     del.dataset.backupDelete = b.name;
     actions.append(del);
@@ -223,11 +226,7 @@ async function doBackupNow() {
   }
   try {
     const entry = await invoke("backup_now");
-    showToast("备份完成：" + entry.name, "ok");
-    const st = $("backupStatus");
-    if (st) {
-      st.textContent = "最近备份：" + entry.path + "（" + fmtBytes(entry.bytes) + "）";
-    }
+    showToast("备份成功（" + fmtBytes(entry.bytes) + "）", "ok");
     await loadBackups();
   } catch (e) {
     const detail = e && e.message ? e.message : String(e);

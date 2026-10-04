@@ -146,10 +146,17 @@ console.log("== 设置页六卡与备份区结构（v1.4.0 补强） ==");
   ok("设置卡标题存在：" + t, htmlSrc.indexOf("<h2>" + t + "</h2>") >= 0);
 });
 ok(
-  "备份区四 id + 还原重启遮罩齐全",
-  ["backupNowBtn", "backupStatus", "backupList", "backupDirHint", "restoreMask"].every(
+  "备份区三 id + 还原重启遮罩齐全（backupStatus 已删：结果只走 toast）",
+  ["backupNowBtn", "backupList", "backupDirHint", "restoreMask"].every(
     (id) => htmlSrc.indexOf('id="' + id + '"') >= 0
-  )
+  ) && htmlSrc.indexOf('id="backupStatus"') === -1 && appSrc.indexOf("backupStatus") === -1
+);
+ok("立即备份成功只弹 toast，不往页面写长路径", appSrc.indexOf('showToast("备份成功') >= 0);
+ok(
+  "还原/删除按钮用 row-btn 样式（删除带 danger 变体）",
+  appSrc.indexOf('className = "row-btn"') >= 0 &&
+    appSrc.indexOf('className = "row-btn danger"') >= 0 &&
+    appSrc.indexOf('row-actions') >= 0
 );
 ok("renderBackups 空态文案为「还没有备份」", appSrc.indexOf("还没有备份") >= 0);
 ok(
