@@ -350,18 +350,18 @@ set "GITCFG=-c credential.helper=wincred -c http.sslBackend=openssl %PROXYARG%"
 "%GIT%" %GITCFG% push origin "%BRANCH%"
 if errorlevel 1 (
   echo     git push failed - github.com unreachable without proxy.
-  echo     Falling back to Git Data API (api.github.com is reachable directly):
-  echo     remote commits get new SHAs; align local afterwards with
-  echo     git fetch origin ^&^& git reset --hard origin/%BRANCH% - see scripts\push_via_api.py.
+  echo     Falling back to Git Data API - api.github.com is reachable directly.
+  echo     Remote commits get new SHAs. Align local afterwards with
+  echo     git fetch origin + git reset --hard origin/%BRANCH% - see scripts\push_via_api.py.
   where python >nul 2>&1
   if errorlevel 1 (
     echo [ERROR] python not found - API fallback needs it
     popd
     exit /b 1
   )
-  rem Branch AND tag in one API call: the API-rebuilt remote head has a different
-  rem sha than the local one, so pushing the local tag with git here would point
-  rem it at a nonexistent commit and trigger CI on it.
+  rem Branch AND tag in one API call: the API-rebuilt remote head has a
+  rem different sha than the local one, so pushing the local tag with git
+  rem here would point it at a nonexistent commit and trigger CI on it.
   python "%ROOT%scripts\push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"
   if errorlevel 1 (
     echo [ERROR] API fallback push failed
