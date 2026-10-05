@@ -366,11 +366,9 @@ fn main() {
                 }
             }
 
-            // 创建托盘
-            let _tray = tray::create_tray(app)?;
-
             // 装载当月休假标记缓存：get_status 每秒读内存，启动装一次、跨天重装、
-            // set_day_override 命令写穿（失败不阻断启动，状态退化为按日历口径）
+            // set_day_override 命令写穿（失败不阻断启动，状态退化为按日历口径）。
+            // 必须先于 create_tray：托盘首帧的 get_status 就该带上今天的休假口径
             {
                 let now = Local::now();
                 if let Err(e) =
@@ -380,6 +378,9 @@ fn main() {
                 }
             }
             trace_startup("setup: dayoff cache loaded");
+
+            // 创建托盘
+            let _tray = tray::create_tray(app)?;
             trace_startup("setup: tray created");
 
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；

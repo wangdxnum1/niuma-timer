@@ -73,6 +73,10 @@ pub(crate) fn reload_month(conn: &Connection, year: i32, month: u32) -> rusqlite
 
 /// set 命令写穿缓存。非当月标记不动缓存位；缓存未装载（None）时也直接落位，
 /// 避免启动装载失败后标记永远不可见。
+///
+/// 已知边界（接受，不加复杂度）：启动装载失败后若**先**标过去/未来月再标今天，
+/// 今天的写穿会因缓存月份不符被跳过，状态要等跨天/重启才跟上——该前置是
+/// 「启动时 DB 就不可用」的破败态，正常路径由启动/跨天的 reload_month 兜住。
 pub(crate) fn update_cache(date: &str, kind: Option<String>) {
     let ym = ym_of(date).to_string();
     let mut guard = month_cell().lock().unwrap_or_else(|p| p.into_inner());

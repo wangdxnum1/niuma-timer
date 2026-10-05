@@ -475,6 +475,8 @@ async function loadMonthlyReport() {
     hint.querySelector(".bill-empty-txt").textContent = "月报按月统计——先在上方把跨度切到「月」";
     hint.classList.remove("hidden");
     body.classList.add("hidden");
+    // 期号标签跟当前跨度走（否则停留在上次月报的「N 月」标签，与跨度对不上）
+    loadWeekBill();
     return;
   }
   hint.classList.add("hidden");
