@@ -21,6 +21,7 @@ mod cmds_monitor;
 mod cmds_storage;
 mod cmds_update;
 mod config;
+mod dayoff;
 mod db;
 mod diag;
 mod focus;
@@ -56,14 +57,16 @@ use cmds_bill::{
 };
 use cmds_core::{
     apply_monitor_switches, apply_shortcuts, export_csv, export_image, focus_window, get_autostart,
-    get_status_cmd, hide_window, load_config, refresh_holidays, save_config, set_autostart,
-    show_window, write_debug_log,
+    get_day_overrides, get_status_cmd, hide_window, load_config, refresh_holidays, save_config,
+    set_autostart, set_day_override, show_window, write_debug_log,
 };
 use cmds_debug::{
     reset_remind_state, run_remind_tick, test_offwork_notify, test_sedentary_notify,
     test_sedentary_trigger,
 };
-use cmds_monitor::{get_activity_summary, get_app_usage_summary, get_audio_usage_summary};
+use cmds_monitor::{
+    get_activity_summary, get_app_usage_summary, get_audio_usage_summary, get_recent_app_names,
+};
 use cmds_storage::{
     backup_now, delete_backup, get_storage_info, list_backups, restore_backup, run_maintenance,
 };
@@ -146,6 +149,11 @@ fn maybe_rollover_day(state: &AppState, apph: &tauri::AppHandle) {
     };
     if need_refresh {
         spawn_holiday_refresh(apph.clone());
+        // 休假标记缓存随跨天/跨月重装（get_status 每秒读内存，不能过期）
+        let now = Local::now();
+        if let Err(e) = db::with_db(|conn| dayoff::reload_month(conn, now.year(), now.month())) {
+            db::debug_log(&format!("休假标记缓存跨天重装失败: {e}"));
+        }
     }
 }
 
@@ -360,6 +368,18 @@ fn main() {
 
             // 创建托盘
             let _tray = tray::create_tray(app)?;
+
+            // 装载当月休假标记缓存：get_status 每秒读内存，启动装一次、跨天重装、
+            // set_day_override 命令写穿（失败不阻断启动，状态退化为按日历口径）
+            {
+                let now = Local::now();
+                if let Err(e) =
+                    db::with_db(|conn| dayoff::reload_month(conn, now.year(), now.month()))
+                {
+                    db::debug_log(&format!("休假标记缓存装载失败: {e}"));
+                }
+            }
+            trace_startup("setup: dayoff cache loaded");
             trace_startup("setup: tray created");
 
             // 启动页防白闪：窗口初始 visible:false，由前端 splash 渲染完成后 show；
@@ -440,6 +460,8 @@ fn main() {
             save_config,
             refresh_holidays,
             get_status_cmd,
+            get_day_overrides,
+            set_day_override,
             test_offwork_notify,
             test_sedentary_notify,
             test_sedentary_trigger,
@@ -453,6 +475,7 @@ fn main() {
             delete_overtime_record,
             get_activity_summary,
             get_app_usage_summary,
+            get_recent_app_names,
             get_audio_usage_summary,
             get_bill,
             get_heatmap,

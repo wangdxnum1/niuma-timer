@@ -57,6 +57,30 @@
 #viewSettings .settings-action-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-width: 0; }
 #viewSettings .settings-action-row > :first-child { min-width: 0; }
 #viewSettings .settings-action-row button { flex-shrink: 0; }
+/* 休假记录编辑器：日期 + 类型 + 标记 一行；列表限高可滚 */
+#viewSettings .dayoff-editor { display: flex; gap: 8px; align-items: center; }
+#viewSettings .dayoff-editor input[type="date"] { flex: 1; min-width: 0; }
+#viewSettings .dayoff-editor select { flex-shrink: 0; width: auto; }
+#viewSettings .dayoff-editor button { flex-shrink: 0; }
+#viewSettings .dayoff-list { display: flex; flex-direction: column; gap: 6px; max-height: 132px; overflow-y: auto; }
+#viewSettings .dayoff-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); border-radius: 7px; font-size: 12px; color: #d6d6dc; }
+/* 月报战绩卡：账单页 tab2，深卡金字 + 细分行 */
+.report-card { display: flex; flex-direction: column; gap: 12px; padding: 18px 16px; background: #252528; border: 1px solid rgba(255,255,255,.06); border-radius: 12px; }
+.report-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-width: 0; }
+.report-head #reportTitle { color: #ffd650; font-size: 15px; font-weight: 600; }
+.report-head .report-range { color: #a0a0aa; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.report-income { font-size: 34px; font-weight: 700; color: #ffffff; font-variant-numeric: tabular-nums; }
+.report-rows { display: flex; flex-direction: column; }
+.report-row { display: flex; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.07); font-size: 12.5px; color: #f2f2f4; }
+.report-row span:first-child { color: #a0a0aa; flex-shrink: 0; }
+.report-row span:last-child { text-align: right; min-width: 0; font-variant-numeric: tabular-nums; }
+.report-quote { color: #ffd650; font-style: italic; font-size: 13px; padding-top: 4px; }
+.report-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* 白名单「最近使用」建议行：输入行下方一排可点 pill */
+.wl-suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wl-suggest-row .wl-suggest-label { font-size: 11px; color: #a0a0aa; }
+.wl-suggest { font-size: 11.5px; padding: 3px 9px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1); color: #c6c6ce; cursor: pointer; }
+.wl-suggest:hover { color: #ffd650; border-color: rgba(255,214,80,.35); background: rgba(255,214,80,.07); }
 #viewSettings .ghost { min-height: 34px; font-size: 12px; border-radius: 7px; border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.025); padding: 7px 12px; }
 #viewSettings .settings-shortcuts { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px 6px; font-size: 11.5px; color: #bdbdc6; }
 #viewSettings kbd { display: inline-block; padding: 3px 5px; background: #19191b; border: 1px solid rgba(255,255,255,.12); border-bottom-width: 2px; border-radius: 4px; font: 11px "Segoe UI",sans-serif; color: #d9d9df; }
@@ -326,6 +350,26 @@ select:focus-visible {
 .badge.off {
   background: rgba(255, 255, 255, 0.08);
   color: #98989e;
+}
+/* 休假快捷标记：品牌行幽灵小按钮，与徽章同族；两个 auto 边距会让按钮悬在半空，故后者改固定间距 */
+.leave-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: transparent;
+  border: 1px solid rgba(255, 214, 80, 0.25);
+  color: #c8b068;
+  cursor: pointer;
+}
+.leave-btn:hover {
+  background: rgba(255, 214, 80, 0.1);
+  color: #ffd650;
+  border-color: rgba(255, 214, 80, 0.4);
+}
+.leave-btn + .badge {
+  margin-left: 8px;
 }
 
 /* ====== 分组卡（mac 内嵌分组形态）：圆角容器 + 发丝边 ====== */

@@ -437,6 +437,11 @@ pub fn day_timeline_assemble(
     conn: &Connection,
 ) -> rusqlite::Result<DayTimeline> {
     let date_s = date.format("%Y-%m-%d").to_string();
+    // 休假标记（day_override）：标记日按休息日展示
+    let off: std::collections::HashSet<String> =
+        crate::dayoff::range_overrides(conn, &date_s, &date_s)?
+            .into_keys()
+            .collect();
     let mut hours: Vec<DayTimelineHour> = (0..24)
         .map(|h| DayTimelineHour {
             hour: h,
@@ -533,7 +538,7 @@ pub fn day_timeline_assemble(
         date: date_s,
         weekday: weekday_cn(date).to_string(),
         is_today: date == Local::now().date_naive(),
-        is_workday: is_workday_of(date, hol),
+        is_workday: is_workday_of(date, hol, &off),
         total_front,
         total_events,
         hours,
@@ -652,6 +657,7 @@ mod tests {
         conn.execute_batch(CREATE_ACT_HOURLY).unwrap();
         conn.execute_batch(CREATE_APP_USAGE_HOURLY).unwrap();
         conn.execute_batch(CREATE_AUDIO_USAGE_HOURLY).unwrap();
+        conn.execute_batch(crate::db::CREATE_DAY_OVERRIDE).unwrap();
         conn
     }
 

@@ -38,6 +38,9 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **App categories** — app usage is grouped into work / slack / chat / other; click a tag to change it and the whole history is reclassified instantly
 - **Cross-midnight overtime** — overnight overtime is attributed to the correct day (locking the screen before 06:00 counts for the previous day with +24h), so nothing is silently lost
 - **Weekend & holiday overtime** — driven by official holiday data, with separate start times and pay rates for rest days and statutory holidays
+- **Day-off marking** — one-click marking for annual leave / sick leave / personal errands / comp days (brand-row button, or per-date in Settings → Salary & Schedule): treated as a rest day with no earnings or attendance, excluded from the automatic monthly workday count
+- **Monthly report** — a new "Report" page on the Bill view: monthly income, attendance & days off, overtime hours & pay, slack rate, hardest and slackiest days, plus a one-click shareable image
+- **Whitelist from recent apps** — a suggestion row lists apps you actually used in the last 30 days (sorted by usage), one click to add instead of typing names
 - **History browsing + CSV export** — flip overtime details by month and activity / apps / media by day; export the week bill or overtime details as Excel-friendly CSV (UTF-8 BOM)
 - **Storage breakdown & cleanup** — a nine-way storage breakdown in Settings (exact `dbstat` figures), with a retention period and one-click cleanup that shrinks the write-ahead log
 - **Remote session detection** — auto overtime recording is skipped while this PC is remotely controlled via RDP / Sunlogin / ToDesk / UU (configurable; manual entry unaffected)

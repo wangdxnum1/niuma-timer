@@ -245,6 +245,11 @@ pub(crate) fn summary_assemble(
 ) -> rusqlite::Result<FocusSummary> {
     let start_s = start.format("%Y-%m-%d").to_string();
     let end_s = end.format("%Y-%m-%d").to_string();
+    // 休假标记（day_override）：标记日按休息日展示
+    let off: std::collections::HashSet<String> =
+        crate::dayoff::range_overrides(conn, &start_s, &end_s)?
+            .into_keys()
+            .collect();
     let mut by_date: HashMap<String, (i64, i64, i64, Option<String>)> = HashMap::new();
     {
         let mut st = conn.prepare(
@@ -283,7 +288,7 @@ pub(crate) fn summary_assemble(
             let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d");
             FocusDay {
                 weekday: d.as_ref().map(|d| weekday_cn(*d)).unwrap_or("").to_string(),
-                is_workday: d.map(|d| is_workday_of(d, hol)).unwrap_or(true),
+                is_workday: d.map(|d| is_workday_of(d, hol, &off)).unwrap_or(true),
                 date,
                 sessions,
                 total_min,
@@ -425,6 +430,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::CREATE_FOCUS_SESSIONS)
             .unwrap();
+        conn.execute_batch(crate::db::CREATE_DAY_OVERRIDE).unwrap();
         for (d, minutes) in [("2026-09-07", 50), ("2026-09-07", 30), ("2026-09-08", 95)] {
             conn.execute(
                 "INSERT INTO focus_sessions (date, start_hm, end_hm, minutes, top_app) \

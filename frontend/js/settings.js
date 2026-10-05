@@ -1,4 +1,77 @@
 
+// ---- 休假记录（day_override）：个人休假标记，主界面快捷按钮与本编辑器共用口径 ----
+// 标记日按休息日计（不计应赚/出勤，自动模式月分母剔除）；kind 仅作展示。
+const DAYOFF_RANGE_DAYS = 90;
+
+function fmtLocalDate(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
+async function loadDayOffs() {
+  const box = $("dayOffList");
+  if (!box) return;
+  // 窗口：过去 90 天 ~ 未来 90 天——补标历史与预记未来休假都要在列
+  const end = new Date();
+  end.setDate(end.getDate() + DAYOFF_RANGE_DAYS);
+  const start = new Date();
+  start.setDate(start.getDate() - DAYOFF_RANGE_DAYS);
+  try {
+    const list = await invoke("get_day_overrides", {
+      start: fmtLocalDate(start),
+      end: fmtLocalDate(end),
+    });
+    box.textContent = "";
+    if (!list.length) {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = "近 90 天（含未来计划）没有休假标记";
+      box.appendChild(p);
+      return;
+    }
+    for (const item of list.slice().reverse()) {
+      const row = document.createElement("div");
+      row.className = "dayoff-row";
+      const label = document.createElement("span");
+      label.textContent = item.date + " · " + item.kind;
+      const del = document.createElement("button");
+      del.className = "wl-rm";
+      del.textContent = "×";
+      del.title = "取消标记";
+      del.addEventListener("click", () => removeDayOff(item.date));
+      row.append(label, del);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = '<p class="hint">休假记录读取失败</p>';
+  }
+}
+
+async function addDayOff() {
+  const dateInput = $("dayOffDate");
+  const date = dateInput.value || fmtLocalDate(new Date());
+  try {
+    await invoke("set_day_override", { date, kind: $("dayOffKind").value });
+    showToast("已标记 " + date + "（" + $("dayOffKind").value + "）", "ok");
+    await loadDayOffs();
+    tick(); // 标的是今天时，主页徽章/工作日数立即跟随
+  } catch (e) {
+    showToast("休假标记失败：" + e, "err");
+  }
+}
+
+async function removeDayOff(date) {
+  try {
+    await invoke("set_day_override", { date, kind: null });
+    showToast("已取消 " + date + " 的休假标记", "ok");
+    await loadDayOffs();
+    tick();
+  } catch (e) {
+    showToast("取消失败：" + e, "err");
+  }
+}
+$("dayOffAdd").addEventListener("click", addDayOff);
+
 async function load() {
   try {
     const cfg = await invoke("load_config");
@@ -65,6 +138,9 @@ async function load() {
     setBillSpanUI(cfg.bill_span || "week");
     loadStorageInfo();
     loadBackups();
+    loadDayOffs();
+    loadRecentApps();
+    $("dayOffDate").value = fmtLocalDate(new Date());
     // 升级后公告（v1.4.0）：后端只在下发一次后清空，非空即直接进更新页
     try {
       const ann = await invoke("take_update_announcement");
@@ -169,6 +245,7 @@ function makeChip(name) {
     chip.remove();
     refreshSettingsUI();
     if ($("appWhitelistList").children.length === 0) renderWhitelist([]);
+    renderRecentApps();
     saveNow();
   });
   chip.appendChild(txt);
@@ -196,6 +273,48 @@ function addWhitelistItem() {
   input.focus();
   refreshSettingsUI();
   saveNow();
+}
+
+// ---- 白名单「从最近使用中添加」：近 30 天去重应用名（按累计使用秒排序）----
+// 数据来自 get_recent_app_names（app_usage 表前缀扫描）；已在名单中的不再建议
+let recentAppNames = [];
+
+async function loadRecentApps() {
+  try {
+    recentAppNames = await invoke("get_recent_app_names", { days: 30, limit: 12 });
+  } catch (e) {
+    recentAppNames = []; // 拉不到就隐藏建议行，手输照常
+  }
+  renderRecentApps();
+}
+
+function renderRecentApps() {
+  const box = $("recentAppsRow");
+  if (!box) return;
+  const current = new Set(readWhitelist().map((s) => s.toLowerCase()));
+  const names = recentAppNames.filter((n) => !current.has(n.toLowerCase())).slice(0, 8);
+  box.textContent = "";
+  if (!names.length) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const label = document.createElement("span");
+  label.className = "wl-suggest-label";
+  label.textContent = "最近使用";
+  box.appendChild(label);
+  for (const name of names) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "wl-suggest";
+    b.textContent = "+ " + name;
+    b.addEventListener("click", () => {
+      $("appWhitelistInput").value = name;
+      addWhitelistItem();
+      renderRecentApps();
+    });
+    box.appendChild(b);
+  }
 }
 
 function currentYearMonth() {

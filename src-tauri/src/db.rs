@@ -121,6 +121,16 @@ pub(crate) const CREATE_FOCUS_SESSIONS_IDX: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_date ON focus_sessions (date);
 "#;
 
+/// 日级休假标记（2026-10-05）：用户手动标记「这天不上班」（年假/病假/事假/调休）。
+/// 口径：标记日一律按休息日处理——不计应赚/出勤/摸鱼率，月工作日分母剔除
+/// （手动覆盖模式下分母仍以手动值为准）。kind 仅作记录展示，不影响口径。
+pub(crate) const CREATE_DAY_OVERRIDE: &str = r#"
+CREATE TABLE IF NOT EXISTS day_override (
+    date TEXT PRIMARY KEY,
+    kind TEXT NOT NULL
+);
+"#;
+
 /// 全部业务表名单——**单一真相源**。备份完整性校验（backup 解包后必须齐全）与
 /// 保留期清理（maintain::DATED_TABLES）都以此为准；两侧等价性由
 /// `business_tables_match_ddl`（本文件）与 maintain 的
@@ -136,6 +146,7 @@ pub(crate) const BUSINESS_TABLES: &[&str] = &[
     "audio_usage",
     "audio_usage_hourly",
     "focus_sessions",
+    "day_override",
 ];
 
 /// 业务表引入版本（备份校验向前兼容用）：旧版本备份**合法地**没有后来新增的
@@ -151,6 +162,7 @@ pub(crate) const TABLE_SINCE: &[(&str, &str)] = &[
     ("audio_usage", "1.0.0"),
     ("audio_usage_hourly", "1.0.0"),
     ("focus_sessions", "1.7.0"),
+    ("day_override", "1.9.1"),
 ];
 
 /// 全部建表语句（幂等，重复执行无副作用）。
@@ -167,6 +179,7 @@ const TABLE_DDL: &[&str] = &[
     CREATE_AUDIO_USAGE_HOURLY,
     CREATE_FOCUS_SESSIONS,
     CREATE_FOCUS_SESSIONS_IDX,
+    CREATE_DAY_OVERRIDE,
 ];
 
 /// 开库/建表失败的可见反馈：release 无控制台，裸 panic 只写 panic.log，

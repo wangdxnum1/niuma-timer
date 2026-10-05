@@ -10,6 +10,7 @@ use chrono::{Datelike, Local, NaiveDate};
 
 use crate::calc;
 use crate::config;
+use crate::dayoff;
 use crate::holiday;
 use crate::pause;
 use crate::sync;
@@ -50,12 +51,40 @@ pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
     let cfg = sync::lock(&state.config, "state.config").clone();
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
     let now = Local::now();
-    let is_workday = hol.is_workday(now.date_naive()).unwrap_or_else(|| {
-        let wd = now.weekday().num_days_from_monday();
-        wd < 5
-    });
-    let mw = current_monthly_workdays(&cfg, &hol);
+    let today_s = now.date_naive().format("%Y-%m-%d").to_string();
+    let day_off = dayoff::today_kind(&today_s);
+    // 休假标记（day_override）：当日一律按休息日处理，压过日历口径
+    let is_workday = if day_off.is_some() {
+        false
+    } else {
+        hol.is_workday(now.date_naive()).unwrap_or_else(|| {
+            let wd = now.weekday().num_days_from_monday();
+            wd < 5
+        })
+    };
+    let mut mw = current_monthly_workdays(&cfg, &hol);
+    // 休假天从月分母剔除（整月口径，不止今天）——仅自动模式；手动覆盖时以用户填的天数为准
+    if mw > 0 && config::effective_workdays_override(&cfg, now.year(), now.month()).is_none() {
+        mw -= dayoff::month_off_workdays(
+            &today_s[..7],
+            |d| match chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
+                Ok(d) => hol.is_workday(d).unwrap_or_else(|| {
+                    let wd = d.weekday();
+                    wd != chrono::Weekday::Sat && wd != chrono::Weekday::Sun
+                }),
+                Err(_) => false,
+            },
+        );
+    }
     let mut st = calc::compute(&cfg, is_workday, mw, now);
+    if let Some(kind) = &day_off {
+        st.to_off_str = "今天休假".into();
+        st.tooltip = format!(
+            "休假中 · {kind}\n赚钱速率　¥{:.2}/分\n距发薪　　{}天",
+            st.rate_per_min, st.days_to_pay
+        );
+    }
+    st.day_off_kind = day_off;
     // v1.3.0 守护：暂停状态随每秒状态快照广播（托盘文案 / 前端徽章 / 悬停卡片共用）
     st.paused = pause::is_paused();
     st

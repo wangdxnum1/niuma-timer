@@ -41,6 +41,7 @@ pub(crate) const DATED_TABLES: &[(&str, &str)] = &[
     ("audio_usage", "date"),
     ("audio_usage_hourly", "date"),
     ("focus_sessions", "date"),
+    ("day_override", "date"),
 ];
 
 /// 迁移遗留文件：8-21 从 JSON 迁到 SQLite 时的备份，早已无用
@@ -60,6 +61,7 @@ const TABLE_GROUPS: &[(&str, &str, &str)] = &[
     ("audio_usage", "audio", "媒体播放"),
     ("audio_usage_hourly", "audio", "媒体播放"),
     ("focus_sessions", "focus", "专注时段"),
+    ("day_override", "dayoff", "休假标记"),
 ];
 
 /// 分类展示顺序（key, 展示名）。key 与 `TABLE_GROUPS` 一一对应。
@@ -69,6 +71,7 @@ const GROUP_ORDER: &[(&str, &str)] = &[
     ("app", "应用使用"),
     ("audio", "媒体播放"),
     ("focus", "专注时段"),
+    ("dayoff", "休假标记"),
 ];
 
 /// 表结构之外、但同在数据目录里的文件（配置 / 节假日缓存 / 日志），
@@ -873,7 +876,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "activity", "app", "audio", "config", "focus", "icons", "logs", "other",
+                "activity", "app", "audio", "config", "dayoff", "focus", "icons", "logs", "other",
                 "overtime", "wal"
             ]
         );

@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=5d13241e" />
+    <link rel="stylesheet" href="styles.css?v=c8653c11" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -88,7 +88,8 @@
         <button class="pg-btn" id="billPgNext" aria-label="下一页">›</button>
       </div>
       <div class="pg-dots">
-        <button class="pg-dot" data-btab="bill" title="本周账单"></button>
+        <button class="pg-dot" data-btab="bill" title="本期账单"></button>
+        <button class="pg-dot" data-btab="report" title="月报"></button>
         <button class="pg-dot" data-btab="heat" title="时段热力"></button>
         <button class="pg-dot" data-btab="trend" title="趋势"></button>
         <button class="pg-dot" data-btab="body" title="身体账单"></button>
@@ -98,9 +99,10 @@
     </div>
 
     <div class="app" id="viewMain">
-      <!-- 品牌行：身份 + 品牌副语（副标题配置的落点）+ 动态状态徽章 -->
+      <!-- 品牌行：身份 + 品牌副语（副标题配置的落点）+ 休假快捷标记 + 动态状态徽章 -->
       <div class="brandrow">
         <div class="brand">🐎 <b>牛马计时器</b><span class="sub" id="tagline">实时计算你今天赚了多少钱</span></div>
+        <button class="leave-btn hidden" id="leaveBtn" type="button" title="标记今天休假：按休息日计，不计应赚与出勤（口径见设置页·休假记录）">标记休假</button>
         <span class="badge off" id="statusBadge">启动中</span>
       </div>
 
@@ -243,7 +245,7 @@
         <button id="billNextWeek" class="mn-btn">下一期 ›</button>
       </div>
 
-      <!-- tab 1：本周账单（原有双风格内容原样保留） -->
+      <!-- tab 1：本期账单（原有双风格内容原样保留） -->
       <div id="billTabBill">
 
         <!-- 整周零监控记录：空态（工资是推算的，无记录依然有钱可晒，但金条/柱全空不评判） -->
@@ -289,7 +291,29 @@
         </div>
       </div>
 
-      <!-- tab 2：时段热力图。7 行（周一~周日）× 24 列（0-23 时），键鼠事件 sqrt 归一 4 级金阶 -->
+      <!-- tab 2：月报（月跨度专属战绩卡；周/年跨度给切换引导）。出勤/休假天数来自 day_override -->
+      <div id="billTabReport" class="hidden">
+        <div id="reportSpanHint" class="bill-empty hidden">
+          <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
+          <div class="bill-empty-txt">月报按月统计——先在上方把跨度切到「月」</div>
+        </div>
+        <div id="reportBody" class="hidden">
+          <section class="card report-card">
+            <div class="report-head">
+              <span id="reportTitle">本月战绩</span>
+              <span id="reportRange" class="report-range"></span>
+            </div>
+            <div class="report-income" id="reportIncome">¥0.00</div>
+            <div class="report-rows" id="reportRows"></div>
+            <div class="report-quote" id="reportQuote"></div>
+          </section>
+          <div class="report-actions">
+            <button id="reportImageBtn" class="ghost">存为图片</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- tab 3：时段热力图。7 行（周一~周日）× 24 列（0-23 时），键鼠事件 sqrt 归一 4 级金阶 -->
       <div id="billTabHeat" class="hidden">
         <div class="heat-summary" id="heatSummary"></div>
         <section class="card">
@@ -311,7 +335,7 @@
         </div>
       </div>
 
-      <!-- tab 3：多周趋势。手写 SVG 折线（无外部库）：金线=周入账，红线=周摸鱼率（null 断线） -->
+      <!-- tab 4：多周趋势。手写 SVG 折线（无外部库）：金线=周入账，红线=周摸鱼率（null 断线） -->
       <div id="billTabTrend" class="hidden">
         <section class="card">
           <div class="trend-legend">
@@ -330,7 +354,7 @@
         </div>
       </div>
 
-      <!-- tab 4：身体账单。一周键鼠损耗四指标 + 按天分布 + 最累日 -->
+      <!-- tab 5：身体账单。一周键鼠损耗四指标 + 按天分布 + 最累日 -->
       <div id="billTabBody" class="hidden">
         <div class="body-grid">
           <section class="card body-kpi">
@@ -464,6 +488,22 @@
           </div>
           <div class="settings-action-row"><div id="workdaysInfo" class="hint">正在获取本月工作日…</div><button id="refreshBtn" class="ghost">重新获取</button></div>
         </div>
+        <div id="dayOffSettings" class="sub-section">
+          <span class="settings-subtitle">休假记录</span>
+          <p class="hint">年假、病假等个人休假在这里标记：当天按休息日计，不计应赚与出勤，自动模式的当月工作日数同步剔除。</p>
+          <div class="dayoff-editor">
+            <input id="dayOffDate" type="date" aria-label="休假日期" />
+            <select id="dayOffKind" aria-label="休假类型">
+              <option value="休假">休假</option>
+              <option value="年假">年假</option>
+              <option value="病假">病假</option>
+              <option value="事假">事假</option>
+              <option value="调休">调休</option>
+            </select>
+            <button id="dayOffAdd" class="primary">标记</button>
+          </div>
+          <div id="dayOffList" class="dayoff-list" aria-live="polite"></div>
+        </div>
         <div class="sub-section">
           <span class="settings-subtitle">每日作息 · 上午 / 下午</span>
           <div class="time-grid">
@@ -547,7 +587,7 @@
           <label class="switch-row"><span>仅记录指定应用</span><input id="app_whitelist_enabled" type="checkbox" class="switch" /></label>
           <p id="whitelistStatus" class="hint" aria-live="polite"></p>
           <div id="whitelistEditor" class="settings-dependent">
-            <div class="wl-editor"><div class="wl-input-row"><input id="appWhitelistInput" type="text" aria-label="应用展示名" placeholder="应用名，如微信、VS Code" /><button id="appWhitelistAdd" class="primary wl-add">添加</button></div><div id="appWhitelistList" class="wl-list"></div></div>
+            <div class="wl-editor"><div class="wl-input-row"><input id="appWhitelistInput" type="text" aria-label="应用展示名" placeholder="应用名，如微信、VS Code" /><button id="appWhitelistAdd" class="primary wl-add">添加</button></div><div id="recentAppsRow" class="wl-suggest-row hidden"></div><div id="appWhitelistList" class="wl-list"></div></div>
             <details class="hint-details"><summary>如何匹配应用名称</summary><p>按应用展示名匹配，忽略大小写。输入名称后按回车或点击添加；点 × 移除。</p></details>
           </div>
         </fieldset>
@@ -792,18 +832,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=5d13241e"></script>
-    <script src="js/tl_math.js?v=5d13241e"></script>
-    <script src="js/settings.js?v=5d13241e"></script>
-    <script src="js/settings_ui.js?v=5d13241e"></script>
-    <script src="js/hero.js?v=5d13241e"></script>
-    <script src="js/overtime.js?v=5d13241e"></script>
-    <script src="js/monitor.js?v=5d13241e"></script>
-    <script src="js/bill.js?v=5d13241e"></script>
-    <script src="js/insights.js?v=5d13241e"></script>
-    <script src="js/storage.js?v=5d13241e"></script>
-    <script src="js/update.js?v=5d13241e"></script>
-    <script src="js/boot.js?v=5d13241e"></script>
+    <script src="js/core.js?v=c8653c11"></script>
+    <script src="js/tl_math.js?v=c8653c11"></script>
+    <script src="js/settings.js?v=c8653c11"></script>
+    <script src="js/settings_ui.js?v=c8653c11"></script>
+    <script src="js/hero.js?v=c8653c11"></script>
+    <script src="js/overtime.js?v=c8653c11"></script>
+    <script src="js/monitor.js?v=c8653c11"></script>
+    <script src="js/bill.js?v=c8653c11"></script>
+    <script src="js/insights.js?v=c8653c11"></script>
+    <script src="js/storage.js?v=c8653c11"></script>
+    <script src="js/update.js?v=c8653c11"></script>
+    <script src="js/boot.js?v=c8653c11"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

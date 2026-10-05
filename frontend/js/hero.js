@@ -76,11 +76,15 @@ function fmtShortH(h) {
   return h < 1 ? Math.max(1, Math.round(h * 60)) + " 分钟" : h.toFixed(1) + "h";
 }
 
-// 状态徽章：主页品牌行右侧的动态状态（搬砖中 / 已下班 / 今天休息）。
+// 状态徽章：主页品牌行右侧的动态状态（休假中 / 搬砖中 / 已下班 / 今天休息）。
+// 优先级：paused > 休假标记 > 日历休息 > 已下班。
 function renderBadge(s) {
   const badge = $("statusBadge");
   if (s.paused) {
     badge.textContent = "已暂停 · 钱先冻结";
+    badge.className = "badge off";
+  } else if (s.day_off_kind) {
+    badge.textContent = "休假中 · " + s.day_off_kind;
     badge.className = "badge off";
   } else if (!s.is_workday) {
     badge.textContent = "今天休息";
@@ -92,7 +96,35 @@ function renderBadge(s) {
     badge.textContent = "● 搬砖中 · 距下班 " + fmtShortH(s.to_off_h);
     badge.className = "badge";
   }
+  updateLeaveBtn(s);
 }
+
+// 休假快捷标记（day_override）：显隐规则——日历工作日（未标记）显示「标记休假」；
+// 已标记显示「取消休假」；周末/法定节假日隐藏（它们本来就该休息）。
+// 暂停监控时一并隐藏：暂停语义优先，别让两个「停」互相打架。
+function updateLeaveBtn(s) {
+  const btn = $("leaveBtn");
+  if (!btn) return;
+  const marked = !!s.day_off_kind;
+  btn.classList.toggle("hidden", s.paused || (!marked && !s.is_workday));
+  btn.textContent = marked ? "取消休假" : "标记休假";
+}
+
+$("leaveBtn").addEventListener("click", async () => {
+  const s = lastStatus;
+  if (!s || s.paused) return;
+  const marked = !!s.day_off_kind;
+  const d = new Date();
+  const date =
+    d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  try {
+    await invoke("set_day_override", { date, kind: marked ? null : "休假" });
+    showToast(marked ? "已取消今天的休假" : "今天标记为休假：不计应赚与出勤", "ok");
+    tick();
+  } catch (e) {
+    showToast("休假标记失败：" + e, "err");
+  }
+});
 
 // overlapMin / minutesOf 收口到 tl_math.js（与 hover_card 共享，勿再本文件自抄）
 
@@ -203,6 +235,7 @@ function taglineStyle() {
 // 动态副标题：把「实时」这个卖点用起来，而不是写死一句说明文。
 // 全部基于 tick 已拿到的状态，不发额外 IPC。
 function dynamicTagline(s) {
+  if (s.day_off_kind) return "休假中，钱先歇着";
   if (s.to_off_str === "今天休息") return "今天休息，钱也休息";
   if (s.off_work) return "今天的钱，就到这儿了";
   if (s.worked_h <= 0) return "还没开工，钱暂时没动";

@@ -40,3 +40,12 @@ pub(crate) fn get_audio_usage_summary(
 ) -> audio_usage::AudioUsageSummary {
     audio_usage::summary(&known_icons, date.as_deref())
 }
+
+/// 白名单「从最近使用中添加」的数据源：近 N 天去重应用展示名（按累计使用秒排序）。
+#[tauri::command(async)]
+pub(crate) fn get_recent_app_names(days: Option<u32>, limit: Option<u32>) -> Vec<String> {
+    app_usage::recent_app_names(
+        days.unwrap_or(30).clamp(1, 365),
+        limit.unwrap_or(12).clamp(1, 50),
+    )
+}

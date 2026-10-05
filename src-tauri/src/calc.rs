@@ -33,6 +33,9 @@ pub struct DayStatus {
     pub tooltip: String,
     /// 托盘图标文字（如 ¥328）
     pub icon_text: String,
+    /// 当日休假标记（day_override.kind）：Some = 用户标记的「这天不上班」，
+    /// is_workday 恒 false。compute 恒为 None，由 state::get_status 按缓存填入
+    pub day_off_kind: Option<String>,
     /// 暂停中（手动暂停）。compute 恒为 false，由 main::get_status 按全局状态覆写
     pub paused: bool,
 }
@@ -250,6 +253,7 @@ pub fn compute(
         to_off_str,
         tooltip,
         icon_text,
+        day_off_kind: None,
         paused: false,
     }
 }

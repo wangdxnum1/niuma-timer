@@ -20,6 +20,8 @@ function spanQuipText(text, span) {
 
 let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
 let billData = null; // 最近一次 WeekBill 缓存，切风格时免重拉
+let reportBill = null; // 月报最近一次 PeriodBill（month 跨度），导出图片用
+let reportLeaveCount = 0; // 月报对应的休假天数（day_override 标记数）
 let billStyle = "receipt";
 let curBillSpan = "week";
 let billRequestGeneration = 0;
@@ -251,8 +253,9 @@ function paintDash(bill) {
 
 // ---- 周报图片（v1.6.0）：把当前周期账单画成一张 PNG ----
 
-// PeriodBill → 图片模型（纯函数，测试直接断言折算口径）
-function buildReportModel(bill) {
+// PeriodBill → 图片模型（纯函数，测试直接断言折算口径）。leaveDays：月报的
+// 休假天数（day_override 标记数），仅月跨度由月报传入，周/年调用不传不渲染。
+function buildReportModel(bill, leaveDays) {
   const ratePct = (bill.slack_rate || 0) * 100;
   return {
     label: bill.period_label || "",
@@ -265,6 +268,7 @@ function buildReportModel(bill) {
     slackPct: ratePct,
     workDays: bill.work_days,
     workHours: bill.work_hours || 0,
+    leaveDays: leaveDays == null ? null : leaveDays,
     bars: (bill.buckets || []).map((b) => ({
       label: b.label,
       salary: b.salary || 0,
@@ -309,13 +313,16 @@ function drawReport(model, scale) {
   ctx.font = '700 62px "Segoe UI", "Microsoft YaHei", sans-serif';
   ctx.fillText(fmtMoney(model.income), 55, 248);
 
-  // 四行明细（基础 / 加班 / 摸鱼 / 摸鱼率）
+  // 四行明细（基础 / 加班 / 摸鱼 / 摸鱼率）；月报补一行休假天数
   const rows = [
     ["基础工资", fmtMoney(model.base)],
     ["加班费", model.ot > 0 ? fmtMoney(model.ot) + "（" + model.otHours.toFixed(1) + "h）" : "—"],
     ["摸鱼成本", fmtMoney(model.slackCost)],
     ["摸鱼率", model.slackPct.toFixed(1) + "%"],
   ];
+  if (model.span === "month" && model.leaveDays != null) {
+    rows.splice(3, 0, ["休假", model.leaveDays + " 天"]);
+  }
   let y = 305;
   rows.forEach(([k, v]) => {
     ctx.fillStyle = HAIR;
@@ -400,6 +407,37 @@ function drawReport(model, scale) {
 // 保存链路：toBlob → 剪贴板（可用则复制）→ base64 → 后端落盘下载目录。
 // 并发守卫同 downloadCsv：连点会重复画布 + 落盘一堆同名文件；按钮同步禁用给反馈。
 let exportingImg = false;
+// 画布 → PNG：剪贴板可用则先复制，再 base64 交后端落盘下载目录。
+// 剪贴板不可用属预期（旧 WebView/权限）：静默降级为仅保存。账单图与月报图共用。
+async function saveCanvasPng(canvas, filename) {
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) {
+    showToast("图片生成失败", "err");
+    return;
+  }
+  let copied = false;
+  try {
+    if (typeof ClipboardItem === "function") {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      copied = true;
+    }
+  } catch (e) {
+    /* fallthrough */
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  try {
+    const path = await invoke("export_image", {
+      filename,
+      contentBase64: btoa(bin),
+    });
+    showToast(copied ? "已复制剪贴板，并保存到 " + path : "已保存到 " + path, "ok");
+  } catch (e) {
+    showToast("保存失败：" + e, "err");
+  }
+}
+
 async function saveBillImage() {
   if (curBillSpan === "year") {
     showToast("年账单暂不支持存为图片", "err");
@@ -415,34 +453,7 @@ async function saveBillImage() {
   if (btn) btn.disabled = true;
   try {
     const model = buildReportModel(billData);
-    const canvas = drawReport(model);
-    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-    if (!blob) {
-      showToast("图片生成失败", "err");
-      return;
-    }
-    // 剪贴板不可用属预期（旧 WebView/权限）：静默降级为仅保存
-    let copied = false;
-    try {
-      if (typeof ClipboardItem === "function") {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        copied = true;
-      }
-    } catch (e) {
-      /* fallthrough */
-    }
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    try {
-      const path = await invoke("export_image", {
-        filename: "niuma-账单-" + (model.label || billData.period_start) + ".png",
-        contentBase64: btoa(bin),
-      });
-      showToast(copied ? "已复制剪贴板，并保存到 " + path : "已保存到 " + path, "ok");
-    } catch (e) {
-      showToast("保存失败：" + e, "err");
-    }
+    await saveCanvasPng(drawReport(model), "niuma-账单-" + (model.label || billData.period_start) + ".png");
   } catch (e) {
     // buildReportModel/drawReport 抛错此前是无人处理的 rejection：按钮复位但
     // 无 toast 无日志（主窗口 unhandledrejection 兜底只管日志，可见反馈在这里补）
@@ -450,6 +461,113 @@ async function saveBillImage() {
     showToast("账单图导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
     exportingImg = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---- 月报 tab：月度战绩卡（PeriodBill + day_override 休假天数）----
+// 数据与「本期账单」同源（get_bill 的 month 跨度）；跨度不是月时给切换引导不拉数据
+async function loadMonthlyReport() {
+  if (curView !== "viewBill") return;
+  const hint = $("reportSpanHint");
+  const body = $("reportBody");
+  if (curBillSpan !== "month") {
+    hint.querySelector(".bill-empty-txt").textContent = "月报按月统计——先在上方把跨度切到「月」";
+    hint.classList.remove("hidden");
+    body.classList.add("hidden");
+    return;
+  }
+  hint.classList.add("hidden");
+  const generation = ++billRequestGeneration;
+  const isCurrent = () =>
+    generation === billRequestGeneration && curBillSpan === "month" && curBillTab === "report" && curView === "viewBill";
+  try {
+    const bill = await invoke("get_bill", { span: "month", offset: weekOffset });
+    if (!isCurrent()) return;
+    // 期号标签与翻页按钮跟本期数据走（paintWeekBill 同款，否则月报页停留在旧周标签）
+    $("billWeekLabel").textContent = bill.period_label + " · " + fmtDateRange(bill.period_start, bill.period_end);
+    $("billNextWeek").disabled = !!bill.is_current_period;
+    const leaves = await invoke("get_day_overrides", {
+      start: String(bill.period_start || ""),
+      end: String(bill.period_end || ""),
+    });
+    if (!isCurrent()) return;
+    paintMonthlyReport(bill, leaves);
+  } catch (e) {
+    if (!isCurrent()) return;
+    flog("loadMonthlyReport ERR: " + (e && e.message ? e.message : String(e)));
+    hint.querySelector(".bill-empty-txt").textContent = "月报加载失败";
+    hint.classList.remove("hidden");
+    body.classList.add("hidden");
+  }
+}
+
+function paintMonthlyReport(bill, leaves) {
+  reportBill = bill;
+  reportLeaveCount = leaves.length;
+  $("reportTitle").textContent = (bill.period_label || "本月") + "战绩";
+  $("reportRange").textContent = fmtDateRange(bill.period_start, bill.period_end);
+  $("reportIncome").textContent = fmtMoney(bill.total_income);
+  const md = (iso) => String(iso || "").slice(5).replace("-", ".");
+  const rows = [];
+  rows.push([
+    "出勤",
+    bill.work_days == null ? "—" : bill.work_days + " 天 · 在岗约 " + (bill.work_hours || 0).toFixed(1) + "h",
+  ]);
+  rows.push(["休假", leaves.length ? leaves.map((x) => md(x.date)).join("、") + "（" + leaves.length + " 天）" : "无"]);
+  rows.push(["加班", (bill.ot_hours || 0) > 0 ? (bill.ot_hours || 0).toFixed(1) + "h · " + fmtMoney(bill.ot_fee) : "—"]);
+  rows.push(["摸鱼率", ((bill.slack_rate || 0) * 100).toFixed(1) + "%"]);
+  if (bill.hardest) {
+    rows.push(["最拼一天", md(bill.hardest.date) + " " + bill.hardest.weekday + " · 加班 " + (bill.hardest.ot_hours || 0).toFixed(1) + "h"]);
+  }
+  if (bill.slackiest) {
+    rows.push(["最摸一天", md(bill.slackiest.date) + " " + bill.slackiest.weekday + " · " + ((bill.slackiest.rate || 0) * 100).toFixed(1) + "%"]);
+  }
+  const box = $("reportRows");
+  box.textContent = "";
+  rows.forEach(([k, v]) => {
+    const row = document.createElement("div");
+    row.className = "report-row";
+    const l = document.createElement("span");
+    l.textContent = k;
+    const vEl = document.createElement("span");
+    vEl.textContent = v;
+    row.append(l, vEl);
+    box.appendChild(row);
+  });
+  const front = bill.front_seconds || 0;
+  const q = $("reportQuote");
+  if (front > 0) {
+    q.textContent = weekBillQuip((bill.slack_rate || 0) * 100, moneyConfigured(), "month");
+    q.classList.remove("hidden");
+  } else {
+    q.classList.add("hidden");
+  }
+  $("reportBody").classList.remove("hidden");
+}
+
+let exportingReport = false;
+async function saveReportImage() {
+  if (curBillSpan !== "month") {
+    showToast("月报按月统计——先切到「月」跨度", "err");
+    return;
+  }
+  if (!reportBill) {
+    showToast("月报还没就绪，稍等一下再试", "err");
+    return;
+  }
+  if (exportingReport) return;
+  exportingReport = true;
+  const btn = $("reportImageBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const model = buildReportModel(reportBill, reportLeaveCount);
+    await saveCanvasPng(drawReport(model), "niuma-月报-" + (model.label || reportBill.period_start) + ".png");
+  } catch (e) {
+    flog("saveReportImage ERR: " + (e && e.message ? e.message : String(e)));
+    showToast("月报图导出失败：" + (e && e.message ? e.message : e), "err");
+  } finally {
+    exportingReport = false;
     if (btn) btn.disabled = false;
   }
 }

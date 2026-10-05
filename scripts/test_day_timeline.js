@@ -36,7 +36,7 @@ has("前台四类秒逐列输出", rsInsights, "pub slack_secs: i64");
 has("查询时归类 category_of", rsInsights, "app_usage::category_of");
 has("键鼠口径同周账单 EVENTS_EXPR", rsInsights, "SELECT hour, {EVENTS_EXPR} FROM act_hourly WHERE date = ?1 GROUP BY hour");
 has("固定 24 行（0..24）", rsInsights, "(0..24)");
-has("工作日口径复用 weekbill::is_workday_of", rsInsights, "is_workday_of(date, hol)");
+has("工作日口径复用 weekbill::is_workday_of", rsInsights, "is_workday_of(date, hol, &off)");
 
 console.log("== 命令（cmds_bill.rs + 注册链） ==");
 has("命令 get_day_timeline", rsBill, "pub(crate) fn get_day_timeline(");

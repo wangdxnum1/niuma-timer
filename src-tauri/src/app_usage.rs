@@ -903,6 +903,36 @@ pub struct AppUsageItem {
     pub icon: Option<String>,
 }
 
+/// 最近 N 天去重应用展示名（按累计使用秒降序取前 limit 个）。
+/// 白名单「从最近使用中添加」的数据源：主键 (date, app) 前缀扫描，无需新索引。
+/// 查询失败返回空 vec（设置页建议行隐藏即可，不值得为它报错打断配置流程）。
+pub(crate) fn recent_app_names(days: u32, limit: u32) -> Vec<String> {
+    let today = Local::now().date_naive();
+    let start = today - chrono::Duration::days(days as i64);
+    let start_s = start.format("%Y-%m-%d").to_string();
+    let end_s = today.format("%Y-%m-%d").to_string();
+    let picked = crate::db::with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT app, SUM(seconds) AS s FROM app_usage              WHERE date >= ?1 AND date <= ?2 GROUP BY app ORDER BY s DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![start_s, end_s, limit], |r| {
+            r.get::<_, String>(0)
+        })?;
+        let mut names = Vec::new();
+        for r in rows {
+            names.push(r?);
+        }
+        Ok(names)
+    });
+    match picked {
+        Ok(names) => names,
+        Err(e) => {
+            crate::db::debug_log(&format!("recent_app_names 查询失败: {e}"));
+            Vec::new()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppUsageSummary {
     /// 统计日期 "YYYY-MM-DD"

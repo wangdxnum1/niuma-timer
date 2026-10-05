@@ -15,6 +15,7 @@ use crate::app_usage;
 use crate::audio_usage;
 use crate::calc;
 use crate::config;
+use crate::dayoff;
 use crate::db;
 use crate::holiday;
 use crate::state::{current_monthly_workdays, get_status, AppState};
@@ -153,6 +154,44 @@ pub(crate) async fn refresh_holidays(
 #[tauri::command]
 pub(crate) fn get_status_cmd(state: State<AppState>) -> calc::DayStatus {
     get_status(state.inner())
+}
+
+/// 单条休假标记（get_day_overrides 返回项）
+#[derive(serde::Serialize)]
+pub(crate) struct DayOverrideEntry {
+    pub date: String,
+    pub kind: String,
+}
+
+/// 起止范围（含端点）内的休假标记，按日期升序。设置页「休假记录」与月报共用。
+/// async：持库锁的查询不上主线程（同 save_config 的纪律）。
+#[tauri::command(async)]
+pub(crate) fn get_day_overrides(
+    start: String,
+    end: String,
+) -> Result<Vec<DayOverrideEntry>, String> {
+    db::with_db(|conn| {
+        let mut v: Vec<DayOverrideEntry> = dayoff::range_overrides(conn, &start, &end)?
+            .into_iter()
+            .map(|(date, kind)| DayOverrideEntry { date, kind })
+            .collect();
+        v.sort_by(|a, b| a.date.cmp(&b.date));
+        Ok(v)
+    })
+}
+
+/// 标记/取消某天休假（kind=None 删除）。设置页「休假记录」与主界面快捷按钮共用。
+#[tauri::command(async)]
+pub(crate) fn set_day_override(date: String, kind: Option<String>) -> Result<(), String> {
+    if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
+        return Err(format!("日期格式应为 YYYY-MM-DD：{date}"));
+    }
+    if let Some(k) = &kind {
+        if !dayoff::KINDS.contains(&k.as_str()) {
+            return Err(format!("未知休假类型：{k}"));
+        }
+    }
+    db::with_db(|conn| dayoff::set(conn, &date, kind.as_deref()))
 }
 
 /// 隐藏主窗口（点关闭按钮时调用）

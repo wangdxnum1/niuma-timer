@@ -36,10 +36,11 @@ function pick(re, name) {
   return m[0];
 }
 
-// 抽取真实函数（renderBadge 依赖 fmtShortH，一并抽出）
+// 抽取真实函数（renderBadge 依赖 fmtShortH 与 updateLeaveBtn，一并抽出）
 const code = [
   pick(/function fmtShortH\(h\) \{[\s\S]*?\n\}/, "fmtShortH"),
   pick(/function renderBadge\(s\) \{[\s\S]*?\n\}/, "renderBadge"),
+  pick(/function updateLeaveBtn\(s\) \{[\s\S]*?\n\}/, "updateLeaveBtn"),
 ].join("\n");
 
 // 桩 DOM：按 id 记录最后一次写入的文案与 class
@@ -67,6 +68,12 @@ function makeEl() {
       add: (c) => classes.add(c),
       remove: (c) => classes.delete(c),
       contains: (c) => classes.has(c),
+      toggle: (c, f) => {
+        const on = f === undefined ? !classes.has(c) : !!f;
+        if (on) classes.add(c);
+        else classes.delete(c);
+        return on;
+      },
     },
     has: (c) => classes.has(c),
   };
@@ -86,6 +93,21 @@ api.renderBadge(work({ paused: true }));
 eq("手动暂停", badge().text, "已暂停 · 钱先冻结");
 eq("暂停 className", badge().cls, "badge off");
 ok("renderBadge 无 rest_secs 残留", !/rest_secs/.test(appSrc));
+
+console.log("== 休假标记分支 ==");
+const leaveBtn = () => global.$("leaveBtn");
+api.renderBadge(work({ day_off_kind: "年假", is_workday: false }));
+eq("休假徽章", badge().text, "休假中 · 年假");
+eq("休假 className", badge().cls, "badge off");
+eq("已标记 → 取消休假", leaveBtn().text, "取消休假");
+ok("已标记按钮可见", !leaveBtn().has("hidden"));
+api.renderBadge(work({}));
+eq("未标记 → 标记休假", leaveBtn().text, "标记休假");
+ok("未标记按钮可见", !leaveBtn().has("hidden"));
+api.renderBadge(work({ is_workday: false }));
+ok("周末隐藏按钮", leaveBtn().has("hidden"));
+api.renderBadge(work({ is_workday: false, day_off_kind: "事假", paused: true }));
+ok("暂停优先隐藏按钮", leaveBtn().has("hidden"));
 
 console.log("== 常规状态不受影响 ==");
 api.renderBadge(work({}));

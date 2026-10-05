@@ -3,15 +3,17 @@ const WD_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周�
 let curBillTab = "bill";
 const BILL_TAB_PANES = {
   bill: "billTabBill",
+  report: "billTabReport",
   heat: "billTabHeat",
   trend: "billTabTrend",
   body: "billTabBody",
   timeline: "billTabTimeline",
   focus: "billTabFocus",
 };
-const BILL_TAB_KEYS = ["bill", "heat", "trend", "body", "timeline", "focus"]; // 翻页器循环顺序
+const BILL_TAB_KEYS = ["bill", "report", "heat", "trend", "body", "timeline", "focus"]; // 翻页器循环顺序
 const BILL_TAB_NAMES = {
-  bill: "本周账单",
+  bill: "本期账单",
+  report: "月报",
   heat: "时段热力",
   trend: "趋势",
   body: "身体账单",
@@ -39,6 +41,7 @@ function setBillTabUI(tab) {
 // 懒加载分发：进页 / 切 tab / 翻周才拉对应命令（周级聚合，不进 tick 轮询）
 async function loadBillTab() {
   if (curBillTab === "bill") return loadWeekBill();
+  if (curBillTab === "report") return loadMonthlyReport();
   if (curBillTab === "heat") return loadHourHeat();
   if (curBillTab === "trend") return loadWeekTrend();
   if (curBillTab === "timeline") return loadDayTimeline();

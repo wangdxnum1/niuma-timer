@@ -35,7 +35,7 @@ has("capabilities 自动补齐 allow-export-image", caps, "allow-export-image");
 
 console.log("== 前端：模型折算（真实调用） ==");
 // 从 bill.js 抽出 buildReportModel / spanQuipText 源码（到行首 "}" 为止），配桩真实调用
-const m = billSrc.match(/function buildReportModel\(bill\) \{[\s\S]*?\n\}/);
+const m = billSrc.match(/function buildReportModel\(bill, leaveDays\) \{[\s\S]*?\n\}/);
 const sq = billSrc.match(/function spanQuipText\(text, span\) \{[\s\S]*?\n\}/);
 ok("buildReportModel 可提取", !!m);
 ok("spanQuipText 可提取", !!sq);
@@ -101,6 +101,16 @@ if (m && sq) {
   });
   eq("月跨度金句措辞切换", mm.quip, "本月工资建议原路退回@18.2@1");
   eq("模型带跨度（月）", mm.span, "month");
+  // 月报休假天数：显式传入时透传，周/年调用（不传）为 null（drawReport 不渲染该行）
+  eq("月跨度不传休假 → null", mm.leaveDays, null);
+  const ml = new Function(
+    "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
+    m[0] + "\nreturn buildReportModel;"
+  )(stubFmtDateRange, stubQuip, () => true, "month")(
+    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, buckets: [] },
+    3,
+  );
+  eq("月报休假天数透传", ml.leaveDays, 3);
 }
 
 console.log("== 前端：绘制与保存链路 ==");

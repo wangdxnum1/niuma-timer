@@ -3,7 +3,7 @@
 //! 满勤工资按天取当月分母、摸鱼成本按天折算、total_income 不减摸鱼成本、
 //! 环比同函数聚合上一周期、跨年周按天的年份取内置节假日表且不触发网络。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use rusqlite::Connection;
@@ -178,9 +178,9 @@ pub fn delta_pct(cur: f64, prev: f64) -> Option<f64> {
     }
 }
 
-/// 法定工作日口径：当天年份若非当前缓存年份，取内置表（owned，解决生命周期）；
-/// 表缺失/为空退回周一至五；不触发网络刷新。
-pub(crate) fn is_workday_of(date: NaiveDate, cur: &HolidayCache) -> bool {
+/// 日历工作日口径：当天年份若非当前缓存年份，取内置表（owned，解决生命周期）；
+/// 表缺失/为空退回周一至五；不触发网络。
+fn calendar_workday(date: NaiveDate, cur: &HolidayCache) -> bool {
     let local: Option<HolidayCache> = if cur.year == date.year() {
         None
     } else {
@@ -193,8 +193,36 @@ pub(crate) fn is_workday_of(date: NaiveDate, cur: &HolidayCache) -> bool {
     }
 }
 
-/// 当月工作日分母：override > 节假日表 > weekday_count（跨年同 is_workday_of 处理）
-fn monthly_workdays_of(year: i32, month: u32, cfg: &Config, cur: &HolidayCache) -> u32 {
+/// 法定工作日口径叠加休假标记：用户标记的 day_override 一律按休息日处理
+/// （spec 2026-10-05）。off 为日期串（YYYY-MM-DD）集合。
+pub(crate) fn is_workday_of(date: NaiveDate, cur: &HolidayCache, off: &HashSet<String>) -> bool {
+    !off.contains(&date.format("%Y-%m-%d").to_string()) && calendar_workday(date, cur)
+}
+
+/// 覆盖 [start,end] 的整月范围（day_override 的月分母剔除需要全月口径）
+fn month_cover(start: NaiveDate, end: NaiveDate) -> (String, String) {
+    let from = NaiveDate::from_ymd_opt(start.year(), start.month(), 1).unwrap_or(start);
+    let to = NaiveDate::from_ymd_opt(
+        end.year(),
+        end.month(),
+        holiday::days_in_month(end.year(), end.month()),
+    )
+    .unwrap_or(end);
+    (
+        from.format("%Y-%m-%d").to_string(),
+        to.format("%Y-%m-%d").to_string(),
+    )
+}
+
+/// 当月工作日分母：override > 节假日表 > weekday_count（跨年同 is_workday_of 处理）；
+/// 自动模式再剔除当月休假标记（仅扣日历工作日上的标记，误标周末不扣）
+fn monthly_workdays_of(
+    year: i32,
+    month: u32,
+    cfg: &Config,
+    cur: &HolidayCache,
+    off: &HashSet<String>,
+) -> u32 {
     if let Some(v) = config::effective_workdays_override(cfg, year, month) {
         return v;
     }
@@ -204,8 +232,23 @@ fn monthly_workdays_of(year: i32, month: u32, cfg: &Config, cur: &HolidayCache) 
         holiday::builtin_cache(year)
     };
     let hol = local.as_ref().unwrap_or(cur);
-    hol.month_workdays(year, month)
-        .unwrap_or_else(|| holiday::weekday_count(year, month))
+    let base = hol
+        .month_workdays(year, month)
+        .unwrap_or_else(|| holiday::weekday_count(year, month));
+    if off.is_empty() {
+        return base;
+    }
+    let mut sub = 0u32;
+    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let last = NaiveDate::from_ymd_opt(year, month, holiday::days_in_month(year, month)).unwrap();
+    let mut d = first;
+    while d <= last {
+        if off.contains(&d.format("%Y-%m-%d").to_string()) && calendar_workday(d, cur) {
+            sub += 1;
+        }
+        d += Duration::days(1);
+    }
+    base.saturating_sub(sub)
 }
 
 /// 周期标签：周 → "第 N 周"；月 → "YYYY 年 M 月"；年 → "YYYY 年"
@@ -225,6 +268,12 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
     let start_s = ws.format("%Y-%m-%d").to_string();
     let end_excl_s = (we + Duration::days(1)).format("%Y-%m-%d").to_string();
     let daily_h = calc::daily_hours(input.cfg);
+
+    // 休假标记：装载覆盖 [start,end] 的整月范围（月分母剔除需要全月口径）
+    let (off_from, off_to) = month_cover(input.start, input.end);
+    let off: HashSet<String> = crate::dayoff::range_overrides(conn, &off_from, &off_to)?
+        .into_keys()
+        .collect();
 
     // ---- 加班流水：SUM(total) 与 SUM(valid_hours) 按天（不按费率重算，跨月天然正确） ----
     let mut ot_map: HashMap<String, (f64, f64)> = HashMap::new();
@@ -311,8 +360,8 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
     let mut d = input.start;
     while d <= input.end {
         let key = d.format("%Y-%m-%d").to_string();
-        let is_wd = is_workday_of(d, input.cur_hol);
-        let mw = monthly_workdays_of(d.year(), d.month(), input.cfg, input.cur_hol);
+        let is_wd = is_workday_of(d, input.cur_hol, &off);
+        let mw = monthly_workdays_of(d.year(), d.month(), input.cfg, input.cur_hol, &off);
         // 满勤日薪：两种计薪方式的统一收口（monthly=月薪÷工作日；hourly=时薪×日工时）
         let full_salary = calc::full_day_salary(input.cfg, mw);
 
@@ -442,9 +491,17 @@ pub fn period_bill(
     let today = Local::now().date_naive();
     let (start, end) = period_bounds(span, off, today);
 
-    let is_wd = is_workday_of(today, cur_hol);
-    let mw = monthly_workdays_of(today.year(), today.month(), cfg, cur_hol);
-    let today_earned = calc::compute(cfg, is_wd, mw, Local::now()).earned;
+    // 今日的休假/分母口径与 assemble 同源（day_override 是唯一真相）：
+    // 在 DB 里装载当月标记集再算，保证「今天标记休假 → 实时 earned=0、分母剔除」
+    let today_earned = db::with_db(|conn| {
+        let (from, to) = month_cover(today, today);
+        let off: HashSet<String> = crate::dayoff::range_overrides(conn, &from, &to)?
+            .into_keys()
+            .collect();
+        let is_wd = is_workday_of(today, cur_hol, &off);
+        let mw = monthly_workdays_of(today.year(), today.month(), cfg, cur_hol, &off);
+        Ok(calc::compute(cfg, is_wd, mw, Local::now()).earned)
+    })?;
 
     let mut bill = db::with_db(|conn| {
         assemble(
@@ -587,6 +644,7 @@ mod tests {
         conn.execute_batch(db::CREATE_OT_RECORDS).unwrap();
         conn.execute_batch(db::CREATE_ACT_HOURLY).unwrap();
         conn.execute_batch(db::CREATE_APP_USAGE).unwrap();
+        conn.execute_batch(db::CREATE_DAY_OVERRIDE).unwrap();
         conn
     }
 
@@ -620,7 +678,7 @@ mod tests {
         let empty_hol = hol();
         let mut d = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
         while d.month() == 9 {
-            if is_workday_of(d, &empty_hol) {
+            if is_workday_of(d, &empty_hol, &HashSet::new()) {
                 conn.execute(
                     "INSERT INTO act_hourly (date, hour, moves, pixels, `left`, dbl, `right`, wheel, wheel_ticks, mid, xbtn, keys) \
                      VALUES (?1, 9, 100, 0, 10, 2, 3, 50, 5, 1, 0, 200)",
@@ -630,6 +688,49 @@ mod tests {
             }
             d += Duration::days(1);
         }
+    }
+
+    /// 休假标记：标记日按休息日处理 + 月分母剔除（spec 2026-10-05）
+    #[test]
+    fn leave_override_rests_day_and_shrinks_denominator() {
+        let conn = mem_conn();
+        // 2026-09-07（周一）：有活动的工作日，标记休假后应按休息日计
+        conn.execute(
+            "INSERT INTO act_hourly (date, hour, moves, pixels, `left`, dbl, `right`, wheel, wheel_ticks, mid, xbtn, keys) \
+             VALUES ('2026-09-07', 9, 100, 0, 10, 2, 3, 50, 5, 1, 0, 200)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO day_override (date, kind) VALUES ('2026-09-07', '年假')",
+            [],
+        )
+        .unwrap();
+
+        let cfg = Config::default();
+        let h = hol();
+        let ws = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        let bill = assemble(&input(&cfg, &h, ws), &conn).unwrap();
+        let day = bill
+            .buckets
+            .iter()
+            .find(|d| d.date.as_deref() == Some("2026-09-07"))
+            .unwrap();
+        assert_eq!(day.is_workday, Some(false), "标记休假 → 非工作日");
+        assert_eq!(day.salary, 0.0, "标记休假 → 不计应赚");
+        assert_eq!(bill.work_days, Some(0), "出勤不含休假天");
+        // 分母剔除：2026-09 共 22 个工作日，标记 1 天 → 21；手动覆盖时不剔除
+        let off: HashSet<String> = ["2026-09-07".to_string()].into_iter().collect();
+        assert_eq!(monthly_workdays_of(2026, 9, &cfg, &h, &off), 21);
+        let cfg_manual = Config {
+            workdays_override: Some(20),
+            ..Config::default()
+        };
+        assert_eq!(
+            monthly_workdays_of(2026, 9, &cfg_manual, &h, &off),
+            20,
+            "手动覆盖优先，分母不被休假改动"
+        );
     }
 
     #[test]
