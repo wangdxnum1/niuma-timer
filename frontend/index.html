@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=3b8c9f4b" />
+    <link rel="stylesheet" href="styles.css?v=5d13241e" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -439,7 +439,7 @@
       </div>
 
       <section class="card settings-card" id="settingsSalary" aria-labelledby="settingsSalaryTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">01</span><h2 id="settingsSalaryTitle">薪资与作息</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsSalaryTitle">薪资与作息</h2></div>
         <p class="settings-desc">计薪方式、发薪日与每日工作时段</p>
         <label class="settings-stacked"><span>计薪方式</span></label>
         <div class="mon-seg" id="salaryModeSeg" role="group" aria-label="计薪方式">
@@ -478,7 +478,7 @@
       </section>
 
       <section class="card settings-card" id="settingsOvertime" aria-labelledby="settingsOvertimeTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">02</span><h2 id="settingsOvertimeTitle">加班</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsOvertimeTitle">加班</h2></div>
         <p class="settings-desc">工作日与休息日的加班费用规则</p>
         <label class="switch-row"><span>自动记录加班</span><input id="overtime_enabled" type="checkbox" class="switch" /></label>
         <p class="hint">下班后锁屏离开时，自动计算本次加班时长与费用</p>
@@ -508,7 +508,7 @@
       </section>
 
       <section class="card settings-card" id="settingsGuard" aria-labelledby="settingsGuardTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">03</span><h2 id="settingsGuardTitle">守护</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsGuardTitle">守护</h2></div>
         <p class="settings-desc">休息提醒、专注统计与快捷键</p>
         <label class="switch-row"><span>久坐提醒</span><input id="remind_sedentary_enabled" type="checkbox" class="switch" /></label>
         <div id="sedentaryFields" class="settings-dependent">
@@ -535,7 +535,7 @@
       </section>
 
       <section class="card settings-card" id="settingsMonitor" aria-labelledby="settingsMonitorTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">04</span><h2 id="settingsMonitorTitle">数据监控</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsMonitorTitle">数据监控</h2></div>
         <p class="settings-desc">选择需要记录的活动和应用</p>
         <label class="switch-row"><span>鼠标键盘活动监控</span><input id="monitor_activity" type="checkbox" class="switch" /></label>
         <p class="hint">记录点击、按键、滚轮与移动等活动统计</p>
@@ -554,7 +554,7 @@
       </section>
 
       <section class="card settings-card" id="settingsAppearance" aria-labelledby="settingsAppearanceTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">05</span><h2 id="settingsAppearanceTitle">外观</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsAppearanceTitle">外观</h2></div>
         <p class="settings-desc">调整首页、账单与托盘显示</p>
         <label class="settings-stacked"><span>时长显示</span><select id="duration_format"><option value="hms">时、分、秒</option><option value="hm">时、分</option><option value="h">小数小时</option></select></label>
         <div class="settings-preview"><span class="settings-preview-label">显示示例</span><span id="durationPreview" class="settings-preview-value"></span></div>
@@ -575,7 +575,7 @@
       </section>
 
       <section class="card settings-card" id="settingsData" aria-labelledby="settingsDataTitle">
-        <div class="settings-card-heading"><span class="settings-number" aria-hidden="true">06</span><h2 id="settingsDataTitle">系统与数据</h2></div>
+        <div class="settings-card-heading"><h2 id="settingsDataTitle">系统与数据</h2></div>
         <p class="settings-desc">数据保留、备份与系统行为</p>
         <label class="settings-stacked"><span>历史数据保留</span><select id="retention_days"><option value="0">永久保留（默认）</option><option value="180">半年</option><option value="365">1 年</option><option value="730">2 年</option></select></label>
         <p id="retentionHint" class="hint"></p>
@@ -792,18 +792,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=3b8c9f4b"></script>
-    <script src="js/tl_math.js?v=3b8c9f4b"></script>
-    <script src="js/settings.js?v=3b8c9f4b"></script>
-    <script src="js/settings_ui.js?v=3b8c9f4b"></script>
-    <script src="js/hero.js?v=3b8c9f4b"></script>
-    <script src="js/overtime.js?v=3b8c9f4b"></script>
-    <script src="js/monitor.js?v=3b8c9f4b"></script>
-    <script src="js/bill.js?v=3b8c9f4b"></script>
-    <script src="js/insights.js?v=3b8c9f4b"></script>
-    <script src="js/storage.js?v=3b8c9f4b"></script>
-    <script src="js/update.js?v=3b8c9f4b"></script>
-    <script src="js/boot.js?v=3b8c9f4b"></script>
+    <script src="js/core.js?v=5d13241e"></script>
+    <script src="js/tl_math.js?v=5d13241e"></script>
+    <script src="js/settings.js?v=5d13241e"></script>
+    <script src="js/settings_ui.js?v=5d13241e"></script>
+    <script src="js/hero.js?v=5d13241e"></script>
+    <script src="js/overtime.js?v=5d13241e"></script>
+    <script src="js/monitor.js?v=5d13241e"></script>
+    <script src="js/bill.js?v=5d13241e"></script>
+    <script src="js/insights.js?v=5d13241e"></script>
+    <script src="js/storage.js?v=5d13241e"></script>
+    <script src="js/update.js?v=5d13241e"></script>
+    <script src="js/boot.js?v=5d13241e"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>
