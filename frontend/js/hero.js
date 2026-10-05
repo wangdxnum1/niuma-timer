@@ -1,19 +1,30 @@
 async function refresh() {
+  const button = $("refreshBtn");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "获取中…";
   try {
-    const n = await invoke("refresh_holidays");
-    $("workdaysInfo").textContent = "当月实际上班天数：" + n + " 天";
+    if (!(await saveIfChanged({ silent: true })) && JSON.stringify(readCfg()) !== lastSaved) return;
+    const snapshot = lastSaved;
+    const days = await invoke("refresh_holidays");
+    if (snapshot === lastSaved && settingsSavePending === 0) setSettingsWorkdays(days);
+    showToast("工作日数据已更新", "ok");
   } catch (e) {
-    $("workdaysInfo").textContent = "刷新失败：" + e;
+    $("workdaysInfo").textContent = "获取失败，请重新尝试";
+    showToast("工作日获取失败：" + e, "err");
+  } finally {
+    button.disabled = false;
+    button.textContent = "重新获取";
   }
 }
 
-// 静默刷新：自动保存触发，失败不打扰用户
 async function silentRefresh() {
   try {
-    const n = await invoke("refresh_holidays");
-    $("workdaysInfo").textContent = "当月实际上班天数：" + n + " 天";
+    const snapshot = lastSaved;
+    const days = await invoke("refresh_holidays");
+    if (snapshot === lastSaved && settingsSavePending === 0) setSettingsWorkdays(days);
   } catch (e) {
-    /* 静默失败，稍后可手动刷新 */
+    flog("refresh_holidays ERR: " + e);
   }
 }
 
@@ -22,8 +33,15 @@ let lastStatus = null;
 
 async function tick() {
   try {
+    const settingsSnapshot = lastSaved;
     const s = await invoke("get_status_cmd");
     lastStatus = s;
+    if (configLoaded && settingsSnapshot === lastSaved && settingsSavePending === 0) {
+      settingsWorkdays = Number(s.monthly_workdays) > 0 ? Number(s.monthly_workdays) : null;
+      settingsWorkdaysMonth = currentYearMonth();
+      settingsWorkdaysManual = settingsOverrideIsCurrent(JSON.parse(lastSaved), currentYearMonth());
+      if (curView === "viewSettings") refreshSettingsUI();
+    }
     $("earned").textContent = fmtMoney(s.earned);
     renderBadge(s);
     renderSparkline(s);
@@ -227,6 +245,6 @@ function renderTagline(s) {
 // 只有选了「自定义」才露出输入框
 function applyTaglineCustomVisibility(v) {
   const row = $("taglineCustomRow");
-  if (row) row.style.display = v === "custom" ? "" : "none";
+  if (row) row.classList.toggle("hidden", v !== "custom");
 }
 

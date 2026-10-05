@@ -143,7 +143,7 @@ console.log("");
 const htmlSrc = fs.readFileSync(path.join(ROOT, "frontend", "index.html"), "utf8");
 console.log("== 设置页六卡与备份区结构（v1.4.0 补强） ==");
 ["薪资与作息", "加班", "守护", "数据监控", "外观", "系统与数据"].forEach((t) => {
-  ok("设置卡标题存在：" + t, htmlSrc.indexOf("<h2>" + t + "</h2>") >= 0);
+  ok("设置卡标题存在：" + t, new RegExp("<h2(?:\\s[^>]*)?>" + t + "</h2>").test(htmlSrc));
 });
 ok(
   "备份区三 id + 还原重启遮罩齐全（backupStatus 已删：结果只走 toast）",
@@ -270,7 +270,7 @@ ok(
 );
 // 3) 行为：configLoaded=false 时 doSave 不发 save_config、不更新快照
 const gateCode =
-  "let configLoaded = false;\n" +
+  "let configLoaded = false; let settingsSaveQueue = Promise.resolve();\n" +
   pick(/async function doSave\(\{ silent = false \} = \{\}\) \{[\s\S]*?\n\}/, "doSave") +
   "\n; return { doSave, setLoaded: (v) => { configLoaded = v; } };";
 const saveCalls = [];
@@ -284,6 +284,12 @@ const gateApi = new Function(
   () => {},
   () => {}
 );
+global.setSettingsSaveState = () => {};
+global.lastSaved = null;
+global.lastOverride = null;
+global.settingsSavePending = 0;
+global.validateSettingsForm = () => true;
+global.refreshSettingsUI = () => {};
 global.readCfg = () => ({ workdays_override: null }); // doSave 成功路径引用，沙盒给空配置
 (async () => {
   await gateApi.doSave({});

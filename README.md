@@ -53,6 +53,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Guard reminders** — sedentary reminders and off-work reminders via native Windows notifications, plus global hotkeys (Alt+Shift+N toggle window, Alt+Shift+P pause monitoring); configurable thresholds, all off-work aware
 - **Manual pause** — pause all monitoring from the tray menu or Alt+Shift+P; money freezes until resumed
 - **Six-card settings** — salary & schedule, overtime, guard, data monitoring, appearance, and system & data, each with collapsible detail notes
+- **Settings previews and feedback** — six-category navigation, live pay and appearance previews, dependent controls, explicit rate inheritance and retention rules, inline validation, and serialized auto-save.
 - **Automatic updates** — checks GitHub Releases every 6 hours (and 30s after launch), one-click update with "skip this version", and a post-update announcement pulled from the changelog; the portable build self-replaces with checksum-verified rollback
 - **Backup & restore** — one-click full backup (SQLite snapshot + config + manifest) into a single zip under `Documents\niuma-timer-backup`, list all backups, and one-click restore with integrity validation, automatic safety backup, and auto-restart
 - **Build info in startup log** — version, build time, git commit and frontend fingerprint are compiled into the exe and written to `debug.log` / `panic.log` at startup

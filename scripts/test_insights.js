@@ -112,7 +112,7 @@ has("身体按天柱区", html, 'id="bodyBars"');
 has("身体口径脚注", html, 'id="bodyFoot"');
 has("身体空态", html, 'id="bodyEmpty"');
 has("远程排除开关", html, 'id="overtime_exclude_remote"');
-has("远程排除 hint", html, "检测到远程桌面会话时暂停自动加班记录");
+has("远程排除 hint", html, "远程会话会排除自动记录，手动补录仍可使用");
 
 // ---------------------------------------------------------------- 4. 前端源码状态机与三视图
 has("翻页循环 billStep", appSrc, "function billStep(delta)");

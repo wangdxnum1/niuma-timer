@@ -141,7 +141,7 @@ ok(
 );
 
 console.log("== DOM / 后端契约 ==");
-ok("守护设置卡存在", /<h2>守护<\/h2>/.test(htmlSrc));
+ok("守护设置卡存在", /<h2(?:\s[^>]*)?>守护<\/h2>/.test(htmlSrc));
 ok("阈值输入 1–120", /id="remind_sedentary_minutes" type="number" min="1" max="120"/.test(htmlSrc));
 ok("capabilities 已无 allow-pause-monitor", !/"allow-pause-monitor"/.test(capSrc));
 ok("pause_monitor 死命令已删（全 Rust 源）", !/fn pause_monitor\(/.test(rsSrc));

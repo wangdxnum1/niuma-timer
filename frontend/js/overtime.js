@@ -6,7 +6,7 @@ function applyOvertimeVisibility(enabled) {
 // 休息日/节假日加班关闭时隐藏其三项子配置，避免看到一堆不生效的输入框
 function applyRestOvertimeVisibility(enabled) {
   const box = $("restOtFields");
-  if (box) box.style.display = enabled ? "" : "none";
+  if (box) box.classList.toggle("hidden", !enabled);
 }
 
 // 加班明细当前查看的年月；null = 跟随当月

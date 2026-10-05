@@ -18,7 +18,9 @@ async function load() {
     applyTaglineCustomVisibility($("tagline_style").value);
     // 开机自启读注册表真实状态（用户可能在任务管理器手工禁用过），不走 config
     loadAutostart();
-    $("workdays_override").value = cfg.workdays_override ?? "";
+    const currentOverride = settingsOverrideIsCurrent(cfg, currentYearMonth());
+    $("workdays_override").value = currentOverride ? cfg.workdays_override : "";
+    setWorkdaysModeUI(currentOverride);
     lastOverride = cfg.workdays_override ?? null;
     $("overtime_enabled").checked = !!cfg.overtime_enabled;
     applyOvertimeVisibility(cfg.overtime_enabled);
@@ -51,7 +53,14 @@ async function load() {
     $("shortcuts_enabled").checked = cfg.shortcuts_enabled !== false;
     // 自动更新（v1.4.0）：缺省 true，与后端 serde default 对齐
     $("update_auto_check").checked = cfg.update_auto_check !== false;
-    $("retention_days").value = String(cfg.retention_days || 0);
+    const retention = String(cfg.retention_days || 0);
+    if (![...$("retention_days").options].some(option => option.value === retention)) {
+      const option = document.createElement("option");
+      option.value = retention;
+      option.textContent = retention + " 天（已设置）";
+      $("retention_days").append(option);
+    }
+    $("retention_days").value = retention;
     setBillStyleUI(cfg.bill_style || "receipt");
     setBillSpanUI(cfg.bill_span || "week");
     loadStorageInfo();
@@ -67,10 +76,13 @@ async function load() {
       flog("take_update_announcement ERR: " + (e && e.message ? e.message : String(e)));
     }
     // 初始快照：与 readCfg() 字段顺序一致，用于失焦保存时判断是否有变化
+    lastSaved = JSON.stringify(cfg);
     lastSaved = JSON.stringify(readCfg());
     // 加载成功才解锁自动保存（见 doSave 门闸）；同时撤掉失败横幅
     configLoaded = true;
     showCfgLoadError(false);
+    refreshSettingsUI();
+    setSettingsSaveState("ready");
   } catch (e) {
     flog("load_config ERR: " + (e && e.message ? e.message : String(e)));
     console.error(e);
@@ -79,6 +91,7 @@ async function load() {
     // 宁可拒绝保存，横幅里给「重新加载」按钮。
     configLoaded = false;
     showCfgLoadError(true);
+    setSettingsSaveState("error", "加载失败，保存已暂停");
   }
 }
 
@@ -93,6 +106,9 @@ let lastSaved = null; // 上次成功保存的配置 JSON 快照，用于去重
 let lastOverride = null; // 上次保存的上班天数，用于判断是否需静默刷新工作日数据
 // 配置是否加载成功。false 时自动保存全部拒绝——这是「用空表单覆盖真实配置」的门闸
 let configLoaded = false;
+// Keep asynchronous config writes in user intent order. A failed write is retryable.
+let settingsSaveQueue = Promise.resolve();
+let settingsSavePending = 0;
 
 // 三个监控开关的内存状态（同步自配置；关闭时对应卡片显示停用提示并跳过轮询）
 let monitors = { activity: true, app_usage: true, audio: true };
@@ -151,6 +167,7 @@ function makeChip(name) {
   rm.title = "移除";
   rm.addEventListener("click", () => {
     chip.remove();
+    refreshSettingsUI();
     if ($("appWhitelistList").children.length === 0) renderWhitelist([]);
     saveNow();
   });
@@ -177,6 +194,7 @@ function addWhitelistItem() {
   box.appendChild(makeChip(v));
   input.value = "";
   input.focus();
+  refreshSettingsUI();
   saveNow();
 }
 
@@ -187,6 +205,7 @@ function currentYearMonth() {
 }
 
 function readCfg() {
+  if (typeof expireSettingsWorkdays === "function") expireSettingsWorkdays();
   const salaryRaw = $("monthly_salary").value.trim();
   const wageRaw = $("hourly_wage").value.trim();
   const paydayRaw = $("payday").value.trim();
@@ -248,7 +267,8 @@ function readCfg() {
     cfg.workdays_override = null;
     cfg.workdays_override_for = null;
   }
-  return cfg;
+  return typeof settingsPreserveInactiveValues === "function" && lastSaved ?
+    settingsPreserveInactiveValues(cfg, JSON.parse(lastSaved), settingsFormValues()) : cfg;
 }
 
 // 数字输入：留空返回 null（表示沿用上一级费率），有值才解析
@@ -269,6 +289,7 @@ function setSalaryModeUI(mode) {
   const m = mode === "hourly" ? "hourly" : "monthly";
   document.querySelectorAll("#salaryModeSeg .mon-seg-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.salaryMode === m);
+    b.setAttribute("aria-pressed", String(b.dataset.salaryMode === m));
   });
   applySalaryModeVisibility();
 }
@@ -279,44 +300,62 @@ function applySalaryModeVisibility() {
   const hourly = readSalaryMode() === "hourly";
   $("hourlyWageRow").classList.toggle("hidden", !hourly);
   $("monthlySalaryRow").classList.toggle("hidden", hourly);
-  $("workdaysOverrideRow").classList.toggle("hidden", hourly);
-  $("refreshBtn").classList.toggle("hidden", hourly);
-  $("workdaysInfo").classList.toggle("hidden", hourly);
+  $("workdaysSettings").classList.toggle("hidden", hourly);
 }
 
 // 控件失焦时调用：配置无变化则不写盘（去重）
 function saveIfChanged(options = {}) {
-  if (JSON.stringify(readCfg()) === lastSaved) return;
+  if (settingsSavePending === 0 && JSON.stringify(readCfg()) === lastSaved) return;
   return doSave(options);
 }
 
 // 开关等明确变更：直接保存
 function saveNow() {
-  doSave();
+  return doSave();
 }
 
 async function doSave({ silent = false } = {}) {
-  // 门闸：配置没加载成功时，表单里是空白默认值，此刻保存=用空值覆盖真实配置。
-  // 静默保存（切跨度记偏好等）连 toast 都不打，只留日志。
   if (!configLoaded) {
     flog("doSave skipped: config not loaded (load_config failed at boot)");
+    setSettingsSaveState("error", "加载失败，保存已暂停");
     if (!silent) showToast("配置未加载，已阻止自动保存——请点设置页顶部「重新加载」", "err");
-    return;
+    return false;
+  }
+  if (!validateSettingsForm()) {
+    setSettingsSaveState("error", "请检查标出的设置");
+    if (!silent) showToast("设置有误，请检查标出的输入项", "err");
+    return false;
   }
   const cfg = readCfg();
-  try {
-    await invoke("save_config", { cfg });
-    lastSaved = JSON.stringify(cfg);
-    if (!silent) showToast("已自动保存", "ok");
-    // 仅当上班天数被修改时才静默刷新工作日数据（避免每次保存都发网络请求）
-    if (cfg.workdays_override !== lastOverride) {
-      lastOverride = cfg.workdays_override;
-      silentRefresh();
+  const snapshot = JSON.stringify(cfg);
+  setSettingsSaveState("saving");
+  const save = async () => {
+    if (snapshot === lastSaved) {
+      if (JSON.stringify(readCfg()) === snapshot) setSettingsSaveState("saved");
+      return true;
     }
-  } catch (e) {
-    showToast("保存失败：" + e, "err");
-    // lastSaved 未更新：下次失焦会自动重试
-  }
+    try {
+      await invoke("save_config", { cfg });
+      lastSaved = snapshot;
+      const current = JSON.stringify(readCfg()) === snapshot;
+      setSettingsSaveState(current ? "saved" : "dirty");
+      if (!silent && current) showToast("已自动保存", "ok");
+      if (cfg.workdays_override !== lastOverride) {
+        lastOverride = cfg.workdays_override;
+        silentRefresh();
+      }
+      refreshSettingsUI();
+      return true;
+    } catch (e) {
+      setSettingsSaveState("error");
+      showToast("保存失败：" + e, "err");
+      return false;
+    }
+  };
+  settingsSavePending++;
+  const pending = settingsSaveQueue.then(save).finally(() => { settingsSavePending--; });
+  settingsSaveQueue = pending.catch(() => false);
+  return pending;
 }
 
 // toast：右下角气泡，连续编辑只重置计时不重播动画
@@ -358,6 +397,7 @@ document.querySelectorAll("#salaryModeSeg .mon-seg-item").forEach((b) => {
   b.addEventListener("click", () => {
     setSalaryModeUI(b.dataset.salaryMode);
     saveNow();
+    refreshSettingsUI();
   });
 });
 // 下拉框：选择即保存

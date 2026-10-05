@@ -19,6 +19,8 @@ pub struct DayStatus {
     pub off_work: bool,
     /// 当日总工时（上午段+下午段）
     pub daily_hours: f64,
+    /// Effective workdays in the current month; shared with settings previews.
+    pub monthly_workdays: u32,
     /// 今天已赚（元）
     pub earned: f64,
     /// 距发薪日天数
@@ -241,6 +243,7 @@ pub fn compute(
         to_off_h,
         off_work,
         daily_hours: daily_h,
+        monthly_workdays,
         earned,
         days_to_pay,
         worked_str,
@@ -258,6 +261,13 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn status_serializes_actual_monthly_workdays() {
+        let status = compute(&Config::default(), true, 18, Local::now());
+        let json = serde_json::to_value(status).unwrap();
+        assert_eq!(json["monthly_workdays"], 18);
     }
 
     #[test]

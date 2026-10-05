@@ -246,7 +246,7 @@ async function doRestore(name) {
   restoreBusy = true;
   // 二次确认必须说清后果与可逆性：覆盖什么 + 当前数据会被自动保护
   const yes = await showConfirm(
-    "将用这份备份覆盖当前全部数据（加班 / 活动 / 应用 / 媒体 / 设置）。当前数据会先自动备份一份。确定继续？"
+    "将用这份备份覆盖当前全部数据（加班 / 活动 / 应用 / 媒体 / 设置）。当前数据会先自动备份一份，还原完成后应用将重启。确定继续？"
   );
   if (!yes) { restoreBusy = false; return; }
   try {

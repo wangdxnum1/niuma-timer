@@ -55,6 +55,7 @@ function showView(id) {
 
 // 用缓存立即补画当前视图；缓存还没到就现拉一次，避免切过去看到空白
 function repaintCurrentView() {
+  if (curView === "viewSettings") refreshSettingsUI();
   if (viewData.activity) paintActivity();
   else loadActivity();
   if (viewData.appu) paintAppUsage();
@@ -75,7 +76,7 @@ document.querySelectorAll(".mon-seg-item").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (!btn.dataset.mon) return; // 设置页账单风格分段复用此类名，非监控分段不处理
     curMon = btn.dataset.mon;
-    document.querySelectorAll(".mon-seg-item").forEach((b) => {
+    document.querySelectorAll("#monitorCard .mon-seg-item").forEach((b) => {
       b.classList.toggle("active", b === btn);
     });
     Object.entries(MON_PANES).forEach(([key, id]) =>
@@ -331,6 +332,7 @@ bindDebugBtn("testTickBtn", "run_remind_tick", "立即调度", "已调度：满�
 bindDebugBtn("testSedentaryTriggerBtn", "test_sedentary_trigger", "模拟久坐", "已模拟并调度：满足条件才会弹");
 
 
+initSettingsUI();
 boot();
 watchVisibility();
 watchUpdateView();

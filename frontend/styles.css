@@ -4,6 +4,79 @@
   padding: 0;
 }
 
+/* Settings-only layout: units, previews and controls share the same form. */
+#viewSettings { position: relative; gap: 14px; }
+#viewSettings .settings-head { position: sticky; top: -16px; z-index: 5; margin: -16px -20px 0; padding: 18px 20px 14px; background: #1a1a1c; border-bottom: 1px solid rgba(255,255,255,.07); flex-shrink: 0; }
+#viewSettings .settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#viewSettings .settings-heading h2 { font-size: 20px; font-weight: 600; }
+#viewSettings .settings-save-status { font-size: 11.5px; color: #a6d7b3; text-align: right; opacity: 1; transition: opacity .2s ease; }
+#viewSettings .settings-save-status.settings-status-faded { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { #viewSettings .settings-save-status { transition: none; } }
+#viewSettings .settings-save-status[data-state="loading"], #viewSettings .settings-save-status[data-state="saving"], #viewSettings .settings-save-status[data-state="dirty"] { color: #b5b5bf; }
+#viewSettings .settings-save-status[data-state="error"] { color: #edaaaa; }
+#viewSettings .settings-help { color: #a0a0aa; font-size: 11.5px; line-height: 1.6; margin: 6px 0 12px; }
+#viewSettings .settings-nav { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+#viewSettings .settings-nav button { color: #bdbdc6; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.07); padding: 7px 4px; font-size: 12px; border-radius: 7px; }
+#viewSettings .settings-nav button:hover { background: rgba(255,255,255,.06); }
+#viewSettings .settings-nav button.active { background: rgba(255,214,80,.1); color: #ffd650; border-color: rgba(255,214,80,.27); }
+#viewSettings .settings-card { padding: 16px; gap: 13px; flex-shrink: 0; min-width: 0; border-radius: 12px; background: #252528; border: 1px solid rgba(255,255,255,.05); box-shadow: none; }
+#viewSettings .settings-card-heading { display: flex; gap: 8px; align-items: center; }
+#viewSettings .settings-card h2 { color: #e8e8ed; font-size: 14px; letter-spacing: 0; }
+#viewSettings .settings-number { font-size: 10px; color: #c8b068; width: 22px; height: 22px; display: inline-flex; justify-content: center; align-items: center; background: rgba(255,214,80,.04); border: 1px solid rgba(255,214,80,.13); border-radius: 5px; }
+#viewSettings .settings-desc { color: #a0a0aa; font-size: 11.5px; line-height: 1.6; margin-top: -7px; }
+#viewSettings label { font-size: 12px; gap: 10px; min-width: 0; line-height: 1.5; }
+#viewSettings label > span { min-width: 0; }
+#viewSettings input:not(.switch), #viewSettings select { height: 35px; border-radius: 7px; background-color: #19191b; border-color: rgba(255,255,255,.1); color: #f5f5f7; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; max-width: 100%; min-width: 0; }
+#viewSettings input:not(.switch)::placeholder { color: #a8a8b2; opacity: 1; }
+#viewSettings select option { font-size: 14px; font-weight: 500; }
+#viewSettings input[type="number"], #viewSettings input[type="time"] { width: 105px; }
+#viewSettings .settings-unit { display: flex; align-items: center; gap: 7px; flex: 0 1 auto; max-width: 65%; }
+#viewSettings .settings-unit > span { color: #b5b5bf; font-size: 12px; white-space: nowrap; }
+#viewSettings .settings-unit input { width: 96px; flex: 1 1 80px; }
+#viewSettings .settings-stacked, #viewSettings .time-grid label, #viewSettings .row label { flex-direction: column; align-items: stretch; gap: 6px; }
+#viewSettings .settings-stacked > span, #viewSettings .time-grid label > span, #viewSettings .row label > span { flex: none; }
+#viewSettings .settings-stacked input, #viewSettings .settings-stacked select, #viewSettings .time-grid input { width: 100%; }
+#viewSettings .time-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+#viewSettings .settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 13px; }
+#viewSettings .settings-fields:disabled { opacity: .6; }
+#viewSettings .sub-section { padding-top: 13px; border-top: 1px solid rgba(255,255,255,.07); gap: 12px; }
+#viewSettings .settings-fields.sub-section { border-top: 1px solid rgba(255,255,255,.07); }
+#viewSettings .settings-dependent { display: flex; flex-direction: column; gap: 10px; margin-left: 8px; padding-left: 12px; border-left: 2px solid rgba(255,255,255,.07); min-width: 0; }
+#viewSettings .settings-subtitle { color: #bdbdc6; font-size: 11.5px; }
+#viewSettings .switch-row { min-height: 36px; }
+#viewSettings .switch:checked { background: #d7b742; }
+#viewSettings .hint, #viewSettings .hint-details { color: #a0a0aa; font-size: 11.5px; line-height: 1.6; margin-top: 0; overflow-wrap: anywhere; }
+#viewSettings .hint-details summary { min-height: 26px; color: #bbb4a0; font-size: 11.5px; }
+#viewSettings .settings-options { display: flex; flex-wrap: wrap; gap: 6px; }
+#viewSettings .settings-options button { background: #19191b; border: 1px solid rgba(255,255,255,.1); color: #bdbdc6; font-size: 11.5px; border-radius: 6px; padding: 6px 10px; }
+#viewSettings .settings-options button.active { background: rgba(255,214,80,.1); color: #e8cf70; border-color: rgba(255,214,80,.27); }
+#viewSettings .settings-preview { background: #1d1d20; border: 1px solid rgba(255,255,255,.04); border-radius: 8px; padding: 11px 12px; color: #b5b5bf; font-size: 11.5px; line-height: 1.7; overflow-wrap: anywhere; }
+#viewSettings .settings-preview strong { color: #e8cf70; font-size: 13px; font-weight: 500; }
+#viewSettings .settings-preview-label { display: block; font-size: 11px; color: #a0a0aa; margin-bottom: 5px; }
+#viewSettings .settings-preview-value { display: block; font-size: 20px; color: #e8cf70; font-variant-numeric: tabular-nums; }
+#viewSettings .settings-counter { float: right; font-size: 11px; color: #a0a0aa; }
+#viewSettings .settings-action-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-width: 0; }
+#viewSettings .settings-action-row > :first-child { min-width: 0; }
+#viewSettings .settings-action-row button { flex-shrink: 0; }
+#viewSettings .ghost { min-height: 34px; font-size: 12px; border-radius: 7px; border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.025); padding: 7px 12px; }
+#viewSettings .settings-shortcuts { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px 6px; font-size: 11.5px; color: #bdbdc6; }
+#viewSettings kbd { display: inline-block; padding: 3px 5px; background: #19191b; border: 1px solid rgba(255,255,255,.12); border-bottom-width: 2px; border-radius: 4px; font: 11px "Segoe UI",sans-serif; color: #d9d9df; }
+#viewSettings .settings-warning { color: #edb48a; }
+#viewSettings .settings-field-error { color: #edaaaa; font-size: 11.5px; line-height: 1.6; }
+#viewSettings input[aria-invalid="true"] { border-color: #bb6e6e; }
+#viewSettings .backup-row { align-items: flex-start; gap: 8px; }
+#viewSettings .backup-row > span:first-child { min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; }
+#viewSettings .backup-row .row-actions { flex-shrink: 0; }
+#viewSettings .bsc-desc { white-space: normal; }
+@media (max-width: 440px) {
+  #viewSettings { padding-left: 10px; padding-right: 10px; }
+  #viewSettings .settings-head { margin-left: -10px; margin-right: -10px; padding-left: 10px; padding-right: 10px; }
+  #viewSettings .settings-card { padding: 12px; }
+  #viewSettings .settings-unit input { width: 72px; flex-basis: 60px; }
+  #viewSettings .settings-shortcuts { grid-template-columns: 1fr; }
+  #viewSettings .backup-row { flex-wrap: wrap; }
+}
+
 /* 通用隐藏工具类：JS 以 classList 切换 hidden 的元素全靠它生效。
    缺失时，自身带 display 的容器（如 .bill-dash / .bill-empty 的 flex）
    会盖过同名形态规则，导致隐藏失效、空骨架显形。 */

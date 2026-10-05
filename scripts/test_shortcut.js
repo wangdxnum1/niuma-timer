@@ -32,8 +32,9 @@ function ok(label, cond) {
 
 console.log("== 前端：设置开关与提示 ==");
 ok("shortcuts_enabled 开关在守护卡", /id="shortcuts_enabled" type="checkbox" class="switch"/.test(htmlSrc));
-ok("hint 含 Alt+Shift+N", /Alt\+Shift\+N 显隐主窗/.test(htmlSrc));
-ok("hint 含 Alt+Shift+P", /Alt\+Shift\+P 暂停\/恢复监控/.test(htmlSrc));
+const readableHtml = htmlSrc.replace(/<[^>]+>/g, "");
+ok("hint 含 Alt+Shift+N", /显示\s*\/\s*隐藏窗口\s*Alt\s*\+\s*Shift\s*\+\s*N/.test(readableHtml));
+ok("hint 含 Alt+Shift+P", /暂停\s*\/\s*恢复监控\s*Alt\s*\+\s*Shift\s*\+\s*P/.test(readableHtml));
 ok("load 回填快捷键开关（!== false 缺省 true）", /shortcuts_enabled"\)\.checked = cfg\.shortcuts_enabled !== false/.test(appSrc));
 ok("readCfg 采集快捷键开关", /shortcuts_enabled: \$\("shortcuts_enabled"\)\.checked/.test(appSrc));
 ok("开关 change 即存（改完 Rust 端即时生效）", /\$\("shortcuts_enabled"\)\.addEventListener\("change", saveNow\)/.test(appSrc));

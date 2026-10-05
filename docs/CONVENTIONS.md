@@ -6,8 +6,8 @@
 
 ## 代码地图（现状）
 - 后端 33 个 `.rs`：核心域模块 + 命令层 `cmds_core/cmds_bill/cmds_monitor/cmds_storage/cmds_update/cmds_debug`（二期自 `main.rs` 切出，纯移动）+ `tray/hover_state.rs`。
-- 前端无打包链：`frontend/index.html` 里 **8 个视图容器**（`viewMain/viewBill/viewSettings/viewOt/viewAct/viewApp/viewAudio/viewUpdate`）+ `frontend/js/` **10 个块**（`app.js` 已删除，禁止复活）+ `styles.css` + `hover_card.html`（独立窗口）。
-- 测试规模：Rust 侧 241 个 `#[test]`；`scripts/test_*.js` 35 个 + `scripts/test_publish_release.py` + `scripts/test_push_via_api.py`。
+- 前端无打包链：`frontend/index.html` 里 **8 个视图容器**（`viewMain/viewBill/viewSettings/viewOt/viewAct/viewApp/viewAudio/viewUpdate`）+ `frontend/js/` **12 个块**（`app.js` 已删除，禁止复活）+ `styles.css` + `hover_card.html`（独立窗口）。
+- 测试规模：Rust 侧 254 个 `#[test]`；`scripts/test_*.js` 37 个 + `scripts/test_publish_release.py` + `scripts/test_push_via_api.py`。
 - 用户数据在 `%APPDATA%/niuma-timer/`：`niuma.db`（SQLite + WAL）、`config.json`、`holiday_{year}.json`、`debug.log` / `panic.log`、`icons/`。
 
 ## 构建入口与脚本纪律
@@ -83,14 +83,19 @@
 - 历史数据只允许补录，**写操作只挡未来日期**；主界面卡片永远只反映今天（历史走 SQLite，今天走内存含实时增量）。
 
 ## 前端约定
-- 前端是 10 个块按**加载序**拼装（`scripts/lib/fe_sources.js` 的 `CHUNKS`，`boot.js` 必须最后），`frontend/app.js` 已删除且禁止复活；`FE_VER` 只在 `frontend/js/core.js` 声明一次。`scripts/test_frontend_split.js` 守这四条。
-- **缓存戳全自动**：`build.rs` 用 frontend 内容指纹回写 `TARGETS` = `frontend/index.html`（1 处 CSS + 10 处 JS）、`frontend/js/core.js`（`FE_VER`）、`src-tauri/tauri.conf.json`、`src/tray.rs`（悬停卡 URL），8 位 hex。
+- 前端是 12 个块按**加载序**拼装（`scripts/lib/fe_sources.js` 的 `CHUNKS`，`boot.js` 必须最后），`frontend/app.js` 已删除且禁止复活；`FE_VER` 只在 `frontend/js/core.js` 声明一次。`scripts/test_frontend_split.js` 守这四条。
+- **缓存戳全自动**：`build.rs` 用 frontend 内容指纹回写 `TARGETS` = `frontend/index.html`（1 处 CSS + 12 处 JS）、`frontend/js/core.js`（`FE_VER`）、`src-tauri/tauri.conf.json`、`src/tray.rs`（悬停卡 URL），8 位 hex。
 - 哈希前必须先归一化剔除 `?v=` 与 `\r`，否则「回写版本号 → 内容变 → 指纹变 → 再回写」会死循环、每次编译都重编整个 crate；回写**必须在 `tauri_build::try_build()` 之前**，晚一步本次嵌入 exe 的还是旧资源、要编两次才生效。
 - **悬停卡窗口尺寸两侧必须同步**：`src/tray.rs` 的 `HOVER_CARD_H = 352` / `HOVER_CARD_W = 380` == `frontend/hover_card.html` 的 `body{height/width}`（body 自带上下各 8px padding，卡片实际高 336）。`scripts/test_hover_card.js` 守这条 + 内容余量下限（窗口 ≥344）。
 - **flex 列容器里别让「唯一可压缩的子项」吸收内容溢出**：`.card` 是 flex 列容器，`.hero` 是唯一带 `overflow:hidden` 的子项，按 Flexbox 规范其自动最小尺寸退化为 0，内容一超高就把 34px 大字金额压到 ~1px（2026-09-14 二次返工查出的真根因，比颜色问题更底层）。已加 `.hero{flex:0 0 auto}`，不要删。
 - 透明 WebView（`.transparent(true)`）上的金额用纯 `color` 实心金，别用 `background-clip:text` + 透明填充裁剪渐变文字；悬停卡「窗口不消失 / 不显示」两个 bug 同源（过度依赖 `cursor_position()` 裁决），现两侧都不靠它 + 20s 硬上限。
 - 前端测试**日期与时刻都要固定**（`FakeDate` + `static now()`，见 `scripts/test_tagline.js`）：`dynamicTagline` 读 `getHours()`，不固定时刻时 12:00–13:00 跑测试会让午休用例全误判。
 - 顶层 `eval("function f(){}")` 与同名 `const` 冲突，须包进函数；**扫描代码模式一律用跨行正则**（或先 `\s+` 归一），按行 grep 会漏 rustfmt/prettier 拆行的写法（收口锁时实测漏 5 处）。
+
+## 设置页约定
+- `settings.js` 负责配置持久化，`settings_ui.js` 负责校验/预览/导航和开关联动；UI 使用 `DayStatus.monthly_workdays` 的真实工作日数，未知时不得猜日期或金额。
+- 发薪日在月薪/时薪模式都可编辑，工作日覆盖仅当前年月有效；非预置保留期必须保留并回显。输入错误阻止整份配置写入，禁用参数不清空；连续保存串行，失败不推进快照，修改后改回原值也要等待前一笔并保存最终意图。
+- 首页监控分段只操作 `#monitorCard .mon-seg-item`，不能清除设置页计薪方式的选中态。
 
 ## 测试约定
 - `scripts/run_all.js` 逐个 `spawnSync` 独立进程并首错即停——测试会改全局 `Date` / `$`，共进程必然互相污染。
