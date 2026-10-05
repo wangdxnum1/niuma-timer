@@ -91,9 +91,46 @@ def blob_sha1(raw: bytes) -> str:
     return h.hexdigest()
 
 
+def push_tag_only(branch, tag):
+    """Tag-only fallback: the branch push already landed via normal git push, so
+    the remote head equals the local HEAD and the commit the local tag points at.
+    Create refs/tags/<tag> there. Refuse on any mismatch: a tag on a commit the
+    local tag does not describe would trigger CI building something the local
+    repo never certified, and release tags are immutable once published."""
+    ref = api("GET", "/git/ref/heads/" + branch)
+    remote_head = (ref.get("object") or {}).get("sha")
+    if not remote_head:
+        print("REF FAIL: 远端 heads/" + branch + " 不存在或读取失败", ref)
+        return 1
+    local_target = git("rev-parse", f"{tag}^{{commit}}").strip()
+    if local_target != remote_head:
+        print("FATAL: 远端 heads/" + branch, remote_head,
+              "与本地 tag 目标", local_target or "(tag 不存在)",
+              "不一致 - 拒绝创建 tag，先 fetch 对齐并核对两侧 tree")
+        return 1
+    tr = api("POST", "/git/refs", {"ref": "refs/tags/" + tag, "sha": remote_head})
+    if isinstance(tr.get("object"), dict):
+        print("tag:", tag, "->", remote_head[:10], "(tag-only fallback)")
+        return 0
+    cur = api("GET", "/git/ref/tags/" + tag)
+    cur_sha = (cur.get("object") or {}).get("sha")
+    if cur_sha == remote_head:
+        print("tag:", tag, "already at", remote_head[:10], "(idempotent)")
+        return 0
+    print("TAG FAIL: refs/tags/" + tag, "already exists at", cur_sha,
+          "but the remote head is", remote_head,
+          "- release tags are immutable, use a new version")
+    return 1
+
+
 def push_branch(branch, base_ref, force=False, tag=None):
     commits = git("rev-list", "--reverse", f"{base_ref}..{branch}").split()
     if not commits:
+        # 分支已全部在远端（如 v1.9.0：分支直推成功、tag 单独被墙重置）。
+        # 此时远端 head 必然等于本地 head，tag-only 补挂是安全的；脚本内核对
+        # 远端 head == 本地 tag 目标后才创建，防错位。
+        if tag:
+            return push_tag_only(branch, tag)
         print("nothing to push")
         return 1
 
@@ -201,7 +238,9 @@ def main():
     ap.add_argument("--tag", metavar="NAME",
                     help="分支推送成功后在远端 head 上创建轻量 tag 引用"
                          "（refs/tags/NAME，触发 release.yml 的 on: push: tags）；"
-                         "已存在且指向一致视为幂等成功，指向不一致则报错拒绝")
+                         "已存在且指向一致视为幂等成功，指向不一致则报错拒绝。"
+                         "分支无未推提交时只做 tag-only 补挂"
+                         "（校验远端 head == 本地 tag 目标后才创建）")
     a = ap.parse_args()
     TOK = token()
     if not TOK:

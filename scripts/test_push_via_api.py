@@ -210,6 +210,48 @@ class PushViaApiTests(unittest.TestCase):
                                  "tag 已存在且指向不一致必须拒绝（发布 tag 不可变）")
             self.assertIn("TAG FAIL", buf.getvalue())
 
+    # ---- tag-only 补挂（分支已推、tag 单独失败的场景，v1.9.0 实战首例）----
+
+    def test_tag_only_creates_at_remote_head(self):
+        with git_repo() as (d, base):
+            # main == baseline：分支已在远端（rev-list 为空），只补 tag
+            run("tag", "v9.9.9", cwd=d)
+            fake = self._fake_for_baseline(d, base)
+            buf = io.StringIO()
+            with mock.patch.object(push, "api", fake), contextlib.redirect_stdout(buf):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 0)
+            out = buf.getvalue()
+            self.assertIn("(tag-only fallback)", out)
+            tag_posts = [p for p in fake.ref_payloads if p.get("ref", "").startswith("refs/tags/")]
+            self.assertEqual(len(tag_posts), 1, "tag 引用应恰好 POST 一次")
+            self.assertEqual(tag_posts[0]["sha"], base,
+                             "tag-only 必须落在远端 head 上（== 本地 tag 目标）")
+            self.assertFalse(any("/git/blobs" in c for c in fake.calls),
+                             "tag-only 模式不得上传任何 blob")
+
+    def test_tag_only_idempotent_when_remote_tag_same_sha(self):
+        with git_repo() as (d, base):
+            run("tag", "v9.9.9", cwd=d)
+            fake = self._fake_for_baseline(d, base, tag_exists_at=base)
+            buf = io.StringIO()
+            with mock.patch.object(push, "api", fake), contextlib.redirect_stdout(buf):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 0)
+            self.assertIn("(idempotent)", buf.getvalue(),
+                          "远端已存同指向 tag 应幂等成功")
+
+    def test_tag_only_refuses_when_remote_head_differs(self):
+        with git_repo() as (d, base):
+            run("tag", "v9.9.9", cwd=d)
+            # 远端 head 不在本地仓库里（如 API 重建过的 sha）：本地 tag 无法描述它
+            fake = FakeApi("remote-head-not-in-local-repo", "fake-tree")
+            buf = io.StringIO()
+            with mock.patch.object(push, "api", fake), contextlib.redirect_stdout(buf):
+                self.assertEqual(push.push_branch("main", "baseline", tag="v9.9.9"), 1,
+                                 "远端 head 与本地 tag 目标不一致必须拒绝")
+            self.assertIn("FATAL", buf.getvalue())
+            self.assertFalse(any("/git/refs" in c and "POST" in c for c in fake.calls),
+                             "拒绝时不得创建任何引用")
+
 
 if __name__ == "__main__":
     unittest.main()

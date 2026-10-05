@@ -371,13 +371,43 @@ if errorlevel 1 (
   echo     pushed %BRANCH% and tag v%VER% via Git Data API
   goto :done
 )
+rem Tag push retries + API-only fallback. The branch push above opens its own
+rem connection; on a flaky github.com route the tag push can die alone with
+rem "Connection was reset" while the branch landed (v1.9.0, 2026-10-05). A failed
+rem tag push never created the tag on the remote, so retrying cannot force-update
+rem anything. The fallback is safe for the same reason: the branch push already
+rem succeeded, so the remote head equals the local sha; push_via_api.py creates
+rem the tag only after verifying the remote head matches the local tag target.
+set "TAGTRY=0"
+:tag_retry
+set /a TAGTRY+=1
 "%GIT%" %GITCFG% push origin "v%VER%"
+if not errorlevel 1 goto :tag_pushed
+if %TAGTRY% GEQ 5 goto :tag_api_fallback
+rem ping as a portable sleep: timeout fails outright when stdin is redirected
+ping -n 4 127.0.0.1 >nul
+goto :tag_retry
+
+:tag_api_fallback
+echo     tag push failed 5 times - creating tag v%VER% via the Git Data API.
+echo     Safe: the branch push already succeeded, so the remote head equals the
+echo     local sha, and the tool refuses any head-vs-tag-target mismatch.
+where python >nul 2>&1
 if errorlevel 1 (
-  echo [ERROR] tag push failed. The remote tag may point to a different commit.
-  echo         Do not force-update a published tag; inspect the remote ref and use a new version.
+  echo [ERROR] python not found - API tag fallback needs it
   popd
   exit /b 1
 )
+python "%ROOT%scripts\push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"
+if errorlevel 1 (
+  echo [ERROR] API tag fallback failed. If refs/tags/v%VER% already exists at
+  echo         another commit it is immutable - use a new version number.
+  popd
+  exit /b 1
+)
+echo     tag v%VER% created on the remote via the Git Data API
+
+:tag_pushed
 echo     pushed %BRANCH% and tag v%VER%
 goto :done
 
