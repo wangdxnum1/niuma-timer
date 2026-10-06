@@ -127,6 +127,14 @@ pub struct Config {
     #[serde(default = "default_bill_span")]
     pub bill_span: String,
 
+    // ---- 摸鱼换算（2026-10-06）----
+    /// 摸鱼成本换算单位：milktea/coffee/takeout/movie/custom/off。纯前端消费，后端仅存取。
+    #[serde(default = "default_slack_equiv_unit")]
+    pub slack_equiv_unit: String,
+    /// 自定义换算单价（仅 slack_equiv_unit = "custom" 时使用，元）
+    #[serde(default = "default_slack_equiv_price")]
+    pub slack_equiv_price: f64,
+
     // ---- 守护提醒（v1.3.0「牛马守护」）----
     /// 久坐提醒开关
     #[serde(default = "default_true")]
@@ -205,6 +213,14 @@ fn default_bill_span() -> String {
     "week".into()
 }
 
+fn default_slack_equiv_unit() -> String {
+    "milktea".into()
+}
+
+fn default_slack_equiv_price() -> f64 {
+    15.0
+}
+
 fn default_remind_sedentary_minutes() -> u32 {
     50
 }
@@ -252,6 +268,8 @@ impl Default for Config {
             tagline_custom: String::new(),
             bill_style: "receipt".into(),
             bill_span: "week".into(),
+            slack_equiv_unit: "milktea".into(),
+            slack_equiv_price: 15.0,
             remind_sedentary_enabled: true,
             remind_sedentary_minutes: 50,
             focus_enabled: true,
@@ -447,6 +465,21 @@ pub fn effective_workdays_override(cfg: &Config, year: i32, month: u32) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slack_equiv_defaults_are_sane() {
+        let cfg = Config::default();
+        assert_eq!(cfg.slack_equiv_unit, "milktea");
+        assert_eq!(cfg.slack_equiv_price, 15.0);
+        // 旧配置缺这两个字段时 serde default 兜住（不报 missing field）：
+        // 序列化默认配置 → 删掉新字段 → 反序列化
+        let mut v = serde_json::to_value(Config::default()).unwrap();
+        v.as_object_mut().unwrap().remove("slack_equiv_unit");
+        v.as_object_mut().unwrap().remove("slack_equiv_price");
+        let old: Config = serde_json::from_value(v).unwrap();
+        assert_eq!(old.slack_equiv_unit, "milktea");
+        assert_eq!(old.slack_equiv_price, 15.0);
+    }
 
     #[test]
     fn merge_rejects_invalid_types() {

@@ -8,6 +8,7 @@ use tauri::State;
 use crate::db;
 use crate::focus;
 use crate::insights;
+use crate::milestones;
 use crate::overtime;
 use crate::state::AppState;
 use crate::sync;
@@ -125,4 +126,11 @@ pub(crate) fn get_focus_summary(
     let s = weekbill::parse_span(&span)?;
     let hol = sync::lock(&state.holiday, "state.holiday").clone();
     focus::period_summary(&hol, s, offset)
+}
+
+/// 报告页里程碑：六项累计量一次聚合（零新表，读既有 ot/act/focus 表）。
+/// async：持库锁的查询不上主线程（同 get_bill 纪律）。
+#[tauri::command(async)]
+pub(crate) fn get_milestones() -> Result<milestones::Milestones, String> {
+    db::with_db(|conn| milestones::assemble(conn))
 }

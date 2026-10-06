@@ -40,6 +40,9 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Weekend & holiday overtime** — driven by official holiday data, with separate start times and pay rates for rest days and statutory holidays
 - **Day-off marking** — one-click marking for annual leave / sick leave / personal errands / comp days (brand-row button, or per-date in Settings → Salary & Schedule): treated as a rest day with no earnings or attendance, excluded from the automatic monthly workday count
 - **Monthly report** — a new "Report" page on the Bill view: monthly income, attendance & days off, overtime hours & pay, slack rate, hardest and slackiest days, plus a one-click shareable image
+- **Year report** — the Report page spans month and year: "N 年战绩" aggregates attendance, days off, overtime and slack rate over the whole year, with the busiest month, a year quip, and unlocked image export for the year span
+- **Milestones** — a five-ladder achievement strip at the bottom of the Report page (overtime hours, keystrokes, mouse distance, focus time, days together), each with three thresholds and a progress bar, aggregated purely from existing data
+- **Slack equivalents** — slack cost translated into plain words: "today's slacking ≈ 2.6 cups of milk tea" on the home burn line and the report card; the unit is selectable in Settings → Appearance (milk tea / coffee / takeout / movie ticket / custom price / off)
 - **Whitelist from recent apps** — a suggestion row lists apps you actually used in the last 30 days (sorted by usage), one click to add instead of typing names
 - **History browsing + CSV export** — flip overtime details by month and activity / apps / media by day; export the week bill or overtime details as Excel-friendly CSV (UTF-8 BOM)
 - **Storage breakdown & cleanup** — a nine-way storage breakdown in Settings (exact `dbstat` figures), with a retention period and one-click cleanup that shrinks the write-ahead log

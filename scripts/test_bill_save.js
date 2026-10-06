@@ -22,7 +22,7 @@ function fn(name) {
     readCfg: () => ({...cfg}),
     invoke: async (command, args) => {calls.push({command, args}); if (fail) throw Error('disk unavailable');},
     showToast: (...args) => toasts.push(args), silentRefresh() {}, loadBillTab() {},
-    setBillSpanUI: span => {cfg.bill_span = span;},
+    setBillSpanUI: span => {cfg.bill_span = span;}, setBillTabUI() {}, curBillTab: "bill",
     document: {querySelectorAll: () => [button]},
   };
   vm.createContext(ctx);

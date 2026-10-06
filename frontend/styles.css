@@ -76,6 +76,16 @@
 .report-row span:last-child { text-align: right; min-width: 0; font-variant-numeric: tabular-nums; }
 .report-quote { color: #ffd650; font-style: italic; font-size: 13px; padding-top: 4px; }
 .report-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* 里程碑：报告页底部成就阶梯（后端出原始量，阶梯在前端 MILESTONE_LADDERS） */
+.milestones { margin-top: 12px; padding: 14px 16px; background: #252528; border: 1px solid rgba(255,255,255,.06); border-radius: 12px; display: flex; flex-direction: column; gap: 9px; }
+.milestones .ms-title { color: #ffd650; font-size: 13px; font-weight: 600; }
+.milestones .ms-row { display: grid; grid-template-columns: 60px 1fr auto auto; align-items: center; gap: 10px; font-size: 12px; }
+.milestones .ms-name { color: #f2f2f4; }
+.milestones .ms-val { color: #a0a0aa; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.milestones .ms-bar { height: 6px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; min-width: 60px; }
+.milestones .ms-bar i { display: block; height: 100%; background: linear-gradient(90deg, #ffd650, #ff9f0a); border-radius: 4px; }
+.milestones .ms-done { color: #c8b068; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.milestones .ms-done.full { color: #ffd650; }
 /* 白名单「最近使用」建议行：输入行下方一排可点 pill */
 .wl-suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wl-suggest-row .wl-suggest-label { font-size: 11px; color: #a0a0aa; }

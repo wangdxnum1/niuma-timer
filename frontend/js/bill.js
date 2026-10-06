@@ -13,9 +13,11 @@ function weekBillQuip(ratePct, withMoney, span) {
   return spanQuipText(tiers[tiers.length - 1].text, span);
 }
 
-// 月跨度账单复用同一组金句，仅把「本周」措辞换成「本月」
+// 月/年跨度账单复用同一组金句，仅把「本周」措辞换成「本月/今年」
 function spanQuipText(text, span) {
-  return span === "month" ? text.replace(/本周/g, "本月") : text;
+  if (span === "month") return text.replace(/本周/g, "本月");
+  if (span === "year") return text.replace(/本周/g, "今年");
+  return text;
 }
 
 let weekOffset = 0; // 0=本周；上一周方向递增，未来周封顶
@@ -57,9 +59,6 @@ function readBillSpan() {
 
 function setBillSpanUI(span) {
   curBillSpan = span === "month" || span === "year" ? span : "week";
-  // 年账单不提供图片导出：报告卡版式按月/周设计，年图价值低（按钮置灰）
-  const imgBtn = $("billImageBtn");
-  if (imgBtn) imgBtn.disabled = curBillSpan === "year";
   document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.span === curBillSpan);
   });
@@ -253,9 +252,18 @@ function paintDash(bill) {
 
 // ---- 周报图片（v1.6.0）：把当前周期账单画成一张 PNG ----
 
-// PeriodBill → 图片模型（纯函数，测试直接断言折算口径）。leaveDays：月报的
-// 休假天数（day_override 标记数），仅月跨度由月报传入，周/年调用不传不渲染。
-function buildReportModel(bill, leaveDays) {
+// 摸鱼换算（设置 → 外观的单位/单价 → 人话）。报告卡与导图共用。
+function currentSlackEquiv(cost) {
+  return fmtSlackEquiv(
+    cost,
+    ($("slack_equiv_unit") || {}).value || "milktea",
+    ($("slack_equiv_price") || {}).value
+  );
+}
+
+// PeriodBill → 图片模型（纯函数，测试直接断言折算口径）。leaveDays：报告的
+// 休假天数（day_override 标记数），月/年报告传入；slackEquiv：摸鱼换算文案。
+function buildReportModel(bill, leaveDays, slackEquiv) {
   const ratePct = (bill.slack_rate || 0) * 100;
   return {
     label: bill.period_label || "",
@@ -269,6 +277,7 @@ function buildReportModel(bill, leaveDays) {
     workDays: bill.work_days,
     workHours: bill.work_hours || 0,
     leaveDays: leaveDays == null ? null : leaveDays,
+    slackEquiv: slackEquiv || "",
     bars: (bill.buckets || []).map((b) => ({
       label: b.label,
       salary: b.salary || 0,
@@ -301,7 +310,8 @@ function drawReport(model, scale) {
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = GOLD;
   ctx.font = '600 26px "Segoe UI", "Microsoft YaHei", sans-serif';
-  ctx.fillText("牛马计时器 · " + (model.span === "month" ? "月账单" : "周账单"), 55, 92);
+  const spanTitle = { month: "月账单", year: "年账单" }[model.span] || "周账单";
+  ctx.fillText("牛马计时器 · " + spanTitle, 55, 92);
   ctx.fillStyle = "#f2f2f4";
   ctx.font = '400 21px "Segoe UI", "Microsoft YaHei", sans-serif';
   ctx.fillText(model.label + " · " + model.range, 55, 130);
@@ -313,14 +323,14 @@ function drawReport(model, scale) {
   ctx.font = '700 62px "Segoe UI", "Microsoft YaHei", sans-serif';
   ctx.fillText(fmtMoney(model.income), 55, 248);
 
-  // 四行明细（基础 / 加班 / 摸鱼 / 摸鱼率）；月报补一行休假天数
+  // 明细（基础 / 加班 / 摸鱼 / 摸鱼率 + 换算）；报告补一行休假天数（月/年）
   const rows = [
     ["基础工资", fmtMoney(model.base)],
     ["加班费", model.ot > 0 ? fmtMoney(model.ot) + "（" + model.otHours.toFixed(1) + "h）" : "—"],
     ["摸鱼成本", fmtMoney(model.slackCost)],
-    ["摸鱼率", model.slackPct.toFixed(1) + "%"],
+    ["摸鱼率", model.slackPct.toFixed(1) + "%" + (model.slackEquiv ? " " + model.slackEquiv : "")],
   ];
-  if (model.span === "month" && model.leaveDays != null) {
+  if (model.span !== "week" && model.leaveDays != null) {
     rows.splice(3, 0, ["休假", model.leaveDays + " 天"]);
   }
   let y = 305;
@@ -439,10 +449,6 @@ async function saveCanvasPng(canvas, filename) {
 }
 
 async function saveBillImage() {
-  if (curBillSpan === "year") {
-    showToast("年账单暂不支持存为图片", "err");
-    return;
-  }
   if (!billData) {
     showToast("先看一眼本期账单，再来生成图片", "err");
     return;
@@ -452,8 +458,9 @@ async function saveBillImage() {
   const btn = $("billImageBtn");
   if (btn) btn.disabled = true;
   try {
-    const model = buildReportModel(billData);
-    await saveCanvasPng(drawReport(model), "niuma-账单-" + (model.label || billData.period_start) + ".png");
+    const model = buildReportModel(billData, null, currentSlackEquiv(billData.slack_cost || 0));
+    const kind = { month: "月报", year: "年报" }[model.span] || "账单";
+    await saveCanvasPng(drawReport(model), "niuma-" + kind + "-" + (model.label || billData.period_start) + ".png");
   } catch (e) {
     // buildReportModel/drawReport 抛错此前是无人处理的 rejection：按钮复位但
     // 无 toast 无日志（主窗口 unhandledrejection 兜底只管日志，可见反馈在这里补）
@@ -465,28 +472,32 @@ async function saveBillImage() {
   }
 }
 
-// ---- 月报 tab：月度战绩卡（PeriodBill + day_override 休假天数）----
-// 数据与「本期账单」同源（get_bill 的 month 跨度）；跨度不是月时给切换引导不拉数据
+// ---- 报告 tab：月报/年报战绩卡（PeriodBill + day_override 休假天数）----
+// 数据与「本期账单」同源（get_bill 的 month/year 跨度）；周跨度给切换引导不拉数据
 async function loadMonthlyReport() {
   if (curView !== "viewBill") return;
+  loadMilestones(); // 里程碑与跨度无关，进报告页即拉（失败静默留旧值）
   const hint = $("reportSpanHint");
   const body = $("reportBody");
-  if (curBillSpan !== "month") {
-    hint.querySelector(".bill-empty-txt").textContent = "月报按月统计——先在上方把跨度切到「月」";
+  if (curBillSpan !== "month" && curBillSpan !== "year") {
+    hint.querySelector(".bill-empty-txt").textContent = "报告按月/年统计——先在上方把跨度切到「月」或「年」";
     hint.classList.remove("hidden");
     body.classList.add("hidden");
-    // 期号标签跟当前跨度走（否则停留在上次月报的「N 月」标签，与跨度对不上）
+    // 期号标签跟当前跨度走（否则停留在上次报告的「N 月」标签，与跨度对不上）
     loadWeekBill();
     return;
   }
   hint.classList.add("hidden");
   const generation = ++billRequestGeneration;
   const isCurrent = () =>
-    generation === billRequestGeneration && curBillSpan === "month" && curBillTab === "report" && curView === "viewBill";
+    generation === billRequestGeneration &&
+    (curBillSpan === "month" || curBillSpan === "year") &&
+    curBillTab === "report" &&
+    curView === "viewBill";
   try {
-    const bill = await invoke("get_bill", { span: "month", offset: weekOffset });
+    const bill = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
     if (!isCurrent()) return;
-    // 期号标签与翻页按钮跟本期数据走（paintWeekBill 同款，否则月报页停留在旧周标签）
+    // 期号标签与翻页按钮跟本期数据走（paintWeekBill 同款，否则报告页停留在旧标签）
     $("billWeekLabel").textContent = bill.period_label + " · " + fmtDateRange(bill.period_start, bill.period_end);
     $("billNextWeek").disabled = !!bill.is_current_period;
     const leaves = await invoke("get_day_overrides", {
@@ -494,20 +505,20 @@ async function loadMonthlyReport() {
       end: String(bill.period_end || ""),
     });
     if (!isCurrent()) return;
-    paintMonthlyReport(bill, leaves);
+    paintReport(bill, leaves);
   } catch (e) {
     if (!isCurrent()) return;
-    flog("loadMonthlyReport ERR: " + (e && e.message ? e.message : String(e)));
-    hint.querySelector(".bill-empty-txt").textContent = "月报加载失败";
+    flog("loadReport ERR: " + (e && e.message ? e.message : String(e)));
+    hint.querySelector(".bill-empty-txt").textContent = "报告加载失败";
     hint.classList.remove("hidden");
     body.classList.add("hidden");
   }
 }
 
-function paintMonthlyReport(bill, leaves) {
+function paintReport(bill, leaves) {
   reportBill = bill;
   reportLeaveCount = leaves.length;
-  $("reportTitle").textContent = (bill.period_label || "本月") + "战绩";
+  $("reportTitle").textContent = (bill.period_label || "本期") + "战绩";
   $("reportRange").textContent = fmtDateRange(bill.period_start, bill.period_end);
   $("reportIncome").textContent = fmtMoney(bill.total_income);
   const md = (iso) => String(iso || "").slice(5).replace("-", ".");
@@ -518,12 +529,21 @@ function paintMonthlyReport(bill, leaves) {
   ]);
   rows.push(["休假", leaves.length ? leaves.map((x) => md(x.date)).join("、") + "（" + leaves.length + " 天）" : "无"]);
   rows.push(["加班", (bill.ot_hours || 0) > 0 ? (bill.ot_hours || 0).toFixed(1) + "h · " + fmtMoney(bill.ot_fee) : "—"]);
-  rows.push(["摸鱼率", ((bill.slack_rate || 0) * 100).toFixed(1) + "%"]);
+  const equiv = currentSlackEquiv(bill.slack_cost || 0);
+  rows.push(["摸鱼率", ((bill.slack_rate || 0) * 100).toFixed(1) + "%" + (equiv ? " " + equiv : "")]);
   if (bill.hardest) {
     rows.push(["最拼一天", md(bill.hardest.date) + " " + bill.hardest.weekday + " · 加班 " + (bill.hardest.ot_hours || 0).toFixed(1) + "h"]);
   }
   if (bill.slackiest) {
     rows.push(["最摸一天", md(bill.slackiest.date) + " " + bill.slackiest.weekday + " · " + ((bill.slackiest.rate || 0) * 100).toFixed(1) + "%"]);
+  }
+  // 年报特有：最拼月（后端给 12 个月桶；天粒度 hardest 之外按月再取一档）
+  if (curBillSpan === "year") {
+    const monthOt = (bill.buckets || []).filter((b) => (b.ot_total || 0) > 0);
+    if (monthOt.length) {
+      const top = monthOt.reduce((a, b) => ((b.ot_total || 0) > (a.ot_total || 0) ? b : a));
+      rows.push(["最拼月", top.label + " · 加班费 " + fmtMoney(top.ot_total)]);
+    }
   }
   const box = $("reportRows");
   box.textContent = "";
@@ -540,7 +560,7 @@ function paintMonthlyReport(bill, leaves) {
   const front = bill.front_seconds || 0;
   const q = $("reportQuote");
   if (front > 0) {
-    q.textContent = weekBillQuip((bill.slack_rate || 0) * 100, moneyConfigured(), "month");
+    q.textContent = weekBillQuip((bill.slack_rate || 0) * 100, moneyConfigured(), curBillSpan);
     q.classList.remove("hidden");
   } else {
     q.classList.add("hidden");
@@ -550,12 +570,12 @@ function paintMonthlyReport(bill, leaves) {
 
 let exportingReport = false;
 async function saveReportImage() {
-  if (curBillSpan !== "month") {
-    showToast("月报按月统计——先切到「月」跨度", "err");
+  if (curBillSpan !== "month" && curBillSpan !== "year") {
+    showToast("报告按月/年统计——先切到「月」或「年」跨度", "err");
     return;
   }
   if (!reportBill) {
-    showToast("月报还没就绪，稍等一下再试", "err");
+    showToast("报告还没就绪，稍等一下再试", "err");
     return;
   }
   if (exportingReport) return;
@@ -563,13 +583,74 @@ async function saveReportImage() {
   const btn = $("reportImageBtn");
   if (btn) btn.disabled = true;
   try {
-    const model = buildReportModel(reportBill, reportLeaveCount);
-    await saveCanvasPng(drawReport(model), "niuma-月报-" + (model.label || reportBill.period_start) + ".png");
+    const model = buildReportModel(
+      reportBill,
+      reportLeaveCount,
+      currentSlackEquiv(reportBill.slack_cost || 0)
+    );
+    const kind = { month: "月报", year: "年报" }[model.span] || "报告";
+    await saveCanvasPng(drawReport(model), "niuma-" + kind + "-" + (model.label || reportBill.period_start) + ".png");
   } catch (e) {
     flog("saveReportImage ERR: " + (e && e.message ? e.message : String(e)));
-    showToast("月报图导出失败：" + (e && e.message ? e.message : e), "err");
+    showToast("报告图导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
     exportingReport = false;
     if (btn) btn.disabled = false;
+  }
+}
+
+// ---- 里程碑：用这台应用以来的累计成就（后端出原始量，阶梯在前端）----
+// px/km 与 core.js fmtDist 同一口径（96dpi）；里程碑阈值调档只改这里
+const PX_PER_KM = (96 * 100 * 1000) / 2.54;
+const MILESTONE_LADDERS = [
+  { name: "加班时长", get: (m) => m.ot_hours || 0, steps: [100, 500, 1000], fmt: (v) => v.toFixed(0) + " h", stepFmt: (s) => s + " h" },
+  { name: "键盘敲击", get: (m) => m.keystrokes || 0, steps: [1e6, 5e6, 1e7], fmt: (v) => fmtWan(v) + " 次", stepFmt: (s) => fmtWan(s) + " 次" },
+  { name: "键鼠移动", get: (m) => m.distance_px || 0, steps: [10 * PX_PER_KM, 50 * PX_PER_KM, 100 * PX_PER_KM], fmt: (v) => fmtDist(v), stepFmt: (s) => fmtDist(s) },
+  { name: "专注时长", get: (m) => m.focus_minutes || 0, steps: [3000, 12000, 30000], fmt: (v) => fmtDurCN(v * 60), stepFmt: (s) => fmtDurCN(s * 60) },
+  { name: "相伴天数", get: (m) => m.active_days || 0, steps: [30, 100, 365], fmt: (v) => v + " 天", stepFmt: (s) => s + " 天" },
+];
+
+let milestonesData = null;
+async function loadMilestones() {
+  try {
+    milestonesData = await invoke("get_milestones");
+    paintMilestones();
+  } catch (e) {
+    // 失败静默留旧值：里程碑是锦上添花，不值得为它打断报告页
+    flog("get_milestones ERR: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function paintMilestones() {
+  const box = $("milestonesBox");
+  const list = $("milestonesList");
+  if (!box || !list || !milestonesData) return;
+  box.classList.remove("hidden");
+  list.textContent = "";
+  for (const ladder of MILESTONE_LADDERS) {
+    const value = ladder.get(milestonesData);
+    const achieved = ladder.steps.filter((s) => value >= s).length;
+    const next = ladder.steps[achieved] || null;
+    const pct = next ? Math.min(100, (value / next) * 100) : 100;
+    const row = document.createElement("div");
+    row.className = "ms-row";
+    const name = document.createElement("span");
+    name.className = "ms-name";
+    name.textContent = ladder.name;
+    const bar = document.createElement("div");
+    bar.className = "ms-bar";
+    const fill = document.createElement("i");
+    fill.style.width = pct.toFixed(1) + "%";
+    bar.appendChild(fill);
+    const val = document.createElement("span");
+    val.className = "ms-val";
+    val.textContent = ladder.fmt(value);
+    const done = document.createElement("span");
+    done.className = "ms-done" + (achieved >= ladder.steps.length ? " full" : "");
+    done.textContent =
+      (next ? "下一档 " + ladder.stepFmt(next) : "已满档") +
+      " · " + achieved + "/" + ladder.steps.length;
+    row.append(name, bar, val, done);
+    list.appendChild(row);
   }
 }

@@ -20,14 +20,17 @@ const BILL_TAB_NAMES = {
   timeline: "时间线",
   focus: "专注",
 };
+
 let heatData = null; // 各 tab 最近一次返回缓存（仅当前 tab 会被重画）
 let trendData = null;
 let bodyData = null;
 
 function setBillTabUI(tab) {
   curBillTab = BILL_TAB_PANES[tab] ? tab : "bill";
-  // 账单翻页器（与明细同款）：页名跟随当前页，圆点只在 billPager 内点亮
-  $("billPgName").textContent = BILL_TAB_NAMES[curBillTab];
+  // 账单翻页器（与明细同款）：页名跟随当前页，圆点只在 billPager 内点亮。
+  // 报告页页名随跨度细分：月跨度「月报」、年跨度「年报」
+  $("billPgName").textContent =
+    curBillTab === "report" && curBillSpan === "year" ? "年报" : BILL_TAB_NAMES[curBillTab];
   document.querySelectorAll("#billPager .pg-dot").forEach((b) => {
     b.classList.toggle("active", b.dataset.btab === curBillTab);
   });
@@ -38,7 +41,8 @@ function setBillTabUI(tab) {
   $("billActions").classList.toggle("hidden", curBillTab !== "bill");
 }
 
-// 懒加载分发：进页 / 切 tab / 翻周才拉对应命令（周级聚合，不进 tick 轮询）
+// 懒加载分发：进页 / 切 tab / 翻周才拉对应命令（周级聚合，不进 tick 轮询）。
+// 切跨度也走这里：报告页页名随月/年切换（setBillTabUI 在 loadBillTab 前被调用）
 async function loadBillTab() {
   if (curBillTab === "bill") return loadWeekBill();
   if (curBillTab === "report") return loadMonthlyReport();

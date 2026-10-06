@@ -28,14 +28,14 @@ console.log("== Rust：export_image ==");
 has("命令 export_image（base64 解码落盘）", rsCore, "pub(crate) fn export_image(filename: String, content_base64: String)");
 has("与 export_csv 共用 safe_download_path 清洗", rsCore, "fn safe_download_path(filename: &str)");
 ok("export_csv 改走共用清洗", /export_csv[\s\S]{0,600}let path = safe_download_path\(&filename\)/.test(rsCore));
-has("报告图标题随跨度（写死周账单会让月跨度导出图穿帮）", billSrc, 'model.span === "month" ? "月账单" : "周账单"');
+has("报告图标题随跨度（周/月/年，写死周账单会让月年跨度导出图穿帮）", billSrc, '{ month: "月账单", year: "年账单" }[model.span] || "周账单"');
 ok("空图片数据拒绝写入", rsCore.includes('"图片数据为空"'));
 has("注册进 generate_handler", rsMain, "export_image,");
 has("capabilities 自动补齐 allow-export-image", caps, "allow-export-image");
 
 console.log("== 前端：模型折算（真实调用） ==");
 // 从 bill.js 抽出 buildReportModel / spanQuipText 源码（到行首 "}" 为止），配桩真实调用
-const m = billSrc.match(/function buildReportModel\(bill, leaveDays\) \{[\s\S]*?\n\}/);
+const m = billSrc.match(/function buildReportModel\(bill, leaveDays, slackEquiv\) \{[\s\S]*?\n\}/);
 const sq = billSrc.match(/function spanQuipText\(text, span\) \{[\s\S]*?\n\}/);
 ok("buildReportModel 可提取", !!m);
 ok("spanQuipText 可提取", !!sq);
@@ -80,11 +80,14 @@ if (m && sq) {
 
 console.log("== 月报图片（v1.7.0） ==");
 has("spanQuipText 分档函数", billSrc, "function spanQuipText(text, span) {");
-ok("金句按跨度替换措辞（本周→本月）", /span === "month" \? text\.replace\(\/本周\/g, "本月"\)/.test(billSrc));
+ok("金句按跨度替换措辞（本周→本月/今年）",
+  /if \(span === "month"\) return text\.replace\(\/本周\/g, "本月"\)/.test(billSrc) &&
+  /if \(span === "year"\) return text\.replace\(\/本周\/g, "今年"\)/.test(billSrc));
 ok("weekBillQuip 带 span 参数", /function weekBillQuip\(ratePct, withMoney, span\)/.test(billSrc));
-ok("年跨度双重拦截（按钮禁用 + 函数早退）",
-  /imgBtn\.disabled = curBillSpan === "year"/.test(billSrc) &&
-  /if \(curBillSpan === "year"\) \{\s*\n\s*showToast\("年账单暂不支持存为图片", "err"\);/.test(billSrc));
+// 年跨度解禁存图（2026-10-06 年报功能推翻了旧「年图价值低」设计）
+ok("年跨度已解禁存图",
+  !/imgBtn\.disabled = curBillSpan === "year"/.test(billSrc) &&
+  !/年账单暂不支持存为图片/.test(billSrc));
 ok("禁用态样式", css.includes(".ghost[disabled]"));
 if (m && sq) {
   // 月跨度：同一模型，金句措辞「本周→本月」，span 字段随全局切换
@@ -111,6 +114,17 @@ if (m && sq) {
     3,
   );
   eq("月报休假天数透传", ml.leaveDays, 3);
+  // 摸鱼换算文案：显式传入透传，不传为空串（drawReport 内联进摸鱼率行）
+  eq("不传换算 → 空串", mm.slackEquiv, "");
+  const me = new Function(
+    "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
+    m[0] + "\nreturn buildReportModel;"
+  )(stubFmtDateRange, stubQuip, () => true, "month")(
+    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, buckets: [] },
+    3,
+    "≈2.6 杯奶茶"
+  );
+  eq("换算文案透传", me.slackEquiv, "≈2.6 杯奶茶");
 }
 
 console.log("== 前端：绘制与保存链路 ==");

@@ -356,6 +356,7 @@ document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
     setBillSpanUI(b.dataset.span);
     weekOffset = 0; // 切跨度重置偏移：上一期的语义随跨度变化
     saveIfChanged({ silent: true }); // 记住浏览偏好，不打断浏览；失败仍提示
+    setBillTabUI(curBillTab); // 报告页页名随月/年切换（月报 ↔ 年报）
     loadBillTab();
   });
 });

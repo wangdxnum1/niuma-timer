@@ -351,7 +351,14 @@ function renderSlackBurn() {
   const pct = (slackSec / total) * 100;
   box.classList.remove("hidden");
       $("sbAmt").textContent = fmtMoney(cost);
-  $("sbRate").textContent = "摸鱼率 " + Math.round(pct) + "%";
+  // 摸鱼换算（core.js fmtSlackEquiv 单一口径）：单位在设置 → 外观可选，off 时不追加
+  const equiv = fmtSlackEquiv(
+    cost,
+    ($("slack_equiv_unit") || {}).value || "milktea",
+    ($("slack_equiv_price") || {}).value
+  );
+  $("sbRate").textContent =
+    "摸鱼率 " + Math.round(pct) + "%" + (equiv ? " · " + equiv : "");
   $("sbQuip").textContent = slackQuip(pct);
 }
 

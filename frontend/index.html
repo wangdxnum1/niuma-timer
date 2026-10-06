@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=80f1f1b1" />
+    <link rel="stylesheet" href="styles.css?v=4eaa1c9c" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -89,7 +89,7 @@
       </div>
       <div class="pg-dots">
         <button class="pg-dot" data-btab="bill" title="本期账单"></button>
-        <button class="pg-dot" data-btab="report" title="月报"></button>
+        <button class="pg-dot" data-btab="report" title="月报 / 年报"></button>
         <button class="pg-dot" data-btab="heat" title="时段热力"></button>
         <button class="pg-dot" data-btab="trend" title="趋势"></button>
         <button class="pg-dot" data-btab="body" title="身体账单"></button>
@@ -310,6 +310,10 @@
           <div class="report-actions">
             <button id="reportImageBtn" class="ghost">存为图片</button>
           </div>
+        </div>
+        <div id="milestonesBox" class="milestones hidden">
+          <div class="ms-title">里程碑 · 用这台应用以来</div>
+          <div id="milestonesList"></div>
         </div>
       </div>
 
@@ -602,6 +606,8 @@
         <div class="settings-preview"><span class="settings-preview-label">首页副标题预览</span><span id="taglinePreview"></span></div>
         <label id="taglineCustomRow" class="settings-stacked"><span>自定义文案 <span id="taglineCounter" class="settings-counter">0 / 40 字</span></span><input id="tagline_custom" type="text" maxlength="40" placeholder="写你想看到的那句话" /></label>
         <details class="hint-details"><summary>动态文案如何切换</summary><p>根据未开工、午休、快下班、已下班和休息日自动切换；自定义文案留空时也使用动态状态。</p></details>
+        <label class="settings-stacked"><span>摸鱼换算</span><select id="slack_equiv_unit"><option value="milktea">奶茶（¥15/杯）</option><option value="coffee">咖啡（¥30/杯）</option><option value="takeout">外卖（¥25/顿）</option><option value="movie">电影票（¥40/张）</option><option value="custom">自定义单价</option><option value="off">关闭</option></select></label>
+        <div id="slackEquivCustomRow" class="hidden"><label class="settings-stacked"><span>自定义单价</span><span class="settings-unit"><input id="slack_equiv_price" type="number" min="0.5" step="0.5" /><span>元 / 份快乐</span></span></label><p class="hint">摸鱼成本按这个单价换算成「≈N 份快乐」，显示在主页摸鱼行与报告卡</p></div>
         <div class="sub-section">
           <span class="settings-subtitle">账单风格</span>
           <div class="bill-style-picker" id="billStyleSeg" role="radiogroup" aria-label="账单风格选择">
@@ -832,18 +838,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=80f1f1b1"></script>
-    <script src="js/tl_math.js?v=80f1f1b1"></script>
-    <script src="js/settings.js?v=80f1f1b1"></script>
-    <script src="js/settings_ui.js?v=80f1f1b1"></script>
-    <script src="js/hero.js?v=80f1f1b1"></script>
-    <script src="js/overtime.js?v=80f1f1b1"></script>
-    <script src="js/monitor.js?v=80f1f1b1"></script>
-    <script src="js/bill.js?v=80f1f1b1"></script>
-    <script src="js/insights.js?v=80f1f1b1"></script>
-    <script src="js/storage.js?v=80f1f1b1"></script>
-    <script src="js/update.js?v=80f1f1b1"></script>
-    <script src="js/boot.js?v=80f1f1b1"></script>
+    <script src="js/core.js?v=4eaa1c9c"></script>
+    <script src="js/tl_math.js?v=4eaa1c9c"></script>
+    <script src="js/settings.js?v=4eaa1c9c"></script>
+    <script src="js/settings_ui.js?v=4eaa1c9c"></script>
+    <script src="js/hero.js?v=4eaa1c9c"></script>
+    <script src="js/overtime.js?v=4eaa1c9c"></script>
+    <script src="js/monitor.js?v=4eaa1c9c"></script>
+    <script src="js/bill.js?v=4eaa1c9c"></script>
+    <script src="js/insights.js?v=4eaa1c9c"></script>
+    <script src="js/storage.js?v=4eaa1c9c"></script>
+    <script src="js/update.js?v=4eaa1c9c"></script>
+    <script src="js/boot.js?v=4eaa1c9c"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

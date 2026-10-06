@@ -4,7 +4,7 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI.core.invoke;
 
 // 前端版本标记：写进每条日志，用于核对 WebView2 实际加载的是哪个版本（防旧缓存）
-const FE_VER = "v80f1f1b1";
+const FE_VER = "v4eaa1c9c";
 
 // 主窗口是否可见。托盘常驻期间窗口是 hide 的，此时前端一切轮询都没意义
 // （界面看不见，数据看不见），由 Rust 端 1s 线程广播 win-visibility 驱动。
@@ -74,6 +74,27 @@ function fmtDurCN(sec) {
 // 自持一份同体实现，由 test_hover_card 断言逐字一致。
 function fmtMoney(n) {
   return "¥" + (Number(n) || 0).toFixed(2);
+}
+
+// 摸鱼换算单位表：key → 量词与单价。custom 的单价走配置 slack_equiv_price。
+// 纯前端消费，config.rs 只存 key 与自定义单价。
+const SLACK_UNITS = {
+  milktea: { label: "杯奶茶", price: 15 },
+  coffee: { label: "杯咖啡", price: 30 },
+  takeout: { label: "顿外卖", price: 25 },
+  movie: { label: "张电影票", price: 40 },
+  custom: { label: "份快乐", price: 0 },
+};
+
+// 摸鱼成本 → 人话换算："≈2.6 杯奶茶"。关闭/非正成本/非法单价返回空串。
+// 精度：floor 到 0.1 档，不足 0.1 显示「不足 0.1」不显示 0（0 看起来像没摸鱼）。
+function fmtSlackEquiv(cost, unitKey, customPrice) {
+  const unit = SLACK_UNITS[unitKey];
+  if (!unit || !(cost > 0)) return "";
+  const price = unitKey === "custom" ? Number(customPrice) : unit.price;
+  if (!(price > 0)) return "";
+  const n = Math.floor((cost / price) * 10) / 10;
+  return "≈" + (n < 0.1 ? "不足 0.1" : String(n)) + " " + unit.label;
 }
 
 const $ = (id) => document.getElementById(id);

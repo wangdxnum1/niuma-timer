@@ -89,6 +89,9 @@ async function load() {
     $("tagline_style").value = cfg.tagline_style || "dynamic";
     $("tagline_custom").value = cfg.tagline_custom || "";
     applyTaglineCustomVisibility($("tagline_style").value);
+    $("slack_equiv_unit").value = cfg.slack_equiv_unit || "milktea";
+    $("slack_equiv_price").value = cfg.slack_equiv_price ?? 15;
+    applySlackEquivCustomVisibility($("slack_equiv_unit").value);
     // 开机自启读注册表真实状态（用户可能在任务管理器手工禁用过），不走 config
     loadAutostart();
     const currentOverride = settingsOverrideIsCurrent(cfg, currentYearMonth());
@@ -374,6 +377,8 @@ function readCfg() {
     retention_days: Math.min(36500, Math.max(0, parseInt($("retention_days").value) || 0)),
     bill_style: readBillStyle(),
     bill_span: readBillSpan(),
+    slack_equiv_unit: $("slack_equiv_unit").value || "milktea",
+    slack_equiv_price: Math.max(0.5, parseFloat($("slack_equiv_price").value) || 15),
   };
   // 月薪/发薪日留空：不传该字段，后端合并时保留旧值，避免误存 0/1，也不挡住其它开关保存
   if (salaryRaw !== "") cfg.monthly_salary = parseFloat(salaryRaw) || 0;
@@ -427,6 +432,22 @@ function saveIfChanged(options = {}) {
   if (settingsSavePending === 0 && JSON.stringify(readCfg()) === lastSaved) return;
   return doSave(options);
 }
+
+// 摸鱼换算：单位即存并联动自定义金额行；单价失焦存。展示层即时重画（烧钱行/报告）。
+function applySlackEquivCustomVisibility(v) {
+  const row = $("slackEquivCustomRow");
+  if (row) row.classList.toggle("hidden", v !== "custom");
+}
+$("slack_equiv_unit").addEventListener("change", () => {
+  applySlackEquivCustomVisibility($("slack_equiv_unit").value);
+  saveNow();
+  renderSlackBurn();
+});
+// renderSlackBurn 在 monitor.js（后于本文件加载）——顶层只传引用会在解析期
+// ReferenceError 并截断整个 settings.js（toastTimer 进 TDZ，保存链路全灭），
+// 必须包箭头函数延迟到事件期解析。2026-10-06 桩环境目检抓到的发布级事故。
+$("slack_equiv_price").addEventListener("blur", saveIfChanged);
+$("slack_equiv_price").addEventListener("change", () => renderSlackBurn());
 
 // 开关等明确变更：直接保存
 function saveNow() {
