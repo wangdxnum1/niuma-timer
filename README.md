@@ -38,6 +38,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **App categories** — app usage is grouped into work / slack / chat / other; click a tag to change it and the whole history is reclassified instantly
 - **Cross-midnight overtime** — overnight overtime is attributed to the correct day (locking the screen before 06:00 counts for the previous day with +24h), so nothing is silently lost
 - **Weekend & holiday overtime** — driven by official holiday data, with separate start times and pay rates for rest days and statutory holidays
+- **Report loading and exports** — period changes show loading feedback and retry on failure; exports wait for the selected period. Missing foreground data receives no slacking judgment. Timeline navigation is daily.
 - **Day-off marking** — one-click marking for annual leave / sick leave / personal errands / comp days (brand-row button, or per-date in Settings → Salary & Schedule): treated as a rest day with no earnings or attendance, excluded from the automatic monthly workday count
 - **Monthly report** — a new "Report" page on the Bill view: monthly income, attendance & days off, overtime hours & pay, slack rate, hardest and slackiest days, plus a one-click shareable image
 - **Year report** — the Report page spans month and year: "N 年战绩" aggregates attendance, days off, overtime and slack rate over the whole year, with the busiest month, a year quip, and unlocked image export for the year span
@@ -57,7 +58,7 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 - **Monthly bill image** — "save as image" now covers the month span, quip wording follows the period
 - **Data insights** — three extra views on the Bill tab: weekday × hour activity heatmap, earnings and slack-rate trends across eight periods, and a period "body bill" of keyboard/mouse wear
 - **Guard reminders** — sedentary reminders and off-work reminders via native Windows notifications, plus global hotkeys (Alt+Shift+N toggle window, Alt+Shift+P pause monitoring); configurable thresholds, all off-work aware
-- **Manual pause** — pause all monitoring from the tray menu or Alt+Shift+P; money freezes until resumed
+- **Manual pause** — pause all monitoring from the tray menu or Alt+Shift+P; monitoring durations stop and are not backfilled after resuming; salary remains a schedule-based estimate
 - **Six-card settings** — salary & schedule, overtime, guard, data monitoring, appearance, and system & data, each with collapsible detail notes
 - **Settings previews and feedback** — six-category navigation, live pay and appearance previews, dependent controls, explicit rate inheritance and retention rules, inline validation, and serialized auto-save.
 - **Automatic updates** — checks GitHub Releases every 6 hours (and 30s after launch), one-click update with "skip this version", and a post-update announcement pulled from the changelog; the portable build self-replaces with checksum-verified rollback

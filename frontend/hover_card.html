@@ -409,8 +409,8 @@
       <div class="foot" id="foot"><i class="dot"></i><span id="footText">—</span></div>
     </div>
     <!-- tl_math.js 与主界面共享时间轴数学（minutesOf/overlapMin/spanPct）；
-         ?v=7e8e5587 缓存戳由 build.rs 与 index.html 同源回写 -->
-    <script src="js/tl_math.js?v=7e8e5587"></script>
+         ?v=db28f28b 缓存戳由 build.rs 与 index.html 同源回写 -->
+    <script src="js/tl_math.js?v=db28f28b"></script>
     <script>
       // ===== 前端错误上报（emit 到 Rust 端 eprintln 打印，便于排查"不显示"类问题）=====
       function reportErr(msg) {
@@ -626,11 +626,11 @@
         }
 
         // 状态徽章：绿点搬砖中 / 金点已下班 / 灰点休息 / 灰点已暂停
-        // （paused 与主界面「已暂停 · 钱先冻结」同口径；此前暂停时仍显示搬砖中+脉动）
+        // （paused 表示监控暂停；工资仍按作息推算，与主页同口径）
         var foot = document.getElementById("foot");
         if (s.paused) {
           foot.className = "foot rest";
-          document.getElementById("footText").textContent = "已暂停 · 钱先冻结 ⏸";
+          document.getElementById("footText").textContent = "监控已暂停 ⏸";
         } else if (rest) {
           foot.className = "foot rest";
           document.getElementById("footText").textContent = "今天休息 🛌";

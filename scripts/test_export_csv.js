@@ -84,6 +84,7 @@ const runner = new Function(
     "var lastOt = sandbox.lastOt;\n" +
     "var billData = sandbox.billData;\n" +
     "var downloadCsv = sandbox.downloadCsv;\n" +
+    "var billIsReady = function () { return !!billData; };\n" +
     fns +
     "\n; sandbox.csvCell = csvCell;" +
     " sandbox.csvRows = csvRows;" +

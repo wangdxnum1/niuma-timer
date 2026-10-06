@@ -87,5 +87,8 @@ pub(crate) fn get_status(state: &AppState) -> calc::DayStatus {
     st.day_off_kind = day_off;
     // v1.3.0 守护：暂停状态随每秒状态快照广播（托盘文案 / 前端徽章 / 悬停卡片共用）
     st.paused = pause::is_paused();
+    if st.paused {
+        st.tooltip = format!("监控已暂停（工资仍按作息推算）\n{}", st.tooltip);
+    }
     st
 }

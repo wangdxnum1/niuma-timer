@@ -59,6 +59,7 @@ if (m && sq) {
     ot_hours: 7.5,
     slack_cost: 123.45,
     slack_rate: 0.182,
+    front_seconds: 1000,
     work_days: 5,
     work_hours: 47.5,
     buckets: [
@@ -100,7 +101,7 @@ if (m && sq) {
     m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")({
     period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30",
-    total_income: 1, slack_rate: 0.182, buckets: [],
+    total_income: 1, slack_rate: 0.182, front_seconds: 1000, buckets: [],
   });
   eq("月跨度金句措辞切换", mm.quip, "本月工资建议原路退回@18.2@1");
   eq("模型带跨度（月）", mm.span, "month");
@@ -110,7 +111,7 @@ if (m && sq) {
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
     m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")(
-    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, buckets: [] },
+    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, front_seconds: 1000, buckets: [] },
     3,
   );
   eq("月报休假天数透传", ml.leaveDays, 3);
@@ -120,7 +121,7 @@ if (m && sq) {
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
     m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")(
-    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, buckets: [] },
+    { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, front_seconds: 1000, buckets: [] },
     3,
     "≈2.6 杯奶茶"
   );
@@ -139,12 +140,12 @@ has("命令名 export_image", billSrc, 'invoke("export_image", {');
 ok("无账单数据先引导（不画空图）", /先看一眼本期账单/.test(billSrc));
 ok("剪贴板失败降级为仅保存（不阻断）", /typeof ClipboardItem === "function"/.test(billSrc) &&
   /已复制剪贴板，并保存到 /.test(billSrc));
-ok("图片按桶条数自适应柱宽", /const barW = Math\.min\(52, \(areaR - areaL - gap \* \(n - 1\)\) \/ n\);/.test(billSrc));
+ok("图片按桶条数自适应柱宽", /const barW = Math\.min\(52, slotW - gap\);/.test(billSrc));
 
 ok("连点守卫：exportingImg 旗标 + 按钮禁用（同 downloadCsv 的 exportingCsv）",
   /let exportingImg = false;/.test(billSrc) &&
   /if \(btn\) btn\.disabled = true;/.test(billSrc) &&
-  /exportingImg = false;[\s\S]{0,40}if \(btn\) btn\.disabled = false;/.test(billSrc));
+  /exportingImg = false;[\s\S]{0,40}if \(btn\) btn\.disabled = !billIsReady\(\);/.test(billSrc));
 
 console.log("");
 console.log(pass + " passed, " + fail + " failed");

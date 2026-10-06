@@ -27,6 +27,8 @@ let bodyData = null;
 
 function setBillTabUI(tab) {
   curBillTab = BILL_TAB_PANES[tab] ? tab : "bill";
+  // Timeline is a single-day view and owns its own date navigation.
+  $("billPeriodControls").classList.toggle("hidden", curBillTab === "timeline");
   // 账单翻页器（与明细同款）：页名跟随当前页，圆点只在 billPager 内点亮。
   // 报告页页名随跨度细分：月跨度「月报」、年跨度「年报」
   $("billPgName").textContent =

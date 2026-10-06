@@ -212,6 +212,10 @@ function exportOvertimeCsv() {
   );
 }
 function exportWeekBillCsv() {
+  if (!billIsReady()) {
+    showToast("本期账单还没就绪，加载完成后再导出", "err");
+    return;
+  }
   const bill = billData;
   if (!bill || !bill.buckets || bill.buckets.length === 0) return;
   const rows = [["（汇总）"]];

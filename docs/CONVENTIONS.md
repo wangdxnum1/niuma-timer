@@ -7,7 +7,7 @@
 ## 代码地图（现状）
 - 后端 35 个 `.rs`：核心域模块（含 `dayoff.rs` 日级休假标记、`milestones.rs` 里程碑聚合）+ 命令层 `cmds_core/cmds_bill/cmds_monitor/cmds_storage/cmds_update/cmds_debug`（二期自 `main.rs` 切出，纯移动）+ `tray/hover_state.rs`。
 - 前端无打包链：`frontend/index.html` 里 **8 个视图容器**（`viewMain/viewBill/viewSettings/viewOt/viewAct/viewApp/viewAudio/viewUpdate`）+ `frontend/js/` **12 个块**（`app.js` 已删除，禁止复活）+ `styles.css` + `hover_card.html`（独立窗口）。
-- 测试规模：Rust 侧 263 个 `#[test]`；`scripts/test_*.js` 37 个 + `scripts/test_publish_release.py` + `scripts/test_push_via_api.py`。
+- 测试规模：Rust 侧 263 个 `#[test]`；`scripts/test_*.js` 38 个 + `scripts/test_publish_release.py` + `scripts/test_push_via_api.py`。
 - 用户数据在 `%APPDATA%/niuma-timer/`：`niuma.db`（SQLite + WAL）、`config.json`、`holiday_{year}.json`、`debug.log` / `panic.log`、`icons/`。
 
 ## 构建入口与脚本纪律
@@ -91,6 +91,10 @@
 - 透明 WebView（`.transparent(true)`）上的金额用纯 `color` 实心金，别用 `background-clip:text` + 透明填充裁剪渐变文字；悬停卡「窗口不消失 / 不显示」两个 bug 同源（过度依赖 `cursor_position()` 裁决），现两侧都不靠它 + 20s 硬上限。
 - 前端测试**日期与时刻都要固定**（`FakeDate` + `static now()`，见 `scripts/test_tagline.js`）：`dynamicTagline` 读 `getHours()`，不固定时刻时 12:00–13:00 跑测试会让午休用例全误判。
 - 顶层 `eval("function f(){}")` 与同名 `const` 冲突，须包进函数；**扫描代码模式一律用跨行正则**（或先 `\s+` 归一），按行 grep 会漏 rustfmt/prettier 拆行的写法（收口锁时实测漏 5 处）。
+
+- 账单/报告导出必须绑定 `span:offset` 就绪数据，加载/失败不能用旧缓存；报告账单与休假数据成功后一起更新顶部日期和正文，失败提供重试。
+- 报告无前台证据时摸鱼率是未知，界面显示「暂无记录」，导出模型保留 null 且不输出评价；仅有加班或休假仍可查看报告。时间线只使用自己的逐日导航。
+- 手动暂停的是键鼠/应用/媒体及专注监控，恢复后不补监控时长；工资按作息推算。主页/悬停卡/原生 tooltip 不得声称「钱先冻结」。
 
 ## 设置页约定
 - `settings.js` 负责配置持久化，`settings_ui.js` 负责校验/预览/导航和开关联动；UI 使用 `DayStatus.monthly_workdays` 的真实工作日数，未知时不得猜日期或金额。

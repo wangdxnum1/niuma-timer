@@ -90,7 +90,7 @@ const work = (o) =>
 
 console.log("== 手动暂停分支 ==");
 api.renderBadge(work({ paused: true }));
-eq("手动暂停", badge().text, "已暂停 · 钱先冻结");
+eq("手动暂停", badge().text, "监控已暂停");
 eq("暂停 className", badge().cls, "badge off");
 ok("renderBadge 无 rest_secs 残留", !/rest_secs/.test(appSrc));
 

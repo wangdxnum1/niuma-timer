@@ -81,7 +81,7 @@ function fmtShortH(h) {
 function renderBadge(s) {
   const badge = $("statusBadge");
   if (s.paused) {
-    badge.textContent = "已暂停 · 钱先冻结";
+    badge.textContent = "监控已暂停";
     badge.className = "badge off";
   } else if (s.day_off_kind) {
     badge.textContent = "休假中 · " + s.day_off_kind;
@@ -235,6 +235,7 @@ function taglineStyle() {
 // 动态副标题：把「实时」这个卖点用起来，而不是写死一句说明文。
 // 全部基于 tick 已拿到的状态，不发额外 IPC。
 function dynamicTagline(s) {
+  if (s.paused) return "监控已暂停，工资仍按作息推算";
   if (s.day_off_kind) return "休假中，钱先歇着";
   if (s.to_off_str === "今天休息") return "今天休息，钱也休息";
   if (s.off_work) return "今天的钱，就到这儿了";

@@ -22,7 +22,8 @@ function element() {
   ]) {
     const requests = [];
     const ctx = {curView:'viewBill',curBillTab:tab,curBillSpan:'year',weekOffset:0,billRequestGeneration:0,
-      invoke:()=>new Promise(resolve=>requests.push(resolve)),flog(){},$:()=>element(),[paint](){}};
+      invoke:()=>new Promise(resolve=>requests.push(resolve)),flog(){},$:()=>element(),[paint](){},
+      setBillLoadState(){},billPeriodKey:()=>ctx.curBillSpan+":"+ctx.weekOffset};
     vm.createContext(ctx); vm.runInContext(fn(loader),ctx);
     const older=ctx[loader]();ctx.curBillSpan='month'; const newer=ctx[loader]();
     requests[1]({span:'month'}); await newer;requests[0]({span:'year'}); await older;

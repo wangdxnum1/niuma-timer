@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=7e8e5587" />
+    <link rel="stylesheet" href="styles.css?v=db28f28b" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -228,6 +228,7 @@
          共用周导航翻周；懒渲染契约：切页 / 翻周才拉对应命令，不接 tick 轮询——周级聚合 -->
     <div class="app hidden" id="viewBill">
       <!-- 工具栏：左周期切换、右导出动作（动作仅本周账单 tab 可见，切 tab 由 setBillTabUI 控制） -->
+      <div id="billPeriodControls">
       <div class="bill-toolbar">
         <div class="mon-seg" id="billSpanSeg" aria-label="账单周期">
           <button class="mon-seg-item active" data-span="week">周</button>
@@ -244,6 +245,7 @@
         <span id="billWeekLabel" class="mn-label">—</span>
         <button id="billNextWeek" class="mn-btn">下一期 ›</button>
       </div>
+      </div>
 
       <!-- tab 1：本期账单（原有双风格内容原样保留） -->
       <div id="billTabBill">
@@ -252,6 +254,7 @@
         <div id="billEmpty" class="bill-empty hidden">
           <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
           <div class="bill-empty-txt">这一期还没有打工记录</div>
+          <button id="billRetryBtn" class="ghost hidden">重新加载</button>
         </div>
 
         <!-- 风格一：小票（默认）。纸白票面 + 虚线行 + 7 日金条 + 右下红章 -->
@@ -295,7 +298,8 @@
       <div id="billTabReport" class="hidden">
         <div id="reportSpanHint" class="bill-empty hidden">
           <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
-          <div class="bill-empty-txt">月报按月统计——先在上方把跨度切到「月」</div>
+          <div class="bill-empty-txt">报告按月/年统计——先在上方切换跨度</div>
+          <button id="reportRetryBtn" class="ghost hidden">重新加载</button>
         </div>
         <div id="reportBody" class="hidden">
           <section class="card report-card">
@@ -838,18 +842,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=7e8e5587"></script>
-    <script src="js/tl_math.js?v=7e8e5587"></script>
-    <script src="js/settings.js?v=7e8e5587"></script>
-    <script src="js/settings_ui.js?v=7e8e5587"></script>
-    <script src="js/hero.js?v=7e8e5587"></script>
-    <script src="js/overtime.js?v=7e8e5587"></script>
-    <script src="js/monitor.js?v=7e8e5587"></script>
-    <script src="js/bill.js?v=7e8e5587"></script>
-    <script src="js/insights.js?v=7e8e5587"></script>
-    <script src="js/storage.js?v=7e8e5587"></script>
-    <script src="js/update.js?v=7e8e5587"></script>
-    <script src="js/boot.js?v=7e8e5587"></script>
+    <script src="js/core.js?v=db28f28b"></script>
+    <script src="js/tl_math.js?v=db28f28b"></script>
+    <script src="js/settings.js?v=db28f28b"></script>
+    <script src="js/settings_ui.js?v=db28f28b"></script>
+    <script src="js/hero.js?v=db28f28b"></script>
+    <script src="js/overtime.js?v=db28f28b"></script>
+    <script src="js/monitor.js?v=db28f28b"></script>
+    <script src="js/bill.js?v=db28f28b"></script>
+    <script src="js/insights.js?v=db28f28b"></script>
+    <script src="js/storage.js?v=db28f28b"></script>
+    <script src="js/update.js?v=db28f28b"></script>
+    <script src="js/boot.js?v=db28f28b"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

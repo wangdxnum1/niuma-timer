@@ -27,6 +27,53 @@ let reportLeaveCount = 0; // 月报对应的休假天数（day_override 标记�
 let billStyle = "receipt";
 let curBillSpan = "week";
 let billRequestGeneration = 0;
+let billDataPeriod = null;
+let reportBillPeriod = null;
+
+// Cached data may only be exported for the exact period that produced it.
+function billPeriodKey() {
+  return curBillSpan + ":" + weekOffset;
+}
+
+function billIsReady() {
+  return !!billData && billDataPeriod === billPeriodKey();
+}
+
+function reportIsReady() {
+  return !!reportBill && reportBillPeriod === billPeriodKey();
+}
+
+// Loading/error state replaces the old body, so labels and amounts cannot disagree.
+function setBillLoadState(kind, state) {
+  const report = kind === "report";
+  const ready = state === "ready";
+  const failed = state === "error";
+  const hint = $(report ? "reportSpanHint" : "billEmpty");
+  $(report ? "reportRetryBtn" : "billRetryBtn").classList.toggle("hidden", !failed);
+  $(report ? "reportImageBtn" : "billImageBtn").disabled = !ready;
+  if (!report) $("billExportBtn").disabled = !ready;
+  if (!ready) {
+    if (report) {
+      reportBill = null;
+      reportBillPeriod = null;
+      reportLeaveCount = 0;
+      $("reportBody").classList.add("hidden");
+    } else {
+      billData = null;
+      billDataPeriod = null;
+      $("billReceipt").classList.add("hidden");
+      $("billDash").classList.add("hidden");
+    }
+    hint.classList.remove("hidden");
+    hint.querySelector(".bill-empty-txt").textContent =
+      (report ? "报告" : "账单") + (failed ? "加载失败，请重试" : "加载中…");
+    $("billWeekLabel").textContent = failed ? "加载失败" : "加载中…";
+    $("billNextWeek").disabled = true;
+  } else {
+    hint.querySelector(".bill-empty-txt").textContent = "这一期还没有打工记录";
+    if (report) hint.classList.add("hidden");
+  }
+}
 
 // 有效时薪未配置：工资与摸鱼成本口径不成立，相关行一律隐藏。
 // 统一口径「有效时薪 > 0」：月聘看月薪输入框，时薪模式（v1.6.0）看时薪输入框
@@ -66,6 +113,7 @@ function setBillSpanUI(span) {
 
 async function loadWeekBill() {
   if (curView !== "viewBill") return;
+  setBillLoadState("bill", "loading");
   const generation = ++billRequestGeneration;
   const span = curBillSpan, offset = weekOffset, tab = curBillTab;
   const isCurrent = () => generation === billRequestGeneration && span === curBillSpan && offset === weekOffset && tab === curBillTab && curView === "viewBill";
@@ -73,15 +121,18 @@ async function loadWeekBill() {
     const result = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
     if (!isCurrent()) return;
     billData = result;
+    billDataPeriod = billPeriodKey();
+    setBillLoadState("bill", "ready");
     paintWeekBill();
   } catch (e) {
     if (!isCurrent()) return;
     flog("get_bill ERR: " + (e && e.message ? e.message : String(e)));
-    $("billWeekLabel").textContent = "账单加载失败";
+    setBillLoadState("bill", "error");
   }
 }
 
 function shiftWeek(delta) {
+  if (curBillTab === "timeline") return;
   const next = weekOffset + delta;
   if (next < 0) return; // 本周封顶，不预看未来
   weekOffset = next;
@@ -264,7 +315,8 @@ function currentSlackEquiv(cost) {
 // PeriodBill → 图片模型（纯函数，测试直接断言折算口径）。leaveDays：报告的
 // 休假天数（day_override 标记数），月/年报告传入；slackEquiv：摸鱼换算文案。
 function buildReportModel(bill, leaveDays, slackEquiv) {
-  const ratePct = (bill.slack_rate || 0) * 100;
+  const hasFront = (bill.front_seconds || 0) > 0;
+  const ratePct = hasFront ? (bill.slack_rate || 0) * 100 : null;
   return {
     label: bill.period_label || "",
     range: fmtDateRange(bill.period_start, bill.period_end),
@@ -272,12 +324,12 @@ function buildReportModel(bill, leaveDays, slackEquiv) {
     base: bill.base_salary || 0,
     ot: bill.ot_fee || 0,
     otHours: bill.ot_hours || 0,
-    slackCost: bill.slack_cost || 0,
+    slackCost: hasFront && moneyConfigured() ? bill.slack_cost || 0 : null,
     slackPct: ratePct,
     workDays: bill.work_days,
     workHours: bill.work_hours || 0,
     leaveDays: leaveDays == null ? null : leaveDays,
-    slackEquiv: slackEquiv || "",
+    slackEquiv: hasFront && moneyConfigured() ? slackEquiv || "" : "",
     bars: (bill.buckets || []).map((b) => ({
       label: b.label,
       salary: b.salary || 0,
@@ -286,7 +338,7 @@ function buildReportModel(bill, leaveDays, slackEquiv) {
     hardest: bill.hardest || null,
     slackiest: bill.slackiest || null,
     span: curBillSpan,
-    quip: weekBillQuip(ratePct, moneyConfigured(), curBillSpan),
+    quip: hasFront ? weekBillQuip(ratePct, moneyConfigured(), curBillSpan) : "",
   };
 }
 
@@ -327,8 +379,8 @@ function drawReport(model, scale) {
   const rows = [
     ["基础工资", fmtMoney(model.base)],
     ["加班费", model.ot > 0 ? fmtMoney(model.ot) + "（" + model.otHours.toFixed(1) + "h）" : "—"],
-    ["摸鱼成本", fmtMoney(model.slackCost)],
-    ["摸鱼率", model.slackPct.toFixed(1) + "%" + (model.slackEquiv ? " " + model.slackEquiv : "")],
+    ["摸鱼成本", model.slackCost == null ? "—" : fmtMoney(model.slackCost)],
+    ["摸鱼率", model.slackPct == null ? "暂无记录" : model.slackPct.toFixed(1) + "%" + (model.slackEquiv ? " " + model.slackEquiv : "")],
   ];
   if (model.span !== "week" && model.leaveDays != null) {
     rows.splice(3, 0, ["休假", model.leaveDays + " 天"]);
@@ -353,7 +405,7 @@ function drawReport(model, scale) {
   // 每日进账金条：salary 归一，休息日细半透明柱
   ctx.fillStyle = GRAY;
   ctx.font = '400 18px "Segoe UI", "Microsoft YaHei", sans-serif';
-  ctx.fillText("每日进账", 55, 545);
+  ctx.fillText(model.span === "year" ? "每月进账" : "每日进账", 55, 545);
   const bars = model.bars || [];
   const n = Math.max(1, bars.length);
   const areaL = 55,
@@ -361,10 +413,11 @@ function drawReport(model, scale) {
     baseY = 760,
     maxH = 170;
   const gap = Math.min(14, Math.max(2, (areaR - areaL) / n * 0.25));
-  const barW = Math.min(52, (areaR - areaL - gap * (n - 1)) / n);
+  const slotW = (areaR - areaL) / n;
+  const barW = Math.min(52, slotW - gap);
   const maxSal = Math.max(0.01, ...bars.map((b) => b.salary));
   bars.forEach((b, i) => {
-    const x = areaL + i * ((areaR - areaL - gap * (n - 1)) / n) + gap / 2;
+    const x = areaL + i * slotW + (slotW - barW) / 2;
     const h = (b.salary / maxSal) * maxH;
     if (h > 0) {
       if (b.isWorkday) {
@@ -449,8 +502,8 @@ async function saveCanvasPng(canvas, filename) {
 }
 
 async function saveBillImage() {
-  if (!billData) {
-    showToast("先看一眼本期账单，再来生成图片", "err");
+  if (!billIsReady()) {
+    showToast("先看一眼本期账单，加载完成后再来生成图片", "err");
     return;
   }
   if (exportingImg) return;
@@ -468,7 +521,7 @@ async function saveBillImage() {
     showToast("账单图导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
     exportingImg = false;
-    if (btn) btn.disabled = false;
+    if (btn) btn.disabled = !billIsReady();
   }
 }
 
@@ -477,6 +530,7 @@ async function saveBillImage() {
 async function loadMonthlyReport() {
   if (curView !== "viewBill") return;
   loadMilestones(); // 里程碑与跨度无关，进报告页即拉（失败静默留旧值）
+  setBillLoadState("report", "loading");
   const hint = $("reportSpanHint");
   const body = $("reportBody");
   if (curBillSpan !== "month" && curBillSpan !== "year") {
@@ -487,35 +541,50 @@ async function loadMonthlyReport() {
     loadWeekBill();
     return;
   }
-  hint.classList.add("hidden");
   const generation = ++billRequestGeneration;
+  const span = curBillSpan, offset = weekOffset;
   const isCurrent = () =>
     generation === billRequestGeneration &&
-    (curBillSpan === "month" || curBillSpan === "year") &&
+    span === curBillSpan && offset === weekOffset &&
     curBillTab === "report" &&
     curView === "viewBill";
   try {
-    const bill = await invoke("get_bill", { span: curBillSpan, offset: weekOffset });
+    const bill = await invoke("get_bill", { span, offset });
     if (!isCurrent()) return;
-    // 期号标签与翻页按钮跟本期数据走（paintWeekBill 同款，否则报告页停留在旧标签）
-    $("billWeekLabel").textContent = bill.period_label + " · " + fmtDateRange(bill.period_start, bill.period_end);
-    $("billNextWeek").disabled = !!bill.is_current_period;
     const leaves = await invoke("get_day_overrides", {
       start: String(bill.period_start || ""),
       end: String(bill.period_end || ""),
     });
     if (!isCurrent()) return;
+    // Publish navigation, body and export data together, after both reads succeed.
+    $("billWeekLabel").textContent = bill.period_label + " · " + fmtDateRange(bill.period_start, bill.period_end);
+    $("billNextWeek").disabled = !!bill.is_current_period;
+    reportBillPeriod = billPeriodKey();
+    setBillLoadState("report", "ready");
     paintReport(bill, leaves);
   } catch (e) {
     if (!isCurrent()) return;
     flog("loadReport ERR: " + (e && e.message ? e.message : String(e)));
-    hint.querySelector(".bill-empty-txt").textContent = "报告加载失败";
-    hint.classList.remove("hidden");
-    body.classList.add("hidden");
+    setBillLoadState("report", "error");
   }
 }
 
 function paintReport(bill, leaves) {
+  const hasRecord = (bill.front_seconds || 0) > 0 || (bill.ot_hours || 0) > 0 ||
+    (bill.ot_fee || 0) > 0 || leaves.length > 0 ||
+    (bill.buckets || []).some((b) => b.has_record);
+  const hint = $("reportSpanHint");
+  if (!hasRecord) {
+    reportBill = null;
+    reportBillPeriod = null;
+    reportLeaveCount = 0;
+    hint.querySelector(".bill-empty-txt").textContent = "这一期还没有记录";
+    hint.classList.remove("hidden");
+    $("reportBody").classList.add("hidden");
+    $("reportImageBtn").disabled = true;
+    return;
+  }
+  hint.classList.add("hidden");
   reportBill = bill;
   reportLeaveCount = leaves.length;
   $("reportTitle").textContent = (bill.period_label || "本期") + "战绩";
@@ -529,8 +598,9 @@ function paintReport(bill, leaves) {
   ]);
   rows.push(["休假", leaves.length ? leaves.map((x) => md(x.date)).join("、") + "（" + leaves.length + " 天）" : "无"]);
   rows.push(["加班", (bill.ot_hours || 0) > 0 ? (bill.ot_hours || 0).toFixed(1) + "h · " + fmtMoney(bill.ot_fee) : "—"]);
-  const equiv = currentSlackEquiv(bill.slack_cost || 0);
-  rows.push(["摸鱼率", ((bill.slack_rate || 0) * 100).toFixed(1) + "%" + (equiv ? " " + equiv : "")]);
+  const front = bill.front_seconds || 0;
+  const equiv = moneyConfigured() ? currentSlackEquiv(bill.slack_cost || 0) : "";
+  rows.push(["摸鱼率", front > 0 ? ((bill.slack_rate || 0) * 100).toFixed(1) + "%" + (equiv ? " " + equiv : "") : "暂无记录"]);
   if (bill.hardest) {
     rows.push(["最拼一天", md(bill.hardest.date) + " " + bill.hardest.weekday + " · 加班 " + (bill.hardest.ot_hours || 0).toFixed(1) + "h"]);
   }
@@ -557,7 +627,6 @@ function paintReport(bill, leaves) {
     row.append(l, vEl);
     box.appendChild(row);
   });
-  const front = bill.front_seconds || 0;
   const q = $("reportQuote");
   if (front > 0) {
     q.textContent = weekBillQuip((bill.slack_rate || 0) * 100, moneyConfigured(), curBillSpan);
@@ -574,7 +643,7 @@ async function saveReportImage() {
     showToast("报告按月/年统计——先切到「月」或「年」跨度", "err");
     return;
   }
-  if (!reportBill) {
+  if (!reportIsReady()) {
     showToast("报告还没就绪，稍等一下再试", "err");
     return;
   }
@@ -595,7 +664,7 @@ async function saveReportImage() {
     showToast("报告图导出失败：" + (e && e.message ? e.message : e), "err");
   } finally {
     exportingReport = false;
-    if (btn) btn.disabled = false;
+    if (btn) btn.disabled = !reportIsReady();
   }
 }
 

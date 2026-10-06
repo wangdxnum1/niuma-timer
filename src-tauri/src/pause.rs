@@ -5,7 +5,7 @@
 //!
 //! 暂停语义：三类监控（键鼠 / 应用 / 音频）立即停止记账——已入账时长不回滚，
 //! 未入账增量不累计（各守卫点直接丢弃，见 activity / app_usage / audio_usage
-//! 的 `is_paused` 门控）。恢复瞬间不补记暂停期间的任何时长——「暂停」就是钱先冻结。
+//! 的 `is_paused` 门控）。恢复瞬间不补记暂停期间的监控时长；工资仍按作息推算。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
