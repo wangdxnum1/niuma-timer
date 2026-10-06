@@ -356,30 +356,45 @@ if not errorlevel 1 (
 )
 set "GITCFG=-c credential.helper=wincred -c http.sslBackend=openssl %PROXYARG%"
 
+rem Branch push retries: transient connection resets on the flaky github.com
+rem route die per-connection, so a retry usually lands (v1.9.0 tag needed 3
+rem tries). Falling straight to the Git Data API rebuilds the remote branch
+rem with NEW SHAs and forces a manual fetch+reset alignment - keep that as the
+rem last resort for a truly dead route, not for a transient reset.
+set "BRTRY=0"
+:br_retry
+set /a BRTRY+=1
 "%GIT%" %GITCFG% push origin "%BRANCH%"
+if not errorlevel 1 goto :br_done
+if %BRTRY% GEQ 5 goto :br_api_fallback
+echo     branch push attempt %BRTRY% of 5 failed - retrying in 3 seconds ...
+ping -n 4 127.0.0.1 >nul
+goto :br_retry
+
+:br_api_fallback
+echo     branch push failed 5 times - rebuilding %BRANCH% via the Git Data API.
+echo     Remote commits get new SHAs. Align local afterwards with
+echo     git fetch origin + git reset --hard origin/%BRANCH% - see scripts\push_via_api.py.
+where python >nul 2>&1
 if errorlevel 1 (
-  echo     git push failed - github.com unreachable without proxy.
-  echo     Falling back to Git Data API - api.github.com is reachable directly.
-  echo     Remote commits get new SHAs. Align local afterwards with
-  echo     git fetch origin + git reset --hard origin/%BRANCH% - see scripts\push_via_api.py.
-  where python >nul 2>&1
-  if errorlevel 1 (
-    echo [ERROR] python not found - API fallback needs it
-    popd
-    exit /b 1
-  )
-  rem Branch AND tag in one API call: the API-rebuilt remote head has a
-  rem different sha than the local one, so pushing the local tag with git
-  rem here would point it at a nonexistent commit and trigger CI on it.
-  python "%ROOT%scripts\push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"
-  if errorlevel 1 (
-    echo [ERROR] API fallback push failed
-    popd
-    exit /b 1
-  )
-  echo     pushed %BRANCH% and tag v%VER% via Git Data API
-  goto :done
+  echo [ERROR] python not found - API fallback needs it
+  popd
+  exit /b 1
 )
+rem Branch AND tag in one API call: the API-rebuilt remote head has a
+rem different sha than the local one, so pushing the local tag with git
+rem here would point it at a nonexistent commit and trigger CI on it.
+python "%ROOT%scripts\push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"
+if errorlevel 1 (
+  echo [ERROR] API fallback push failed
+  popd
+  exit /b 1
+)
+echo     pushed %BRANCH% and tag v%VER% via Git Data API
+set "API_PUSHED=yes"
+goto :done
+
+:br_done
 rem Tag push retries + API-only fallback. The branch push above opens its own
 rem connection; on a flaky github.com route the tag push can die alone with
 rem "Connection was reset" while the branch landed (v1.9.0, 2026-10-05). A failed
@@ -446,7 +461,14 @@ echo =========================================
 echo   Done locally. Branch %BRANCH% and tag v%VER% pushed.
 echo   GitHub Actions will now rebuild, package and publish:
 echo     https://github.com/%REPO%/actions
+echo   api.github.com is reachable even when github.com is not - watch the run:
+echo     https://api.github.com/repos/%REPO%/actions/runs?per_page=1
 echo   Pre-flight artifacts kept in: %BIN%\package
+if defined API_PUSHED (
+  echo   NOTE: the remote branch was rebuilt via the API with NEW SHAs.
+  echo   Align local before committing anything else, or the next push diverges:
+  echo     git fetch origin ^&^& git reset --hard origin/%BRANCH%
+)
 echo =========================================
 popd
 endlocal

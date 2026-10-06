@@ -43,6 +43,9 @@ has("缓存新鲜度守卫（7 天）", denyJs, "MAX_AGE_DAYS = 7");
 console.log("== release.bat push 的 API 备援接线 ==");
 has("push 失败转 push_via_api.py（分支+tag 同次调用）", relBat, 'push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"');
 has("API 路径不走本地 git push tag（防 tag 指向不存在的远端提交）", relBat, "nonexistent commit");
+has("分支推送带 5 次重试（瞬断不再直接走 API 重建 SHA）", relBat, "if %BRTRY% GEQ 5 goto :br_api_fallback");
+has("tag 推送带 5 次重试（v1.9.0 实战：第 3 次才落）", relBat, "if %TAGTRY% GEQ 5 goto :tag_api_fallback");
+has("API 备援后提醒本地对齐（SHA 重建，防下次 push 分叉）", relBat, "git fetch origin ^&^& git reset --hard origin/%BRANCH%");
 
 console.log("== release.bat 版本同步覆盖全部五处 ==");
 const syncPy = read("scripts/sync_release_docs.py");
