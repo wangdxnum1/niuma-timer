@@ -72,6 +72,20 @@ if not "%BRANCH%"=="main" (
 )
 
 rem ---------------- 1. version ----------------
+rem Python is needed here already: the version bump must cover ALL five places
+rem (Cargo.toml / tauri.conf.json / README x2 / CHANGELOG rename) or the
+rem test_readme gate dies mid-release (two manual misses 2026-10-05/06).
+set "PYEXE="
+where py >nul 2>&1
+if not errorlevel 1 set "PYEXE=py -3"
+if not defined PYEXE (
+  where python >nul 2>&1
+  if not errorlevel 1 set "PYEXE=python"
+)
+if not defined PYEXE (
+  echo [ERROR] Python 3 is required for release metadata and docs sync.
+  exit /b 1
+)
 set "RAWVER="
 for /f "usebackq tokens=2 delims==" %%a in (`findstr /b /c:"version" "%SRC%\Cargo.toml"`) do (
   if not defined RAWVER set "RAWVER=%%a"
@@ -112,6 +126,13 @@ if not "%VER%"=="%CURVER%" (
   if not "!JSONVER!"=="%VER%" (
     echo [ERROR] version sync failed for tauri.conf.json. Restore with:
     echo     git checkout -- src-tauri\Cargo.toml src-tauri\tauri.conf.json
+    exit /b 1
+  )
+  rem Docs move with the version too: README x2 + CHANGELOG section rename.
+  rem Without this the test_readme gate dies mid-release and leaves a dirty tree.
+  %PYEXE% "%ROOT%scripts\sync_release_docs.py" "%VER%"
+  if errorlevel 1 (
+    echo [ERROR] release docs sync failed - prepare CHANGELOG entries and retry.
     exit /b 1
   )
 )
@@ -258,20 +279,8 @@ if not exist "%BIN%\package\*.pdb.zip" if not exist "%BIN%\package\*.pdb" (
   exit /b 1
 )
 
-rem  Pick a Python interpreter for the gh-less publish path
-set "PYEXE="
-where py >nul 2>&1
-if not errorlevel 1 set "PYEXE=py -3"
-if not defined PYEXE (
-  where python >nul 2>&1
-  if not errorlevel 1 set "PYEXE=python"
-)
-
 rem Metadata is mandatory before git or network side effects.
-if not defined PYEXE (
-  echo [ERROR] Python 3 is required to validate release metadata.
-  exit /b 1
-)
+rem (PYEXE probed in step 1 - the docs sync needs it before the version bump.)
 (
   %PYEXE% "%ROOT%scripts\publish_release.py" --tag "v%VER%" --version "%VER%" --package "%BIN%\package" --repo "%REPO%" --generate-notes-only
   if errorlevel 1 exit /b 1

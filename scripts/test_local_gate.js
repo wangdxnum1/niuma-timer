@@ -44,6 +44,12 @@ console.log("== release.bat push 的 API 备援接线 ==");
 has("push 失败转 push_via_api.py（分支+tag 同次调用）", relBat, 'push_via_api.py" "%BRANCH%" --base "origin/%BRANCH%" --tag "v%VER%"');
 has("API 路径不走本地 git push tag（防 tag 指向不存在的远端提交）", relBat, "nonexistent commit");
 
+console.log("== release.bat 版本同步覆盖全部五处 ==");
+const syncPy = read("scripts/sync_release_docs.py");
+has("版本同步段调用 docs 同步脚本（README×2+CHANGELOG 归段自动带上）", relBat, 'sync_release_docs.py" "%VER%"');
+has("docs 同步脚本存在且有入口", syncPy, "def main()");
+has("docs 同步脚本幂等（重跑安全）", syncPy, "幂等");
+
 console.log("== workflow 工具钉版 ==");
 has("tests.yml cargo-deny 精确钉版", testsYml, "tool: cargo-deny@0.20.2");
 has("release.yml tauri-cli 大版本钉版", releaseYml, "tool: tauri-cli@2");

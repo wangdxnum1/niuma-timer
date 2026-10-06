@@ -228,6 +228,9 @@ if errorlevel 1 exit /b 1
 rem Emergency-push tool regression tests (offline; no network, no credentials).
 python "%ROOT%scripts\test_push_via_api.py"
 if errorlevel 1 exit /b 1
+rem Release-docs sync regression tests (offline; five-place version coverage).
+python "%ROOT%scripts\test_sync_release_docs.py"
+if errorlevel 1 exit /b 1
 goto :eof
 
 :test_done
