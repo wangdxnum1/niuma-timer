@@ -125,6 +125,15 @@ lines.forEach(function (l, i) {
   );
 });
 
+// Native host builds must win over stale artifacts from an earlier explicit target.
+fs.writeFileSync(STUB, STUB_SRC.replace(/target\\+%TRIPLE%\\+%FL%/g, 'target\\%FL%').replace('echo stub >', 'echo native >'), "ascii");
+const nativeRun = spawnSync("cmd", ["/c", RUNNER], { cwd: ROOT, stdio: "inherit" });
+ok("默认 host 构建与旧 target 目录共存时退出码 0", nativeRun.status === 0);
+for (const flavor of ["debug", "release"]) {
+  ok(`${flavor} 桩实际生成默认 host 目录`, fs.existsSync(path.join(FIXTURE, "src-tauri", "target", flavor, "niuma-timer.exe")));
+  ok(`${flavor} 优先复制默认 host 的新产物`, fs.readFileSync(path.join(FIXTURE, "bin", flavor, "niuma-timer.exe"), "utf8").trim() === "native");
+}
+
 // ---- package flavor（2026-10-04 批次六补覆盖）：桩掉 `cargo tauri build`，
 // 伪造带当前版本号（APPVER 由 build.bat 导出）的安装包/签名/便携 exe，验证
 // ① 版本过滤（陈旧 9.9.9 产物不得混入 bin\package）；② 签名随包同拷；
@@ -203,6 +212,14 @@ ok(
   "未伪造 PDB 时不产出 pdb.zip（tar 步骤的 if exist 守卫）",
   !fs.existsSync(path.join(pkgDir, "niuma-timer-0.0.0-portable.pdb.zip"))
 );
+
+fs.writeFileSync(path.join(PKG_TMP, "stubtauri.bat"), PKG_STUB_SRC.replace(/target\\+%TRIPLE%\\+release/g, 'target\\release').replaceAll('echo stub >', 'echo native >').replaceAll('echo sig >', 'echo native-sig >'), "ascii");
+const nativePkgRun = spawnSync("cmd", ["/c", PKG_RUNNER], { cwd: ROOT, stdio: "inherit" });
+ok("默认 host package 与旧 target 目录共存时退出码 0", nativePkgRun.status === 0);
+ok("package 桩实际生成默认 host 目录", fs.existsSync(path.join(PKG, "src-tauri", "target", "release", "niuma-timer.exe")));
+for (const name of expectArtifacts) {
+  ok(`package 优先复制默认 host 的 ${name}`, fs.readFileSync(path.join(pkgDir, name), "utf8").trim() === (name.endsWith(".sig") ? "native-sig" : "native"));
+}
 
 // 失败传播：标记文件让桩以 3 退出，build.bat package 必须如实失败
 fs.writeFileSync(path.join(PKG_TMP, "fail-tauri"), "x");

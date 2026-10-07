@@ -15,7 +15,7 @@ if errorlevel 1 exit /b 1
 
 if not exist "%BIN%" mkdir "%BIN%"
 
-rem Detect rustc host triple; cargo outputs exe to target\<triple>\<flavor>
+rem Detect rustc host triple for fallback artifacts from explicit-target builds.
 set "TRIPLE="
 for /f "tokens=2" %%i in ('rustc -vV 2^>nul ^| findstr /C:"host:"') do set "TRIPLE=%%i"
 if "%TRIPLE%"=="" (
@@ -77,8 +77,8 @@ if %ERRCODE% neq 0 (
   echo Build failed for %F% with code %ERRCODE%
   exit /b 1
 )
-set "SRCDIR=%SRC%\target\%TRIPLE%\%F%"
-if not exist "%SRCDIR%\niuma-timer.exe" set "SRCDIR=%SRC%\target\%F%"
+set "SRCDIR=%SRC%\target\%F%"
+if not exist "%SRCDIR%\niuma-timer.exe" set "SRCDIR=%SRC%\target\%TRIPLE%\%F%"
 if not exist "%BIN%\%F%" mkdir "%BIN%\%F%"
 copy /Y "%SRCDIR%\niuma-timer.exe" "%BIN%\%F%\"
 if errorlevel 1 (
@@ -109,8 +109,8 @@ if %ERRCODE% neq 0 (
   echo NSIS will be downloaded automatically on first package run
   exit /b 1
 )
-set "BUNDLE=%SRC%\target\%TRIPLE%\release\bundle"
-if not exist "%BUNDLE%" set "BUNDLE=%SRC%\target\release\bundle"
+set "BUNDLE=%SRC%\target\release\bundle"
+if not exist "%BUNDLE%" set "BUNDLE=%SRC%\target\%TRIPLE%\release\bundle"
 rem Copy only artifacts matching the current version: cargo tauri build never
 rem deletes stale bundles from older releases, so a bare *.exe/*.msi glob would
 rem sweep old-version installers into bin\package (and onto the GitHub Release).
@@ -128,8 +128,8 @@ if errorlevel 1 (
   echo [ERROR] failed to copy MSI installer from "%BUNDLE%\msi\"
   exit /b 1
 )
-set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
-if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
+set "PORTABLE=%SRC%\target\release\niuma-timer.exe"
+if not exist "%PORTABLE%" set "PORTABLE=%SRC%\target\%TRIPLE%\release\niuma-timer.exe"
 copy /Y "%PORTABLE%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe" >nul
 if errorlevel 1 (
   echo [ERROR] failed to copy portable exe from "%PORTABLE%"
@@ -158,8 +158,8 @@ if exist "%BUNDLE%\msi\*%APPVER%*.msi.sig" copy /Y "%BUNDLE%\msi\*%APPVER%*.msi.
 rem The portable build is a hand-copied bare exe: if tauri produced a
 rem signature for it, rename to the portable name so the .sig file carries
 rem the version (release verification relies on it).
-set "RAWSIG=%SRC%\target\%TRIPLE%\release\niuma-timer.exe.sig"
-if not exist "%RAWSIG%" set "RAWSIG=%SRC%\target\release\niuma-timer.exe.sig"
+set "RAWSIG=%SRC%\target\release\niuma-timer.exe.sig"
+if not exist "%RAWSIG%" set "RAWSIG=%SRC%\target\%TRIPLE%\release\niuma-timer.exe.sig"
 if exist "%RAWSIG%" copy /Y "%RAWSIG%" "%BIN%\package\niuma-timer-%APPVER%-portable.exe.sig" >nul
 if errorlevel 1 (
   echo [ERROR] failed to copy portable signature from "%RAWSIG%"

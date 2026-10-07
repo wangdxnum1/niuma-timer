@@ -6,6 +6,12 @@
 
 # 静态链接 MSVC CRT（/MT），让发布版 exe 不依赖目标机的「Visual C++ Redistributable」。
 # 否则 cargo build 出的动态 CRT exe 在缺 VC++ 运行库的干净 Win11 上无法启动（表现为双击无反应）。
-# 仅影响 MSVC target；GNU/Mac/Linux 构建忽略此 flag。
-[build]
-rustflags = ["-C", "target-feature=+crt-static"]
+# 不设置 build.target，默认按当前 host 编译；CRT 参数仅匹配 Windows MSVC。
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+# 仅 +crt-static 仍可能让原生依赖的默认库解析选中动态 ucrt.lib。
+# 排除动态 UCRT 并显式选择静态 libucrt.lib；以最终 EXE 导入表为准。
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/NODEFAULTLIB:ucrt",
+    "-C", "link-arg=libucrt.lib",
+]
