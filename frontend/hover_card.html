@@ -35,7 +35,8 @@
         padding: 12px 15px 10px;
         background: linear-gradient(165deg, #232328 0%, #1b1b1f 100%);
         border: 1px solid rgba(255, 214, 80, 0.28);
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+        /* 外围 8px 保持透明：大外阴影会被 WebView 矩形边界裁成半透明黑框。 */
+        box-shadow: none;
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -409,8 +410,8 @@
       <div class="foot" id="foot"><i class="dot"></i><span id="footText">—</span></div>
     </div>
     <!-- tl_math.js 与主界面共享时间轴数学（minutesOf/overlapMin/spanPct）；
-         ?v=db28f28b 缓存戳由 build.rs 与 index.html 同源回写 -->
-    <script src="js/tl_math.js?v=db28f28b"></script>
+         ?v=351e5f26 缓存戳由 build.rs 与 index.html 同源回写 -->
+    <script src="js/tl_math.js?v=351e5f26"></script>
     <script>
       // ===== 前端错误上报（emit 到 Rust 端 eprintln 打印，便于排查"不显示"类问题）=====
       function reportErr(msg) {
