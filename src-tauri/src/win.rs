@@ -17,7 +17,6 @@
 
 use core::ffi::c_void;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -85,29 +84,16 @@ pub fn run_message_loop() {
     }
 }
 
-/// message-only 窗口类是否已注册（进程内只注册一次）。
-static RAW_CLASS_READY: AtomicBool = AtomicBool::new(false);
-
-/// 注册（仅一次）一个 message-only 窗口类，随后每次「启用」都基于它创建窗口。
+/// 按类名注册 message-only 窗口类；同名已注册由 Windows 判定为可复用。
+/// 锁屏与输入监控使用不同类名，不能共用一个「已注册」标记。
 ///
-fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
-    if RAW_CLASS_READY.load(Ordering::SeqCst) {
-        return;
-    }
+fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) -> windows::core::Result<()> {
     let wc = WNDCLASSW {
         style: WNDCLASS_STYLES(0),
         lpfnWndProc: wndproc,
         cbClsExtra: 0,
         cbWndExtra: 0,
-        hInstance: match unsafe { GetModuleHandleW(None) } {
-            Ok(h) => h.into(),
-            Err(e) => {
-                crate::db::debug_log(&format!(
-                    "[win] GetModuleHandleW 失败，Raw Input 窗口类未注册: {e}"
-                ));
-                return;
-            }
-        },
+        hInstance: unsafe { GetModuleHandleW(None) }?.into(),
         hIcon: Default::default(),
         hCursor: Default::default(),
         hbrBackground: Default::default(),
@@ -119,11 +105,10 @@ fn ensure_raw_class(class_name: &[u16], wndproc: WNDPROC) {
     if atom == 0 {
         let err = unsafe { GetLastError() };
         if err != ERROR_CLASS_ALREADY_EXISTS {
-            crate::db::debug_log(&format!("[win] RegisterClassW 失败: {err:?}"));
-            return;
+            return Err(windows::core::Error::from_hresult(err.to_hresult()));
         }
     }
-    RAW_CLASS_READY.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 /// message-only 窗口的 RAII 守卫：Drop 时自动注销 Raw Input 并销毁窗口。
@@ -147,7 +132,7 @@ impl MessageWindow {
     /// 会沿用首次注册的类（含其 wndproc）。
     pub fn create(class_name: &str, wndproc: WNDPROC) -> windows::core::Result<Self> {
         let wide: Vec<u16> = class_name.encode_utf16().chain(Some(0)).collect();
-        ensure_raw_class(&wide, wndproc);
+        ensure_raw_class(&wide, wndproc)?;
         let hwnd = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -194,28 +179,30 @@ impl MessageWindow {
         Ok(())
     }
 
-    /// 注销 Raw Input 设备。`RIDEV_REMOVE` 下 `hwndTarget` 被系统忽略，仍传 hwnd 无害。
+    /// 注销 Raw Input 设备。`RIDEV_REMOVE` 要求 `hwndTarget` 为 NULL。
     /// 只在实际注册过时才调用，避免未注册时的多余系统调用。
     pub fn unregister_raw_input(&mut self) {
         if !self.raw_registered {
             return;
         }
-        self.raw_registered = false;
         let devices = [
             RAWINPUTDEVICE {
                 usUsagePage: 0x01,
                 usUsage: 0x06,
                 dwFlags: RIDEV_REMOVE,
-                hwndTarget: self.hwnd,
+                hwndTarget: HWND::default(),
             },
             RAWINPUTDEVICE {
                 usUsagePage: 0x01,
                 usUsage: 0x02,
                 dwFlags: RIDEV_REMOVE,
-                hwndTarget: self.hwnd,
+                hwndTarget: HWND::default(),
             },
         ];
-        let _ = unsafe { RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) };
+        match unsafe { RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) } {
+            Ok(()) => self.raw_registered = false,
+            Err(e) => crate::db::debug_log(&format!("[win] Raw Input 注销失败: {e}")),
+        }
     }
 
     /// 在调用线程上跑消息循环，直到本线程收到 `WM_QUIT`。
@@ -1052,6 +1039,77 @@ mod tests {
     // 仅测试用到：正式代码里 HID 走 raw_input_len_ok 的 `_` 分支，故不占顶层 import
     use windows::Win32::UI::Input::RIM_TYPEHID;
     use windows::Win32::UI::WindowsAndMessaging::RI_MOUSE_LEFT_BUTTON_DOWN;
+
+    unsafe extern "system" fn test_message_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> windows::Win32::Foundation::LRESULT {
+        windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+
+    #[test]
+    fn message_window_registers_each_class_and_can_recreate() {
+        let lock = MessageWindow::create("NiumaTestLockClass", Some(test_message_proc))
+            .expect("first monitor class should create a window");
+        let input = MessageWindow::create("NiumaTestInputClass", Some(test_message_proc))
+            .expect("input class must be registered independently of lock monitor");
+        assert_ne!(lock.hwnd(), input.hwnd());
+        drop(input);
+        drop(lock);
+        MessageWindow::create("NiumaTestInputClass", Some(test_message_proc))
+            .expect("an existing class must allow another window");
+        MessageWindow::create("NiumaTestLockClass", Some(test_message_proc))
+            .expect("monitor creation order must not matter");
+    }
+
+    fn registered_input_devices() -> Vec<RAWINPUTDEVICE> {
+        use windows::Win32::UI::Input::GetRegisteredRawInputDevices;
+        let mut count = 0;
+        let ret = unsafe {
+            GetRegisteredRawInputDevices(None, &mut count, size_of::<RAWINPUTDEVICE>() as u32)
+        };
+        assert_ne!(ret, u32::MAX);
+        if count == 0 {
+            return Vec::new();
+        }
+        let mut devices = vec![RAWINPUTDEVICE::default(); count as usize];
+        let ret = unsafe {
+            GetRegisteredRawInputDevices(
+                Some(devices.as_mut_ptr()),
+                &mut count,
+                size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        assert_ne!(ret, u32::MAX);
+        devices.truncate(ret as usize);
+        devices
+    }
+
+    #[test]
+    fn raw_input_unregisters_devices_and_can_register_again() {
+        let mut input = MessageWindow::create("NiumaTestDeviceClass", Some(test_message_proc))
+            .expect("input window should create");
+        for _ in 0..2 {
+            input
+                .register_raw_input()
+                .expect("register keyboard and mouse");
+            let devices = registered_input_devices();
+            for usage in [0x02, 0x06] {
+                assert!(devices.iter().any(|d| d.usUsagePage == 1
+                    && d.usUsage == usage
+                    && d.hwndTarget == input.hwnd()));
+            }
+            input.unregister_raw_input();
+            assert!(
+                registered_input_devices()
+                    .iter()
+                    .all(|d| d.usUsagePage != 1 || ![0x02, 0x06].contains(&d.usUsage)),
+                "disabled input devices must be removed"
+            );
+        }
+    }
 
     /// 把一块 `RAWINPUT` 按「系统实际填了多少字节」切成字节缓冲。
     /// 键盘事件只有 40 字节（header+RAWKEYBOARD），比 RAWINPUT 的 48 短——

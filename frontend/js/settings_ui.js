@@ -124,7 +124,7 @@ function setSettingsSaveState(state, message) {
   if (!target) return;
   target.classList.remove("settings-status-faded");
   target.dataset.state = state;
-  const labels = { loading: "正在加载", saving: "保存中…", saved: "已自动保存",
+  const labels = { loading: "正在加载", saving: "保存中…", saved: "",
     dirty: "编辑后自动保存", error: "未保存，请重试", ready: "" };
   target.textContent = message ?? labels[state] ?? "";
   if (state === "saved") {
