@@ -11,6 +11,7 @@
 
 use crate::sync;
 mod hover_state;
+mod main_thread;
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -173,6 +174,22 @@ fn physical_tray_rect(rect: tauri::Rect, scale: f64) -> (f64, f64, f64, f64) {
 }
 
 fn tray_rect(app: &AppHandle, cursor: PhysicalPosition<f64>) -> Option<(f64, f64, f64, f64)> {
+    let ui_app = app.clone();
+    // TrayIcon 内部是非原子 Rc。连获取、克隆、Drop 都必须留在 UI 线程，
+    // 不能先在 worker 取得句柄，再让 rect() 内部投递到 UI 线程。
+    main_thread::query(
+        |task| app.run_on_main_thread(task),
+        move || tray_rect_on_main_thread(&ui_app, cursor),
+        Duration::from_millis(500),
+    )
+    .flatten()
+}
+
+/// 仅由主线程闭包调用；返回普通坐标，不把托盘句柄传回 worker。
+fn tray_rect_on_main_thread(
+    app: &AppHandle,
+    cursor: PhysicalPosition<f64>,
+) -> Option<(f64, f64, f64, f64)> {
     let rect = app.tray_by_id("main")?.rect().ok()??;
     // Windows Shell 返回物理矩形；常规采样不必跨 UI 线程查询显示器。
     let physical = matches!(rect.position, tauri::Position::Physical(_))
@@ -595,17 +612,23 @@ fn ensure_hover_card(app: &AppHandle) -> Option<WebviewWindow> {
 /// 直接查询窗口可见性，不依赖任何全局状态。
 pub fn update_tray(app: &AppHandle, status: &DayStatus) {
     let cfg = sync::lock(&app.state::<crate::AppState>().config, "state.config").clone();
-    if let Some(tray) = app.tray_by_id("main") {
-        if cfg.tray_hover_card {
-            let _ = tray.set_tooltip::<&str>(None);
-        } else {
-            // 阶段 A：有可用更新时在 tooltip 追加提示（无更新则后缀为空，行为不变）
-            let suffix = sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION")
-                .as_deref()
-                .map(|v| format!("（有新版本 v{v}）"))
-                .unwrap_or_default();
-            let _ = tray.set_tooltip(Some(&format!("{}{suffix}", status.tooltip)));
+    let tooltip = if cfg.tray_hover_card {
+        None
+    } else {
+        let suffix = sync::lock(&UPDATE_VERSION, "tray::UPDATE_VERSION")
+            .as_deref()
+            .map(|v| format!("（有新版本 v{v}）"))
+            .unwrap_or_default();
+        Some(format!("{}{suffix}", status.tooltip))
+    };
+    let ui_app = app.clone();
+    // scheduler 只传入普通文本；托盘句柄完整生命周期留在 UI 线程。
+    if let Err(e) = app.run_on_main_thread(move || {
+        if let Some(tray) = ui_app.tray_by_id("main") {
+            let _ = tray.set_tooltip(tooltip.as_deref());
         }
+    }) {
+        hover_log(&format!("[tray] tooltip 主线程调度失败: {e}"));
     }
     // 暂停菜单项文案跟随全局状态；先比对现文案，避免每秒对原生菜单做无谓的 set_text
     if let Some(item) = sync::lock(&PAUSE_ITEM, "tray::PAUSE_ITEM").as_ref() {
