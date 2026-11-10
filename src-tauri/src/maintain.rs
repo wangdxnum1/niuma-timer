@@ -504,7 +504,7 @@ pub fn storage_info(cfg: &Config) -> StorageInfo {
         for (table, col) in DATED_TABLES {
             let sql = format!("SELECT MIN({col}) FROM {table}");
             if let Ok(Some(d)) = g.query_row(&sql, [], |r| r.get::<_, Option<String>>(0)) {
-                if min.as_deref().map_or(true, |m| d.as_str() < m) {
+                if min.as_deref().is_none_or(|m| d.as_str() < m) {
                     min = Some(d);
                 }
             }

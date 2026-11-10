@@ -74,7 +74,7 @@ pub fn start(app: AppHandle) {
 
                 // ── 每 5 拍：跨天重拉节假日 + 锁屏加班落盘 ──
                 // 从 1s 放宽到 5s 对加班统计无影响（锁屏→记加班的延迟 ≤5s）。
-                if beats % EVERY_5S == 0 {
+                if beats.is_multiple_of(EVERY_5S) {
                     let state = app.state::<crate::AppState>();
                     run("rollover_day", || {
                         crate::maybe_rollover_day(state.inner(), &app)
@@ -85,7 +85,7 @@ pub fn start(app: AppHandle) {
                 }
 
                 // ── 每 10 拍：活动统计落盘 + 应用使用结算 ──
-                if beats % EVERY_10S == 0 {
+                if beats.is_multiple_of(EVERY_10S) {
                     run("activity_flush", crate::activity::flush_now);
                     run("app_usage_tick", crate::app_usage::tick_now);
                 }
@@ -93,7 +93,7 @@ pub fn start(app: AppHandle) {
                 // ── 每日一次：数据生命周期维护（WAL 收缩 + 过期图标 / 数据清理）──
                 // 用「日期变了」而不是纯节拍计数：程序重启后当天还能补跑一次，
                 // 不会因计数归零而漏掉一整天的维护（WAL 会一直胖着）。
-                if beats % EVERY_60S == 0 {
+                if beats.is_multiple_of(EVERY_60S) {
                     let today = chrono::Local::now().date_naive();
                     if last_maint != Some(today) {
                         last_maint = Some(today);

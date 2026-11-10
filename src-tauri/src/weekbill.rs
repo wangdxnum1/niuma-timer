@@ -413,14 +413,14 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
         keys_total += keys;
         clicks_total += clicks;
 
-        if ot_hours > 0.0 && hardest.as_ref().map_or(true, |h| ot_hours > h.ot_hours) {
+        if ot_hours > 0.0 && hardest.as_ref().is_none_or(|h| ot_hours > h.ot_hours) {
             hardest = Some(HardestDay {
                 date: key.clone(),
                 weekday: weekday_cn(d).into(),
                 ot_hours,
             });
         }
-        if has_record && rate > 0.0 && slackiest.as_ref().map_or(true, |s| rate > s.rate) {
+        if has_record && rate > 0.0 && slackiest.as_ref().is_none_or(|s| rate > s.rate) {
             slackiest = Some(SlackiestDay {
                 date: key.clone(),
                 weekday: weekday_cn(d).into(),

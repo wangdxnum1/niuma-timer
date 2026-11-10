@@ -796,7 +796,7 @@ pub fn extract_icon_rgba(exe_path: &str) -> Option<IconRgba> {
         let len = (w * h * 4) as usize;
         let mut rgba = vec![0u8; len];
         std::ptr::copy_nonoverlapping(bits as *const u8, rgba.as_mut_ptr(), len);
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
         // 位图仍被 DC 选中时 DeleteObject 会失败（GDI 规则），必须先还原再让守卫释放
