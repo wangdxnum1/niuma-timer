@@ -201,6 +201,30 @@ fn rate_of(cfg: &Config, kind: DayKind) -> f64 {
     }
 }
 
+/// 休息日加班配置的免计时段（分钟对）。只收「起止都填了且结束晚于开始」的时段；
+/// 配置残缺或非法时按未配置处理，自动计算退回旧口径而不是凭空扣时长。
+fn rest_break_windows(cfg: &Config) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    for (start, end) in [
+        (&cfg.rest_break1_start, &cfg.rest_break1_end),
+        (&cfg.rest_break2_start, &cfg.rest_break2_end),
+    ] {
+        if let (Some(s), Some(e)) = (start.as_deref(), end.as_deref()) {
+            if let (Some(a), Some(b)) = (to_min(s), to_min(e)) {
+                if b > a {
+                    out.push((a, b));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 两个区间的重叠分钟数（无交集返回 0）
+fn overlap_min(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
+    (a1.min(b1) - a0.max(b0)).max(0.0)
+}
+
 /// 方案一：有效时长计算
 /// - 不足 1 小时 → 0（无效）
 /// - \>= 1 小时 → 向下取 0.5 小时
@@ -233,14 +257,17 @@ pub fn calc_record_auto(
     compute_record(date, end_min, cross, None, cfg, day_kind(date, holiday))
 }
 
-/// 核心计算：给定明确的加班起算时间字符串，计算单日记录。
+/// 核心计算：按配置生成一条记录草稿（**不做「不足 1 小时」淘汰**，由调用方按路径决定）。
 /// 抽出来供自动锁屏路径与手动录入路径共用，保证规则一致。
 ///
 /// `lock_min` 是**归属日内**的结束分钟数，跨午夜时已由调用方 +24h（可超过 1440）；
 /// `cross_midnight` 仅用于回填记录的展示标记。
 /// `ot_start_override` 只在手动录入时由调用方给出（用户在表单里覆盖起算时间），
 /// 否则按 [`ot_start_of`] 依日期类型选取。
-fn compute_record(
+///
+/// 休息日 / 法定节假日会扣除配置的免计时段，并按覆盖的餐段计算餐数；
+/// 工作日保持原口径（不扣时段、固定 1 餐）。
+fn build_record(
     date: NaiveDate,
     lock_min: f64,
     cross_midnight: bool,
@@ -262,16 +289,33 @@ fn compute_record(
         return None;
     }
 
-    let raw_hours = (lock_min - ot_start_min) / 60.0;
+    // 免计时段只作用于休息日/法定节假日；工作日按原口径直接算
+    let (raw_min, meal_count) = if kind.is_rest() {
+        let windows = rest_break_windows(cfg);
+        if windows.is_empty() {
+            (lock_min - ot_start_min, 1.0)
+        } else {
+            let deducted: f64 = windows
+                .iter()
+                .map(|&(bs, be)| overlap_min(ot_start_min, lock_min, bs, be))
+                .sum();
+            // 有重叠即算一餐：加班到饭点就该有饭补（用户确认的口径）
+            let meals = windows
+                .iter()
+                .filter(|&&(bs, be)| bs < lock_min && be > ot_start_min)
+                .count() as f64;
+            // 两个免计时段若互相重叠会重复扣减，钳到 0 防止算出负时长
+            ((lock_min - ot_start_min - deducted).max(0.0), meals)
+        }
+    } else {
+        (lock_min - ot_start_min, 1.0)
+    };
+
+    let raw_hours = raw_min / 60.0;
     let valid_hours = calc_valid_hours(raw_hours);
-
-    if valid_hours < 1.0 {
-        return None; // 不足 1 小时
-    }
-
     let fee = valid_hours * rate_of(cfg, kind);
     let meal = if cfg.overtime_meal_enabled {
-        cfg.overtime_meal
+        cfg.overtime_meal * meal_count
     } else {
         0.0
     };
@@ -296,6 +340,22 @@ fn compute_record(
     })
 }
 
+/// 自动路径的判定入口：在 [`build_record`] 之上叠加「不足 1 小时 = 无有效加班」。
+fn compute_record(
+    date: NaiveDate,
+    lock_min: f64,
+    cross_midnight: bool,
+    ot_start_override: Option<&str>,
+    cfg: &Config,
+    kind: DayKind,
+) -> Option<OvertimeRecord> {
+    let rec = build_record(date, lock_min, cross_midnight, ot_start_override, cfg, kind)?;
+    if rec.valid_hours < 1.0 {
+        return None; // 不足 1 小时
+    }
+    Some(rec)
+}
+
 /// 手动录入请求：前端提交日期 + 下班时间（+ 可选起算时间覆盖）
 #[derive(Clone, Debug, Deserialize)]
 pub struct ManualOvertimeInput {
@@ -311,6 +371,17 @@ pub struct ManualOvertimeInput {
     /// `cross_midnight`。写成 `crossMidnight` 会命中 `#[serde(default)]` 变成 false。
     #[serde(default)]
     pub cross_midnight: bool,
+    /// 可选：覆盖有效加班时长（小时）。None = 按规则自动计算。
+    ///
+    /// 显式覆盖时允许低于「不足 1 小时」的自动门槛——用户既然手填就是明确意图。
+    #[serde(default)]
+    pub valid_hours: Option<f64>,
+    /// 可选：覆盖加班费（元）。None = 有效时长 × 费率。
+    #[serde(default)]
+    pub fee: Option<f64>,
+    /// 可选：覆盖饭补（元）。None = 餐补单价 × 自动餐数（休息日按覆盖的餐段计）。
+    #[serde(default)]
+    pub meal: Option<f64>,
 }
 
 /// "YYYY-MM-DD" + "HH:MM" → 当天本地 DateTime
@@ -383,11 +454,7 @@ pub fn save_manual(
             input.lock_time, ot_start_str
         ));
     }
-    let raw_hours = (lock_min - ot_start_min) / 60.0;
-    if calc_valid_hours(raw_hours) < 1.0 {
-        return Err("加班时长不足 1 小时，无法生成有效记录".to_string());
-    }
-    let rec = compute_record(
+    let rec = build_record(
         date,
         lock_min,
         input.cross_midnight,
@@ -396,8 +463,47 @@ pub fn save_manual(
         kind,
     )
     .ok_or_else(|| "无法生成加班记录".to_string())?;
+    let rec = apply_overrides(rec, &input, cfg, kind)?;
     // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
     upsert_manual(rec.clone())?;
+    Ok(rec)
+}
+
+/// 把手动覆盖值套到自动草稿上，返回最终记录。
+///
+/// 优先级：`valid_hours` 覆盖时长（并作为 `fee` 的默认基数）→ `fee` 直接覆盖费用 →
+/// `meal` 直接覆盖饭补；`total` 始终按 `fee + meal` 重算，避免三者不一致。
+/// 显式覆盖时长时允许低于「不足 1 小时」的自动门槛。
+fn apply_overrides(
+    mut rec: OvertimeRecord,
+    input: &ManualOvertimeInput,
+    cfg: &Config,
+    kind: DayKind,
+) -> Result<OvertimeRecord, String> {
+    // 覆盖值必须是非负有限数——负数/NaN 落库会让月度汇总出现负金额
+    for (name, value) in [
+        ("有效时长", input.valid_hours),
+        ("加班费", input.fee),
+        ("饭补", input.meal),
+    ] {
+        if let Some(v) = value {
+            if !v.is_finite() || v < 0.0 {
+                return Err(format!("{name}必须是不小于 0 的数值"));
+            }
+        }
+    }
+    // 未显式覆盖时长时仍守「不足 1 小时」门槛；覆盖了就尊重用户输入
+    if rec.valid_hours < 1.0 && input.valid_hours.is_none() {
+        return Err("加班时长不足 1 小时，无法生成有效记录".to_string());
+    }
+    if let Some(v) = input.valid_hours {
+        rec.valid_hours = v;
+    }
+    rec.fee = input.fee.unwrap_or(rec.valid_hours * rate_of(cfg, kind));
+    if let Some(v) = input.meal {
+        rec.meal = v;
+    }
+    rec.total = rec.fee + rec.meal;
     Ok(rec)
 }
 
@@ -551,6 +657,31 @@ mod tests {
             .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(hh, mm, 0).unwrap()))
             .single()
             .unwrap()
+    }
+
+    /// 手动录入请求（默认不带任何覆盖）
+    fn manual(date: &str, lock: &str) -> ManualOvertimeInput {
+        ManualOvertimeInput {
+            date: date.into(),
+            lock_time: lock.into(),
+            ot_start: None,
+            cross_midnight: false,
+            valid_hours: None,
+            fee: None,
+            meal: None,
+        }
+    }
+
+    /// 休息日免计时段配置：午休 12:00-13:30、晚饭 17:30-18:30
+    fn rest_cfg_with_breaks() -> Config {
+        Config {
+            weekend_overtime: true,
+            rest_break1_start: Some("12:00".into()),
+            rest_break1_end: Some("13:30".into()),
+            rest_break2_start: Some("17:30".into()),
+            rest_break2_end: Some("18:30".into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -760,6 +891,188 @@ mod tests {
         assert!(calc_record_auto(lock_dt(2026, 8, 22, 22, 0), &cfg, None).is_none());
     }
 
+    // ---- 休息日免计时段：扣除时长 + 按覆盖餐段计餐数 ----
+
+    /// 09:00-18:00：9h 扣午休 1.5h、扣晚饭 0.5h = 7h；午/晚两餐
+    #[test]
+    fn rest_break_windows_deduct_breaks() {
+        let cfg = rest_cfg_with_breaks();
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 18, 0), &cfg, None).expect("应生成");
+        assert!(approx(r.raw_hours, 7.0));
+        assert!(approx(r.valid_hours, 7.0));
+        assert!(approx(r.fee, 140.0)); // 7h * 20
+        assert!(approx(r.meal, 40.0), "午休 + 晚饭 = 2 餐");
+        assert!(approx(r.total, 180.0));
+    }
+
+    /// 09:00-21:00：12h 扣 1.5h + 1h = 9.5h；餐数仍为 2
+    #[test]
+    fn rest_break_windows_full_dinner() {
+        let cfg = rest_cfg_with_breaks();
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 21, 0), &cfg, None).expect("应生成");
+        assert!(approx(r.raw_hours, 9.5));
+        assert!(approx(r.valid_hours, 9.5));
+        assert!(approx(r.meal, 40.0));
+    }
+
+    /// 12:30 离开：午休只重叠 0.5h，晚饭没碰到——扣 0.5h、1 餐
+    #[test]
+    fn rest_break_meal_counts_by_overlap() {
+        let cfg = rest_cfg_with_breaks();
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 12, 30), &cfg, None).expect("应生成");
+        assert!(approx(r.raw_hours, 3.0)); // 3.5h - 0.5h
+        assert!(approx(r.valid_hours, 3.0));
+        assert!(approx(r.meal, 20.0), "只覆盖午休 = 1 餐");
+    }
+
+    /// 到点就走在午休起点：无重叠，不扣时长也不算餐
+    #[test]
+    fn rest_break_boundary_has_no_overlap() {
+        let cfg = rest_cfg_with_breaks();
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 12, 0), &cfg, None).expect("应生成");
+        assert!(approx(r.valid_hours, 3.0));
+        assert!(approx(r.meal, 0.0), "12:00 整离开，午休未开始");
+    }
+
+    /// 工作日不受免计时段影响：不扣时长、固定 1 餐
+    #[test]
+    fn workday_ignores_rest_break_windows() {
+        let cfg = rest_cfg_with_breaks();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(); // 周三
+        let r = compute_record(
+            date,
+            mins_of(lock_dt(2026, 8, 19, 20, 30)),
+            false,
+            Some("18:00"),
+            &cfg,
+            DayKind::Workday,
+        )
+        .expect("应生成");
+        assert!(approx(r.valid_hours, 2.5), "工作日不扣晚饭时段");
+        assert!(approx(r.meal, 20.0), "工作日固定 1 餐");
+    }
+
+    /// 配置残缺（只填一端 / 结束早于开始）按未配置处理，不扣时长、回退 1 餐
+    #[test]
+    fn malformed_rest_break_windows_are_ignored() {
+        let cfg = Config {
+            weekend_overtime: true,
+            rest_break1_start: Some("12:00".into()),
+            rest_break1_end: None,
+            rest_break2_start: Some("18:30".into()),
+            rest_break2_end: Some("17:30".into()),
+            ..Default::default()
+        };
+        let r = calc_record_auto(lock_dt(2026, 8, 22, 18, 0), &cfg, None).expect("应生成");
+        assert!(approx(r.valid_hours, 9.0), "非法配置不生效");
+        assert!(approx(r.meal, 20.0), "回退 1 餐");
+    }
+
+    // ---- 手动覆盖：时长 / 加班费 / 饭补 ----
+
+    /// 覆盖时长后费用按新时长 × 费率；饭补可独立覆盖；合计重算
+    #[test]
+    fn apply_overrides_prefers_manual_values() {
+        let cfg = Config {
+            weekend_overtime: true,
+            ..Default::default()
+        };
+        let base = build_record(
+            NaiveDate::from_ymd_opt(2026, 8, 22).unwrap(),
+            mins_of(lock_dt(2026, 8, 22, 18, 0)),
+            false,
+            Some("09:00"),
+            &cfg,
+            DayKind::Weekend,
+        )
+        .unwrap();
+        let mut input = manual("2026-08-22", "18:00");
+        input.valid_hours = Some(8.0);
+        input.meal = Some(40.0);
+        let rec = apply_overrides(base, &input, &cfg, DayKind::Weekend).unwrap();
+        assert!(approx(rec.valid_hours, 8.0));
+        assert!(approx(rec.fee, 160.0), "费用按覆盖后的时长 × 费率");
+        assert!(approx(rec.meal, 40.0));
+        assert!(approx(rec.total, 200.0));
+    }
+
+    /// 直接填费用/饭补时原样保留，不按费率重算
+    #[test]
+    fn apply_overrides_direct_money_fields() {
+        let cfg = Config::default();
+        let mut input = manual("2026-08-19", "20:30");
+        input.fee = Some(100.0);
+        input.meal = Some(30.0);
+        let base = rec_at("2026-08-19", "20:30", 2.5);
+        let rec = apply_overrides(base, &input, &cfg, DayKind::Workday).unwrap();
+        assert!(approx(rec.fee, 100.0));
+        assert!(approx(rec.meal, 30.0));
+        assert!(approx(rec.total, 130.0));
+    }
+
+    /// 显式覆盖时长可低于 1 小时门槛；不覆盖时仍拒绝
+    #[test]
+    fn apply_overrides_allows_short_manual_hours() {
+        let cfg = Config::default();
+        let mut input = manual("2026-08-19", "18:30");
+        input.valid_hours = Some(0.5);
+        let rec = apply_overrides(
+            rec_at("2026-08-19", "18:30", 0.0),
+            &input,
+            &cfg,
+            DayKind::Workday,
+        )
+        .unwrap();
+        assert!(approx(rec.valid_hours, 0.5));
+
+        let bad = manual("2026-08-19", "18:30");
+        assert!(apply_overrides(
+            rec_at("2026-08-19", "18:30", 0.0),
+            &bad,
+            &cfg,
+            DayKind::Workday
+        )
+        .is_err());
+    }
+
+    /// 负数 / NaN 覆盖值必须拒绝，不能让月度汇总出现负金额
+    #[test]
+    fn apply_overrides_rejects_negative() {
+        let cfg = Config::default();
+        let base = rec_at("2026-08-19", "20:30", 2.5);
+        let cases: [fn(&mut ManualOvertimeInput); 3] = [
+            |i| i.valid_hours = Some(-1.0),
+            |i| i.fee = Some(-1.0),
+            |i| i.meal = Some(f64::NAN),
+        ];
+        for f in cases {
+            let mut input = manual("2026-08-19", "20:30");
+            f(&mut input);
+            assert!(
+                apply_overrides(base.clone(), &input, &cfg, DayKind::Workday).is_err(),
+                "非法覆盖值应被拒绝"
+            );
+        }
+    }
+
+    /// 前端新增的覆盖字段按 snake_case 反序列化；缺省时保持自动
+    #[test]
+    fn manual_input_accepts_override_fields() {
+        let v: ManualOvertimeInput = serde_json::from_str(
+            r#"{"date":"2026-09-11","lock_time":"21:00","ot_start":null,"cross_midnight":false,"valid_hours":7.5,"fee":150,"meal":40}"#,
+        )
+        .expect("应能反序列化");
+        assert_eq!(v.valid_hours, Some(7.5));
+        assert_eq!(v.fee, Some(150.0));
+        assert_eq!(v.meal, Some(40.0));
+
+        let auto: ManualOvertimeInput = serde_json::from_str(
+            r#"{"date":"2026-09-11","lock_time":"21:00","ot_start":null,"cross_midnight":false}"#,
+        )
+        .expect("缺省覆盖字段应保持 None");
+        assert!(auto.valid_hours.is_none() && auto.fee.is_none() && auto.meal.is_none());
+    }
+
     /// 费率回退链：法定节假日 -> 休息日 -> 工作日。老配置没有新字段时不改变行为
     #[test]
     fn rate_falls_back_chain() {
@@ -813,6 +1126,9 @@ mod tests {
             lock_time: "20:00".into(),
             ot_start: None,
             cross_midnight: false,
+            valid_hours: None,
+            fee: None,
+            meal: None,
         };
         let err = save_manual(input, &cfg, None).unwrap_err();
         assert!(err.contains("休息日"), "报错应说明是休息日，实际: {err}");
@@ -921,6 +1237,9 @@ mod tests {
             lock_time: "01:30".into(),
             ot_start: None,
             cross_midnight: false,
+            valid_hours: None,
+            fee: None,
+            meal: None,
         };
         let err = save_manual(input, &cfg, None).unwrap_err();
         assert!(

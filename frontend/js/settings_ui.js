@@ -53,6 +53,26 @@ function settingsValidationErrors(cfg) {
     if (cfg.weekend_overtime) {
       number("overtime_rate_weekend", 0, Infinity, true);
       number("overtime_rate_holiday", 0, Infinity, true);
+      // 免计时段：允许整段留空；只填一端或结束不晚于开始都是无效配置
+      for (const i of [1, 2]) {
+        const startId = "rest_break" + i + "_start";
+        const end = cfg["rest_break" + i + "_end"];
+        const start = cfg[startId];
+        const startBlank = start === "" || start == null;
+        const endBlank = end === "" || end == null;
+        if (startBlank && endBlank) continue;
+        if (startBlank !== endBlank) {
+          errors.push({ id: startId, message: "免计时段需同时填写开始和结束" });
+          continue;
+        }
+        const a = minutesOf(start);
+        const b = minutesOf(end);
+        if (a == null || b == null) {
+          errors.push({ id: startId, message: "请输入有效的免计时段时间" });
+        } else if (b <= a) {
+          errors.push({ id: startId, message: "免计时段的结束需晚于开始" });
+        }
+      }
     }
   }
   if (cfg.remind_sedentary_enabled) number("remind_sedentary_minutes", 1, 120, false, true);
@@ -68,7 +88,7 @@ function settingsFieldIsActive(id, cfg) {
   if (id === "focus_min_minutes") return cfg.focus_enabled;
   if (["overtime_start", "overtime_rate"].includes(id)) return cfg.overtime_enabled;
   if (id === "overtime_meal") return cfg.overtime_enabled && cfg.overtime_meal_enabled;
-  if (["weekend_ot_start", "overtime_rate_weekend", "overtime_rate_holiday"].includes(id)) return cfg.overtime_enabled && cfg.weekend_overtime;
+  if (["weekend_ot_start", "overtime_rate_weekend", "overtime_rate_holiday"].includes(id) || id.startsWith("rest_break")) return cfg.overtime_enabled && cfg.weekend_overtime;
   return true;
 }
 
@@ -76,10 +96,11 @@ function settingsPreserveInactiveValues(cfg, saved, raw = cfg) {
   const active = {...cfg, workdays_manual: settingsManualDays};
   const optional = ["monthly_salary", "hourly_wage", "overtime_rate_weekend", "overtime_rate_holiday"];
   for (const id of ["monthly_salary", "hourly_wage", "overtime_start", "overtime_rate", "overtime_meal",
-    "weekend_ot_start", "overtime_rate_weekend", "overtime_rate_holiday", "remind_sedentary_minutes", "focus_min_minutes"]) {
+    "weekend_ot_start", "rest_break1_start", "rest_break1_end", "rest_break2_start", "rest_break2_end",
+    "overtime_rate_weekend", "overtime_rate_holiday", "remind_sedentary_minutes", "focus_min_minutes"]) {
     const blank = raw[id] === "" || raw[id] == null;
     let invalid;
-    if (id.endsWith("_start")) invalid = !blank && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(raw[id]);
+    if (id.endsWith("_start") || id.endsWith("_end")) invalid = !blank && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(raw[id]);
     else {
       const n = Number(raw[id]);
       invalid = blank ? !optional.includes(id) : !Number.isFinite(n) || n < 0;

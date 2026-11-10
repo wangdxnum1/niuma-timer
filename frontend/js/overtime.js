@@ -270,6 +270,10 @@ function openOtForm() {
   $("otf_lock").value = pad(d.getHours()) + ":" + pad(d.getMinutes());
   $("otf_start").value = "";
   $("otf_cross").checked = false;
+  // 覆盖项留空 = 按规则自动计算
+  $("otf_hours").value = "";
+  $("otf_fee").value = "";
+  $("otf_meal").value = "";
   $("otfTitle").textContent = "添加加班记录";
   $("otfSave").textContent = "保存";
   showOtMsg("");
@@ -283,6 +287,10 @@ function editOtRecord(r) {
   $("otf_lock").value = r.lock_time;
   $("otf_start").value = r.ot_start && r.ot_start !== "" ? r.ot_start : "";
   $("otf_cross").checked = !!r.cross_midnight;
+  // 预填当前值：用户可在此基础上修正（保存后该天转为手动来源）
+  $("otf_hours").value = r.valid_hours ?? "";
+  $("otf_fee").value = r.fee ?? "";
+  $("otf_meal").value = r.meal ?? "";
   $("otfTitle").textContent = "编辑加班记录";
   $("otfSave").textContent = "更新";
   showOtMsg("");
@@ -298,6 +306,18 @@ async function submitOtForm() {
   // 嵌套 input 按 serde 原样反序列化（只有顶层命令参数才转 camelCase），
   // 字段必须与 ManualOvertimeInput 一致：写成 crossMidnight 会被丢掉，永远是 false。
   const cross_midnight = $("otf_cross").checked;
+  // 三个覆盖项留空 = 交回后端自动计算；填了必须是非负有限数
+  const hoursRaw = $("otf_hours").value.trim();
+  const feeRaw = $("otf_fee").value.trim();
+  const mealRaw = $("otf_meal").value.trim();
+  for (const [name, raw] of [["有效时长", hoursRaw], ["加班费", feeRaw], ["饭补", mealRaw]]) {
+    if (raw === "") continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      showOtMsg(name + "必须是不小于 0 的数字");
+      return;
+    }
+  }
   if (!date || !lock) {
     showOtMsg("请填写日期和下班时间");
     return;
@@ -313,7 +333,12 @@ async function submitOtForm() {
   }
   try {
     const view = await invoke("save_overtime_record", {
-      input: { date, lock_time: lock, ot_start: start, cross_midnight },
+      input: {
+        date, lock_time: lock, ot_start: start, cross_midnight,
+        valid_hours: hoursRaw === "" ? null : Number(hoursRaw),
+        fee: feeRaw === "" ? null : Number(feeRaw),
+        meal: mealRaw === "" ? null : Number(mealRaw),
+      },
     });
     // 跟到记录所属月份：补录 8 月时视图停在 8 月，不会莫名跳回当月
     otView = { year: view.year, month: view.month };

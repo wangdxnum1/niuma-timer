@@ -65,6 +65,18 @@ pub struct Config {
     /// 故单独给一个默认 09:00 的起算点。
     #[serde(default)]
     pub weekend_ot_start: Option<String>,
+    /// 休息日加班免计时段 1 起止 "HH:MM"（None = 不启用）。
+    /// 午休等不计入加班时长的区间，仅作用于休息日 / 法定节假日；
+    /// 同时作为餐补餐数的判定依据（加班区间覆盖到该时段即算一餐）。
+    #[serde(default)]
+    pub rest_break1_start: Option<String>,
+    #[serde(default)]
+    pub rest_break1_end: Option<String>,
+    /// 休息日加班免计时段 2 起止 "HH:MM"（None = 不启用）。
+    #[serde(default)]
+    pub rest_break2_start: Option<String>,
+    #[serde(default)]
+    pub rest_break2_end: Option<String>,
     /// 休息日加班费率（元/小时）。None = 沿用 [`Config::overtime_rate`]
     #[serde(default)]
     pub overtime_rate_weekend: Option<f64>,
@@ -255,6 +267,10 @@ impl Default for Config {
             overtime_meal: 20.0,
             weekend_overtime: false,
             weekend_ot_start: None,
+            rest_break1_start: None,
+            rest_break1_end: None,
+            rest_break2_start: None,
+            rest_break2_end: None,
             overtime_rate_weekend: None,
             overtime_rate_holiday: None,
             overtime_exclude_remote: true,

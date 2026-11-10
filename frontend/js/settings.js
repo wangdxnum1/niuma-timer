@@ -108,6 +108,10 @@ async function load() {
     $("overtime_exclude_remote").checked = cfg.overtime_exclude_remote !== false;
     $("weekend_overtime").checked = !!cfg.weekend_overtime;
     $("weekend_ot_start").value = cfg.weekend_ot_start || "";
+    $("rest_break1_start").value = cfg.rest_break1_start || "";
+    $("rest_break1_end").value = cfg.rest_break1_end || "";
+    $("rest_break2_start").value = cfg.rest_break2_start || "";
+    $("rest_break2_end").value = cfg.rest_break2_end || "";
     $("overtime_rate_weekend").value = cfg.overtime_rate_weekend ?? "";
     $("overtime_rate_holiday").value = cfg.overtime_rate_holiday ?? "";
     applyRestOvertimeVisibility(cfg.weekend_overtime);
@@ -369,6 +373,10 @@ function readCfg() {
     update_auto_check: $("update_auto_check").checked,
     weekend_overtime: $("weekend_overtime").checked,
     weekend_ot_start: $("weekend_ot_start").value || null,
+    rest_break1_start: $("rest_break1_start").value || null,
+    rest_break1_end: $("rest_break1_end").value || null,
+    rest_break2_start: $("rest_break2_start").value || null,
+    rest_break2_end: $("rest_break2_end").value || null,
     overtime_rate_weekend: numOrNull($("overtime_rate_weekend").value),
     overtime_rate_holiday: numOrNull($("overtime_rate_holiday").value),
     app_whitelist_enabled: $("app_whitelist_enabled").checked,
@@ -577,7 +585,8 @@ $("shortcuts_enabled").addEventListener("change", saveNow);
 $("update_auto_check").addEventListener("change", saveNow);
 $("remind_sedentary_minutes").addEventListener("blur", saveIfChanged);
 // 加班设置：输入框失焦保存，开关立即保存
-["overtime_start", "overtime_rate", "overtime_meal"].forEach((id) =>
+["overtime_start", "overtime_rate", "overtime_meal",
+  "rest_break1_start", "rest_break1_end", "rest_break2_start", "rest_break2_end"].forEach((id) =>
   $(id).addEventListener("blur", saveIfChanged),
 );
 $("overtime_enabled").addEventListener("change", () => {

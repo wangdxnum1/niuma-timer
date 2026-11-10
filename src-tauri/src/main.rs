@@ -270,7 +270,10 @@ fn main() {
     if argv.iter().any(|arg| arg == "--apply-update") {
         std::process::exit(2);
     }
+    // 崩溃日志与「是否进入 main」的痕迹：更新助手分支已提前 exit，助手本身不走
+    // 诊断设施；从这里开始任何 panic 都要有地方可写（exe 同目录 + %TEMP%，见 diag）。
     install_crash_log();
+    trace_startup("main: enter");
     match update::resume_after_helper() {
         Ok(true) => return,
         Err(e) => {

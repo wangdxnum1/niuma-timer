@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=7ddc515d" />
+    <link rel="stylesheet" href="styles.css?v=944df6fd" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -545,6 +545,9 @@
             <div id="restOtFields" class="settings-dependent">
               <label><span>休息日加班起算</span><input id="weekend_ot_start" type="time" /></label>
               <p class="hint">留空时从 09:00 开始计算</p>
+              <label><span>免计时段 1</span><span class="settings-unit"><input id="rest_break1_start" type="time" aria-label="免计时段 1 开始" /><span>至</span><input id="rest_break1_end" type="time" aria-label="免计时段 1 结束" /></span></label>
+              <label><span>免计时段 2</span><span class="settings-unit"><input id="rest_break2_start" type="time" aria-label="免计时段 2 开始" /><span>至</span><input id="rest_break2_end" type="time" aria-label="免计时段 2 结束" /></span></label>
+              <p class="hint">留空不启用；这些时段不计加班时长，餐补按覆盖的餐段计餐数（未配置时仍按 1 餐）</p>
               <label><span>休息日加班费</span><span class="settings-unit"><input id="overtime_rate_weekend" type="number" min="0" step="any" placeholder="沿用工作日" /><span>元 / 小时</span></span></label>
               <p id="weekendRateHint" class="hint"></p>
               <label><span>节假日加班费</span><span class="settings-unit"><input id="overtime_rate_holiday" type="number" min="0" step="any" placeholder="沿用休息日" /><span>元 / 小时</span></span></label>
@@ -821,6 +824,12 @@
         </div>
         <label class="ot-form-wide">加班起算时间（留空=配置值）<input id="otf_start" type="time" placeholder="配置默认值" /></label>
         <label class="ot-form-wide ot-check"><input id="otf_cross" type="checkbox" />下班时间在次日凌晨（熬过午夜，如 01:30 才算在前一天）</label>
+        <div class="ot-form-row">
+          <label>有效时长（小时，留空=自动）<input id="otf_hours" type="number" min="0" step="0.5" placeholder="自动" /></label>
+          <label>加班费（元，留空=自动）<input id="otf_fee" type="number" min="0" step="any" placeholder="自动" /></label>
+        </div>
+        <label class="ot-form-wide">饭补（元，留空=自动）<input id="otf_meal" type="number" min="0" step="any" placeholder="自动" /></label>
+        <p class="hint">休息日会先扣除配置的免计时段、按覆盖餐段算餐数；这里填了以手填为准，合计=加班费+饭补</p>
         <div class="ot-form-actions">
           <button id="otfSave" class="primary">保存</button>
           <button id="otfCancel" class="ghost">取消</button>
@@ -842,18 +851,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=7ddc515d"></script>
-    <script src="js/tl_math.js?v=7ddc515d"></script>
-    <script src="js/settings.js?v=7ddc515d"></script>
-    <script src="js/settings_ui.js?v=7ddc515d"></script>
-    <script src="js/hero.js?v=7ddc515d"></script>
-    <script src="js/overtime.js?v=7ddc515d"></script>
-    <script src="js/monitor.js?v=7ddc515d"></script>
-    <script src="js/bill.js?v=7ddc515d"></script>
-    <script src="js/insights.js?v=7ddc515d"></script>
-    <script src="js/storage.js?v=7ddc515d"></script>
-    <script src="js/update.js?v=7ddc515d"></script>
-    <script src="js/boot.js?v=7ddc515d"></script>
+    <script src="js/core.js?v=944df6fd"></script>
+    <script src="js/tl_math.js?v=944df6fd"></script>
+    <script src="js/settings.js?v=944df6fd"></script>
+    <script src="js/settings_ui.js?v=944df6fd"></script>
+    <script src="js/hero.js?v=944df6fd"></script>
+    <script src="js/overtime.js?v=944df6fd"></script>
+    <script src="js/monitor.js?v=944df6fd"></script>
+    <script src="js/bill.js?v=944df6fd"></script>
+    <script src="js/insights.js?v=944df6fd"></script>
+    <script src="js/storage.js?v=944df6fd"></script>
+    <script src="js/update.js?v=944df6fd"></script>
+    <script src="js/boot.js?v=944df6fd"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>
