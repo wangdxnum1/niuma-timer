@@ -1,10 +1,10 @@
 [package]
 name = "niuma-timer"
-version = "1.11.0"
+version = "1.11.1"
 description = "牛马计时器 - 实时显示今天赚了多少钱、上了多少小时班"
 authors = ["Tim"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.89"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,11 +23,11 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13", features = ["json", "blocking"] }
 dirs = "6"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 png = "0.18"
 base64 = "0.22"
 sha2 = "0.10"
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 # 注册 AppUserModelID（HKCU）：绿色 exe 发系统 toast 的前置条件，见 win.rs register_aumid

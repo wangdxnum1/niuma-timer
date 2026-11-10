@@ -15,4 +15,7 @@ ignore = [
     { id = "RUSTSEC-2025-0080", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
     { id = "RUSTSEC-2025-0100", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
     { id = "RUSTSEC-2025-0098", reason = "unmaintained/unsupported notice on Linux-side GUI stack transitive dep; Windows build unaffected" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 已停止维护（Linux 侧 DBus/IPC 栈），Windows 构建不引入该路径" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 已停止维护（Linux 侧 DBus/IPC 栈），Windows 构建不引入该路径" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 已并入 zbus 6（Linux 侧通知/单例插件依赖），Windows 构建不引入该路径" },
 ]
