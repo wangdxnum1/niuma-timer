@@ -36,14 +36,15 @@ function todayStr() {
 
 function fmtYMD(y, m, d) {
   const p = (n) => (n < 10 ? "0" + n : "" + n);
-  return y + "-" + p(m) + "-" + p(d);
+  return String(y).padStart(4, "0") + "-" + p(m) + "-" + p(d);
 }
 
 // "YYYY-MM-DD" 加减天数。用本地时间构造 Date，避免 UTC 解析把日期串到前一天
 function addDays(s, delta) {
   const p = String(s || "").split("-").map(Number);
   if (p.length !== 3 || p.some(isNaN)) return todayStr();
-  const d = new Date(p[0], p[1] - 1, p[2]);
+  const d = new Date(s + "T12:00:00");
+  if (!Number.isFinite(d.getTime())) return todayStr();
   d.setDate(d.getDate() + delta);
   return fmtYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
@@ -78,20 +79,33 @@ function dayEmpty(s, what) {
 // 翻天：delta = -1 前一天 / +1 后一天。未来没有数据，翻不过去
 function shiftHist(key, delta, loadFn) {
   const next = addDays(histDate[key] || todayStr(), delta);
-  if (next > todayStr()) return; // "YYYY-MM-DD" 定长，字典序即时间序
-  histDate[key] = next;
-  updateDayNav(key);
-  loadFn();
+  return selectHistDate(key, next, loadFn);
+}
+
+function selectHistDate(key, date, loadFn) {
+  if (!DAY_NAV[key]) return;
+  const parsed = new Date(date + "T12:00:00");
+  const valid = /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(parsed.getTime()) &&
+    fmtYMD(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate()) === date;
+  if (!valid || date > todayStr()) {
+    updateDayNav(key, true);
+    showToast("请选择今天或更早的有效日期", "err");
+    return;
+  }
+  histDate[key] = date === todayStr() ? null : date;
+  updateDayNav(key, true);
+  return loadFn();
 }
 
 // 导航条日期与「后一天」可用状态
 const DAY_NAV = {
-  act: { label: "actDayLabel", next: "actNextDay", title: "actTitle", name: "活动明细" },
-  appu: { label: "appuDayLabel", next: "appuNextDay", title: "appuTitle", name: "应用使用" },
-  audio: { label: "audioDayLabel", next: "audioNextDay", title: "audioTitle", name: "媒体播放" },
+  act: { label: "actDayLabel", next: "actNextDay", title: "actTitle", name: "活动明细", view: "viewAct", cache: "activity", monitor: "activity" },
+  appu: { label: "appuDayLabel", next: "appuNextDay", title: "appuTitle", name: "应用使用", view: "viewApp", cache: "appu", monitor: "app_usage" },
+  audio: { label: "audioDayLabel", next: "audioNextDay", title: "audioTitle", name: "媒体播放", view: "viewAudio", cache: "audio", monitor: "audio" },
 };
 
-function updateDayNav(key) {
+function updateDayNav(key, forceDate = false) {
   const cfg = DAY_NAV[key];
   if (!cfg) return;
   const d = histDate[key];
@@ -101,6 +115,55 @@ function updateDayNav(key) {
   if (lb) lb.textContent = dateLabel(d);
   if (nx) nx.disabled = isToday(d || todayStr());
   if (ti) ti.textContent = dayTitle(d, cfg.name);
+  const selected = d || todayStr();
+  const picker = $(key + "PickDate");
+  // 后台轮询不覆盖正在编辑的日期；明确提交或复位时才强制同步。
+  if (forceDate || document.activeElement !== picker) picker.value = selected;
+  picker.setAttribute("max", todayStr());
+  $(key + "Today").disabled = isToday(selected);
+  $(key + "PrevDay").disabled = selected === "0001-01-01";
+}
+
+const monitorPending = { act: null, appu: null, audio: null };
+function setMonitorLoadState(key, state) {
+  const cfg = DAY_NAV[key];
+  if (curView !== cfg.view) return;
+  const ready = state === "ready";
+  $(cfg.view).querySelectorAll(":scope > section").forEach(el => el.classList.toggle("hidden", !ready));
+  $(cfg.view).setAttribute("aria-busy", String(state === "loading"));
+  $(key + "LoadBox").classList.toggle("hidden", ready);
+  $(key + "LoadText").textContent = state === "loading" ? "正在加载 " + dateLabel(histDate[key]) + "的数据…" :
+    state === "disabled" ? "此项监控已关闭，可在设置中开启" : state === "error" ? "数据加载失败，将自动重试，也可点击重新加载" : "";
+  $(key + "Retry").classList.toggle("hidden", state !== "error");
+}
+
+function beginMonitorRequest(key) {
+  const date = histDate[key] || todayStr();
+  if (monitorPending[key] && monitorPending[key].date === date) return null;
+  const request = { date };
+  monitorPending[key] = request;
+  const cfg = DAY_NAV[key];
+  if (!viewData[cfg.cache] || viewData[cfg.cache].date !== date || !$(key + "LoadBox").classList.contains("hidden")) {
+    setMonitorLoadState(key, "loading");
+  }
+  return request;
+}
+
+function monitorRequestCurrent(key, request) {
+  return monitorPending[key] === request && request.date === (histDate[key] || todayStr()) && monitors[DAY_NAV[key].monitor];
+}
+
+function finishMonitorRequest(key, request) {
+  if (monitorPending[key] === request) monitorPending[key] = null;
+}
+
+function monitorDataReady(key, data) {
+  if (data.date !== (histDate[key] || todayStr())) {
+    setMonitorLoadState(key, "loading");
+    return false;
+  }
+  setMonitorLoadState(key, "ready");
+  return true;
 }
 
 // 返回主界面时把历史日期复位：否则缓存里留着历史数据，
@@ -116,7 +179,7 @@ function resetHistDates() {
     }
   }
   if (dirty) {
-    for (const k of Object.keys(DAY_NAV)) updateDayNav(k);
+    for (const k of Object.keys(DAY_NAV)) updateDayNav(k, true);
   }
 }
 
@@ -125,6 +188,8 @@ let actErrToasted = false;
 
 async function loadActivity() {
   if (!monitors.activity) {
+    monitorPending.act = null;
+    setMonitorLoadState("act", "disabled");
     // 停用即清缓存：否则从设置页切回主界面时，会拿旧数据画出已停用模块的数字
     viewData.activity = null;
     // 已停用：主界面卡片显示占位符
@@ -135,12 +200,18 @@ async function loadActivity() {
     }
     return;
   }
+  const request = beginMonitorRequest("act");
+  if (!request) return;
   try {
     const a = await invoke("get_activity_summary", { date: histDate.act });
+    if (!monitorRequestCurrent("act", request)) return;
+    if (a.date !== request.date) throw new Error("返回的数据日期与所选日期不一致");
     actErrToasted = false;
     viewData.activity = a;
     paintActivity();
   } catch (e) {
+    if (!monitorRequestCurrent("act", request)) return;
+    setMonitorLoadState("act", "error");
     flog("act ERR: " + (e && e.message ? e.message : String(e)));
     // 主界面没有可挂错误文案的卡片；2 秒轮询也不能每次弹 toast（会轰炸）。
     // 折中：失败只提示一次，成功后复位。
@@ -149,6 +220,8 @@ async function loadActivity() {
       actErrToasted = true;
     }
     console.error("loadActivity error:", e);
+  } finally {
+    finishMonitorRequest("act", request);
   }
 }
 
@@ -181,6 +254,7 @@ function paintActivity() {
     return;
   }
   if (curView !== "viewAct") return;
+  if (!monitorDataReady("act", a)) return;
   updateDayNav("act");
   $("actL").textContent = (t.left || 0).toLocaleString();
   $("actD").textContent = (t.dbl || 0).toLocaleString();
@@ -238,6 +312,8 @@ function renderTopKeys(list) {
 
 async function loadAppUsage() {
   if (!monitors.app_usage) {
+    monitorPending.appu = null;
+    setMonitorLoadState("appu", "disabled");
     viewData.appu = null; // 同上，停用即清缓存
     renderSlackBurn(); // 停用时 hero 烧钱行一并隐藏
     if (curView === "viewMain") {
@@ -245,6 +321,8 @@ async function loadAppUsage() {
     }
     return;
   }
+  const request = beginMonitorRequest("appu");
+  if (!request) return;
   try {
     // 参数名用 camelCase：Tauri v2 的命令宏会把 Rust 的 snake_case 参数统一转成 camelCase
     const s = await invoke("get_app_usage_summary", {
@@ -252,6 +330,8 @@ async function loadAppUsage() {
       date: histDate.appu,
     });
     mergeIcons(s.apps || []); // 图标入缓存与当前视图无关，必须在这里做
+    if (!monitorRequestCurrent("appu", request)) return;
+    if (s.date !== request.date) throw new Error("返回的数据日期与所选日期不一致");
     viewData.appu = s;
     paintAppUsage();
     if (audioLogged.appu < 2) {
@@ -260,9 +340,13 @@ async function loadAppUsage() {
       flog("appu ok #" + audioLogged.appu + ": apps=" + n);
     }
   } catch (e) {
+    if (!monitorRequestCurrent("appu", request)) return;
+    setMonitorLoadState("appu", "error");
     flog("appu ERR: " + (e && e.message ? e.message : String(e)));
     showCardError("appuHomeList", "应用使用数据加载失败");
     console.error("loadAppUsage error:", e);
+  } finally {
+    finishMonitorRequest("appu", request);
   }
 }
 
@@ -309,6 +393,7 @@ function paintAppUsage() {
     return;
   }
   if (curView !== "viewApp") return;
+  if (!monitorDataReady("appu", s)) return;
   updateDayNav("appu");
   renderCategories(s);
   const list = $("appuList");
@@ -550,18 +635,24 @@ function renderHourChart(el, hourly, isToday = true) {
 // ---- 媒体播放（audio_usage）：与「应用使用」完全独立的第二套统计 ----
 async function loadAudioUsage() {
   if (!monitors.audio) {
+    monitorPending.audio = null;
+    setMonitorLoadState("audio", "disabled");
     viewData.audio = null; // 同上，停用即清缓存
     if (curView === "viewMain") {
       showCardHint("audioHomeList", "已在设置中关闭媒体播放监控");
     }
     return;
   }
+  const request = beginMonitorRequest("audio");
+  if (!request) return;
   try {
     const s = await invoke("get_audio_usage_summary", {
       knownIcons: knownIcons(),
       date: histDate.audio,
     });
     mergeIcons(s.apps || []); // 与应用使用共用一份图标缓存，同样与当前视图无关
+    if (!monitorRequestCurrent("audio", request)) return;
+    if (s.date !== request.date) throw new Error("返回的数据日期与所选日期不一致");
     viewData.audio = s;
     paintAudioUsage();
     if (audioLogged.audio < 3) {
@@ -580,9 +671,13 @@ async function loadAudioUsage() {
       );
     }
   } catch (e) {
+    if (!monitorRequestCurrent("audio", request)) return;
+    setMonitorLoadState("audio", "error");
     flog("audio ERR: " + (e && e.message ? e.message : String(e)));
     showCardError("audioHomeList", "媒体播放数据加载失败");
     console.error("loadAudioUsage error:", e);
+  } finally {
+    finishMonitorRequest("audio", request);
   }
 }
 
@@ -598,11 +693,20 @@ function paintAudioUsage() {
     return;
   }
   if (curView !== "viewAudio") return;
+  if (!monitorDataReady("audio", s)) return;
   updateDayNav("audio");
   const list = $("audioList");
   if (list) renderAppRows(list, apps, 0, dayEmpty(s.date, "播放记录"));
   renderHourChart($("audioChart"), s.hourly || [], isToday(s.date));
 }
 
+
+[
+  ["act", loadActivity], ["appu", loadAppUsage], ["audio", loadAudioUsage],
+].forEach(([key, load]) => {
+  $(key + "PickDate").addEventListener("change", () => selectHistDate(key, $(key + "PickDate").value, load));
+  $(key + "Today").addEventListener("click", () => selectHistDate(key, todayStr(), load));
+  $(key + "Retry").addEventListener("click", load);
+});
 
 // 设置页控件绑定迁移至 settings.js（设置域逻辑与绑定同文件）；加班明细按钮绑定归位 overtime.js

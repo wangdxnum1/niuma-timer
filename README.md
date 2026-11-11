@@ -2,7 +2,7 @@
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
 > [Chinese docs](./README.zh-CN.md)
-> Current version **1.11.4** (2026-11-11) · [Changelog](./CHANGELOG.md)
+> Current version **1.11.5** (2026-11-11) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
@@ -72,6 +72,8 @@ When editing overtime details, changing the departure time recalculates valid ho
 Calculation and save progress is shown in the dialog. Duplicate saves are blocked, and failures allow retry. Escape dismisses a confirmation or overtime dialog before hiding the main window. Bill legends and empty-state text follow the selected week, month or year.
 
 Leave history supports month navigation and direct month selection, and saving an entry opens its month. Monthly and annual reports show leave counts with expandable dates. Milestones use retained data; companion days count dates with keyboard or mouse records.
+
+Keyboard/mouse, app and media details support direct date selection and return to today. Date changes show loading feedback and offer retry on failure. Pending polls for the same date are coalesced, and old responses cannot replace the selected day's data.
 
 ```
 hourly rate = monthly salary
