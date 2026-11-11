@@ -109,6 +109,16 @@ function setBillSpanUI(span) {
   document.querySelectorAll("#billSpanSeg .mon-seg-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.span === curBillSpan);
   });
+  const copy = {
+    week: { unit: "周", period: "这一周", window: "最近八周" },
+    month: { unit: "月", period: "这个月", window: "最近八个月" },
+    year: { unit: "年", period: "这一年", window: "最近八年" },
+  }[curBillSpan];
+  $("trendIncomeLabel").textContent = copy.unit + "入账";
+  $("trendSlackLabel").textContent = copy.unit + "摸鱼率";
+  $("heatEmptyText").textContent = copy.period + "还没有键鼠记录";
+  $("bodyEmptyText").textContent = copy.period + "还没有键鼠记录";
+  $("trendEmptyText").textContent = copy.window + "还没有打工记录";
 }
 
 async function loadWeekBill() {

@@ -422,6 +422,37 @@ pub fn save_manual(
     cfg: &Config,
     holiday: Option<&HolidayCache>,
 ) -> Result<OvertimeRecord, String> {
+    let (rec, kind) = draft_manual(&input, cfg, holiday)?;
+    let rec = apply_overrides(rec, &input, cfg, kind)?;
+    // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
+    upsert_manual(rec.clone())?;
+    Ok(rec)
+}
+
+/// 表单联动只计算草稿，不写数据库。可按手填时长试算费用，忽略旧费用和饭补覆盖。
+pub fn preview_manual(
+    input: &ManualOvertimeInput,
+    cfg: &Config,
+    holiday: Option<&HolidayCache>,
+) -> Result<OvertimeRecord, String> {
+    let (rec, kind) = draft_manual(input, cfg, holiday)?;
+    if input.valid_hours.is_some() {
+        let hours_only = ManualOvertimeInput {
+            fee: None,
+            meal: None,
+            ..input.clone()
+        };
+        apply_overrides(rec, &hours_only, cfg, kind)
+    } else {
+        Ok(rec)
+    }
+}
+
+fn draft_manual(
+    input: &ManualOvertimeInput,
+    cfg: &Config,
+    holiday: Option<&HolidayCache>,
+) -> Result<(OvertimeRecord, DayKind), String> {
     let date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
         .map_err(|_| "日期格式错误".to_string())?;
     if is_future(&input.date) {
@@ -463,10 +494,7 @@ pub fn save_manual(
         kind,
     )
     .ok_or_else(|| "无法生成加班记录".to_string())?;
-    let rec = apply_overrides(rec, &input, cfg, kind)?;
-    // 标为手动来源：此后自动锁屏记录不再覆盖这一天（见 upsert_auto）
-    upsert_manual(rec.clone())?;
-    Ok(rec)
+    Ok((rec, kind))
 }
 
 /// 把手动覆盖值套到自动草稿上，返回最终记录。
@@ -682,6 +710,73 @@ mod tests {
             rest_break2_end: Some("18:30".into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn preview_manual_ignores_old_overrides_and_recalculates() {
+        let cfg = Config {
+            overtime_rate: 20.0,
+            ..Config::default()
+        };
+        let mut input = manual("2026-08-19", "21:30");
+        input.ot_start = Some("18:00".into());
+        input.fee = Some(40.0);
+        let rec = preview_manual(&input, &cfg, None).unwrap();
+        assert!(approx(rec.valid_hours, 3.5));
+        assert!(approx(rec.fee, 70.0));
+        input.lock_time = "00:30".into();
+        input.cross_midnight = true;
+        let rec = preview_manual(&input, &cfg, None).unwrap();
+        assert!(approx(rec.valid_hours, 6.5));
+        assert!(approx(rec.fee, 130.0));
+    }
+
+    #[test]
+    fn preview_manual_hours_recalculates_fee_with_real_rate() {
+        let cfg = Config {
+            weekend_overtime: true,
+            overtime_rate_weekend: Some(30.0),
+            ..Config::default()
+        };
+        let mut input = manual("2026-08-22", "18:00");
+        input.valid_hours = Some(2.0);
+        input.fee = Some(999.0);
+        let rec = preview_manual(&input, &cfg, None).unwrap();
+        assert!(approx(rec.valid_hours, 2.0));
+        assert!(approx(rec.fee, 60.0));
+        input.valid_hours = Some(0.5);
+        let rec = preview_manual(&input, &cfg, None).unwrap();
+        assert!(approx(rec.fee, 15.0));
+        input.valid_hours = Some(0.0);
+        assert!(approx(preview_manual(&input, &cfg, None).unwrap().fee, 0.0));
+        input.valid_hours = Some(-1.0);
+        assert!(preview_manual(&input, &cfg, None).is_err());
+    }
+
+    #[test]
+    fn preview_manual_uses_rest_breaks_and_rate() {
+        let cfg = Config {
+            weekend_overtime: true,
+            overtime_rate_weekend: Some(30.0),
+            rest_break1_start: Some("12:00".into()),
+            rest_break1_end: Some("13:30".into()),
+            ..Config::default()
+        };
+        let rec = preview_manual(&manual("2026-08-22", "18:00"), &cfg, None).unwrap();
+        assert!(approx(rec.valid_hours, 7.5));
+        assert!(approx(rec.fee, 225.0));
+    }
+
+    #[test]
+    fn preview_manual_short_draft_does_not_bypass_save_threshold() {
+        let cfg = Config::default();
+        let mut input = manual("2026-08-19", "18:30");
+        input.ot_start = Some("18:00".into());
+        let (rec, kind) = draft_manual(&input, &cfg, None).unwrap();
+        assert!(approx(rec.valid_hours, 0.0));
+        assert!(apply_overrides(rec, &input, &cfg, kind).is_err());
+        input.lock_time = "17:30".into();
+        assert!(preview_manual(&input, &cfg, None).is_err());
     }
 
     #[test]

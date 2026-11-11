@@ -57,6 +57,7 @@
     "core:window:allow-set-focus",
     "core:window:allow-show",
     "notification:default",
-    "allow-get-milestones"
+    "allow-get-milestones",
+    "allow-preview-overtime-record"
   ]
 }

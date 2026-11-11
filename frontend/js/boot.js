@@ -243,10 +243,22 @@ async function closeWindow() {
   winVisible = false; // 立即停轮询，不等 Rust 端下一秒的可见性广播
   TAURI.window.getCurrentWindow().hide();
 }
-// Esc 键关闭（关闭交给原生窗口标题栏按钮；Esc 作为键盘快捷键保留）
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeWindow();
-});
+// Esc 优先取消顶层弹窗；保存中由表单守卫保护，还原遮罩不可取消。
+function handleEscapeKey(e) {
+  if (e.key !== "Escape" || e.isComposing) return;
+  e.preventDefault();
+  if (!$("restoreMask").classList.contains("hidden")) return;
+  if (!$("confirmModal").classList.contains("hidden")) {
+    hideConfirm(false);
+    return;
+  }
+  if (!$("otForm").classList.contains("hidden")) {
+    hideOtForm();
+    return;
+  }
+  closeWindow();
+}
+document.addEventListener("keydown", handleEscapeKey);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

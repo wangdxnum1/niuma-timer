@@ -28,6 +28,17 @@ pub(crate) fn get_overtime_records(
     overtime::get_month(y, m).to_view(y, m)
 }
 
+/// 编辑时间时的只读试算，与保存共用日期、费率与免计时段规则。
+#[tauri::command(async)]
+pub(crate) fn preview_overtime_record(
+    state: State<AppState>,
+    input: overtime::ManualOvertimeInput,
+) -> Result<overtime::OvertimeRecord, String> {
+    let cfg = sync::lock(&state.config, "state.config").clone();
+    let hol = sync::lock(&state.holiday, "state.holiday").clone();
+    overtime::preview_manual(&input, &cfg, Some(&hol))
+}
+
 /// 手动添加/修改某天加班记录（可补录历史月份，但不能是未来日期）。
 /// 返回该记录**所属月份**的视图：补录 8 月时界面不会莫名跳回当月。
 #[tauri::command(async)]

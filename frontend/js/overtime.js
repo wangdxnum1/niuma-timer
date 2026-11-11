@@ -250,10 +250,83 @@ function exportWeekBillCsv() {
 }
 
 // ---- 加班记录手动增删改（仅当月）----
+let otPreviewSeq = 0;
+let otPreviewPending = false;
+let otAutoHours = null;
+let otAutoFee = null;
+let otSavePending = false;
+let otSaveLabel = "保存";
+function paintOtFormState() {
+  const busy = otSavePending || otPreviewPending;
+  $("otfSave").disabled = busy;
+  $("otfSave").textContent = otSavePending ? "保存中…" : otPreviewPending ? "计算中…" : otSaveLabel;
+  $("otForm").setAttribute("aria-busy", String(busy));
+  ["otf_date", "otf_lock", "otf_start", "otf_cross", "otf_hours", "otf_fee", "otf_meal", "otfCancel"]
+    .forEach(id => { $(id).disabled = otSavePending; });
+}
+function resetOtPreview() {
+  otPreviewSeq++;
+  otPreviewPending = false;
+  otAutoHours = null;
+  otAutoFee = null;
+  paintOtFormState();
+}
+
+// 时间变化使旧覆盖值失效；计算始终复用后端保存所用的规则。
+async function recalculateOtForm(keepHours = false) {
+  if (otSavePending) return;
+  const seq = ++otPreviewSeq;
+  const hoursRaw = keepHours ? $("otf_hours").value.trim() : "";
+  const preserveFee = keepHours && otAutoFee === null && $("otf_fee").value !== "";
+  if (!keepHours) {
+    otAutoHours = null;
+    $("otf_hours").value = "";
+  }
+  if (!preserveFee) {
+    otAutoFee = null;
+    $("otf_fee").value = "";
+  }
+  const date = $("otf_date").value;
+  const lock_time = $("otf_lock").value;
+  const hoursValid = hoursRaw === "" || (Number.isFinite(Number(hoursRaw)) && Number(hoursRaw) >= 0);
+  otPreviewPending = !!(date && lock_time && hoursValid);
+  paintOtFormState();
+  showOtMsg(hoursValid ? "" : "有效时长必须是不小于 0 的数字");
+  if (!otPreviewPending) return;
+  try {
+    const rec = await invoke("preview_overtime_record", {
+      input: {
+        date, lock_time, ot_start: $("otf_start").value || null,
+        cross_midnight: $("otf_cross").checked,
+        valid_hours: hoursRaw === "" ? null : Number(hoursRaw), fee: null, meal: null,
+      },
+    });
+    if (seq !== otPreviewSeq) return;
+    if (hoursRaw === "") {
+      otAutoHours = String(rec.valid_hours);
+      $("otf_hours").value = otAutoHours;
+    }
+    if (!preserveFee) {
+      otAutoFee = String(rec.fee);
+      $("otf_fee").value = otAutoFee;
+    }
+  } catch (e) {
+    if (seq === otPreviewSeq) showOtMsg("计算失败：" + e);
+  } finally {
+    if (seq === otPreviewSeq) {
+      otPreviewPending = false;
+      paintOtFormState();
+    }
+  }
+}
+
 function showOtForm() {
+  paintOtFormState();
   $("otForm").classList.remove("hidden");
 }
 function hideOtForm() {
+  if (otSavePending) return;
+  resetOtPreview();
   $("otForm").classList.add("hidden");
   $("otfMsg").textContent = "";
 }
@@ -263,6 +336,8 @@ function showOtMsg(msg) {
 
 // 点击「添加记录」：自动预填今天日期 + 当前时刻，焦点落在下班时间上
 function openOtForm() {
+  if (otSavePending) return;
+  resetOtPreview();
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   $("otf_date").value =
@@ -275,7 +350,7 @@ function openOtForm() {
   $("otf_fee").value = "";
   $("otf_meal").value = "";
   $("otfTitle").textContent = "添加加班记录";
-  $("otfSave").textContent = "保存";
+  otSaveLabel = "保存";
   showOtMsg("");
   showOtForm();
   $("otf_lock").focus();
@@ -283,6 +358,8 @@ function openOtForm() {
 
 // 点击某行的「编辑」
 function editOtRecord(r) {
+  if (otSavePending) return;
+  resetOtPreview();
   $("otf_date").value = r.date;
   $("otf_lock").value = r.lock_time;
   $("otf_start").value = r.ot_start && r.ot_start !== "" ? r.ot_start : "";
@@ -292,7 +369,7 @@ function editOtRecord(r) {
   $("otf_fee").value = r.fee ?? "";
   $("otf_meal").value = r.meal ?? "";
   $("otfTitle").textContent = "编辑加班记录";
-  $("otfSave").textContent = "更新";
+  otSaveLabel = "更新";
   showOtMsg("");
   showOtForm();
   $("otf_lock").focus();
@@ -300,6 +377,7 @@ function editOtRecord(r) {
 
 // 提交添加/更新（后端按日期 upsert，同一日期即覆盖=编辑）
 async function submitOtForm() {
+  if (otPreviewPending || otSavePending) return;
   const date = $("otf_date").value;
   const lock = $("otf_lock").value;
   const start = $("otf_start").value || null;
@@ -331,22 +409,30 @@ async function submitOtForm() {
     showOtMsg("不能添加未来日期的加班记录");
     return;
   }
+  otSavePending = true;
+  paintOtFormState();
+  showOtMsg("");
   try {
+    // 自动回填只是预览，保存仍按后端自动规则校验（包括不足 1 小时门槛）。
     const view = await invoke("save_overtime_record", {
       input: {
         date, lock_time: lock, ot_start: start, cross_midnight,
-        valid_hours: hoursRaw === "" ? null : Number(hoursRaw),
-        fee: feeRaw === "" ? null : Number(feeRaw),
+        valid_hours: hoursRaw === "" || hoursRaw === otAutoHours ? null : Number(hoursRaw),
+        fee: feeRaw === "" || feeRaw === otAutoFee ? null : Number(feeRaw),
         meal: mealRaw === "" ? null : Number(mealRaw),
       },
     });
     // 跟到记录所属月份：补录 8 月时视图停在 8 月，不会莫名跳回当月
     otView = { year: view.year, month: view.month };
+    otSavePending = false;
     hideOtForm();
     showToast("已保存加班记录", "ok");
     loadOvertime();
   } catch (e) {
     showOtMsg("保存失败：" + e);
+  } finally {
+    otSavePending = false;
+    paintOtFormState();
   }
 }
 
@@ -390,3 +476,20 @@ $("otPrevMonth").addEventListener("click", () => shiftOtMonth(-1));
 $("otNextMonth").addEventListener("click", () => shiftOtMonth(1));
 $("otfSave").addEventListener("click", submitOtForm);
 $("otfCancel").addEventListener("click", hideOtForm);
+["otf_date", "otf_lock", "otf_start"].forEach(id =>
+  $(id).addEventListener("input", () => recalculateOtForm())
+);
+$("otf_cross").addEventListener("change", () => recalculateOtForm());
+$("otf_hours").addEventListener("input", () => {
+  if (otSavePending) return;
+  otAutoHours = null;
+  return recalculateOtForm(true);
+});
+$("otf_fee").addEventListener("input", () => {
+  if (otSavePending) return;
+  // 手工费用优先，并使仍在途的自动试算失效。
+  otPreviewSeq++;
+  otPreviewPending = false;
+  otAutoFee = null;
+  paintOtFormState();
+});

@@ -54,7 +54,8 @@ pub(crate) use crate::state::{get_status, AppState};
 
 use cmds_bill::{
     delete_overtime_record, get_bill, get_body_bill, get_day_timeline, get_focus_summary,
-    get_heatmap, get_milestones, get_overtime_records, get_trend, save_overtime_record,
+    get_heatmap, get_milestones, get_overtime_records, get_trend, preview_overtime_record,
+    save_overtime_record,
 };
 use cmds_core::{
     apply_monitor_switches, apply_shortcuts, export_csv, export_image, focus_window, get_autostart,
@@ -476,6 +477,7 @@ fn main() {
             show_window,
             focus_window,
             get_overtime_records,
+            preview_overtime_record,
             save_overtime_record,
             delete_overtime_record,
             get_activity_summary,
