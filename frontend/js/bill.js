@@ -579,7 +579,23 @@ async function loadMonthlyReport() {
   }
 }
 
+function paintReportLeaves(leaves) {
+  const details = $("reportLeavesDetails");
+  const list = $("reportLeavesList");
+  details.open = false;
+  details.classList.toggle("hidden", leaves.length === 0);
+  $("reportLeavesSummary").textContent = "查看休假日期（" + leaves.length + " 天）";
+  list.textContent = "";
+  for (const item of leaves) {
+    const row = document.createElement("div");
+    row.className = "report-leave-row";
+    row.textContent = item.date + " · " + item.kind;
+    list.appendChild(row);
+  }
+}
+
 function paintReport(bill, leaves) {
+  paintReportLeaves(leaves);
   const hasRecord = (bill.front_seconds || 0) > 0 || (bill.ot_hours || 0) > 0 ||
     (bill.ot_fee || 0) > 0 || leaves.length > 0 ||
     (bill.buckets || []).some((b) => b.has_record);
@@ -606,7 +622,7 @@ function paintReport(bill, leaves) {
     "出勤",
     bill.work_days == null ? "—" : bill.work_days + " 天 · 在岗约 " + (bill.work_hours || 0).toFixed(1) + "h",
   ]);
-  rows.push(["休假", leaves.length ? leaves.map((x) => md(x.date)).join("、") + "（" + leaves.length + " 天）" : "无"]);
+  rows.push(["休假", leaves.length ? leaves.length + " 天" : "无"]);
   rows.push(["加班", (bill.ot_hours || 0) > 0 ? (bill.ot_hours || 0).toFixed(1) + "h · " + fmtMoney(bill.ot_fee) : "—"]);
   const front = bill.front_seconds || 0;
   const equiv = moneyConfigured() ? currentSlackEquiv(bill.slack_cost || 0) : "";
@@ -678,7 +694,7 @@ async function saveReportImage() {
   }
 }
 
-// ---- 里程碑：用这台应用以来的累计成就（后端出原始量，阶梯在前端）----
+// ---- 里程碑：当前保留记录的累计成就（后端出原始量，阶梯在前端）----
 // px/km 与 core.js fmtDist 同一口径（96dpi）；里程碑阈值调档只改这里
 const PX_PER_KM = (96 * 100 * 1000) / 2.54;
 const MILESTONE_LADDERS = [
@@ -705,6 +721,8 @@ function paintMilestones() {
   const list = $("milestonesList");
   if (!box || !list || !milestonesData) return;
   box.classList.remove("hidden");
+  $("milestonesNote").textContent = "累计基于当前保留的数据；相伴天数按有键鼠记录的日期计算。" +
+    (milestonesData.first_date ? "键鼠记录始于 " + milestonesData.first_date + "。" : "暂无键鼠记录。");
   list.textContent = "";
   for (const ladder of MILESTONE_LADDERS) {
     const value = ladder.get(milestonesData);

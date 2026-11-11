@@ -35,7 +35,8 @@ const yearly={...monthly,period_label:'2026 年',period_start:'2026-01-01',perio
 const zeroMilestones={ot_hours:0,ot_fee:0,keystrokes:0,distance_px:0,focus_minutes:0,active_days:0,first_date:null};
 // Fixture fields must match the actual serialized Rust structures in both directions.
 function assertFields(structName, fixture, file) {
-  const source=read(file),start=source.indexOf('pub struct '+structName+' {');
+  const source=read(file),match=source.match(new RegExp('pub(?:\\([^)]*\\))? struct '+structName+' \\{'));
+  const start=match?match.index:-1;
   assert(start>=0,structName);const body=source.slice(start,source.indexOf('\n}',start));
   const fields=[...body.matchAll(/pub (\w+):/g)].map(m=>m[1]);
   assert.deepEqual(Object.keys(fixture).sort(),fields.sort(),structName+' fixture drift');
@@ -194,6 +195,30 @@ cases.chart=async()=>{
   vm.runInContext(fn('drawReport'),h.ctx);h.ctx.fixture={...emptyBill,ot_hours:2,ot_fee:40,total_income:40};
   h.run('drawReport(buildReportModel(fixture,0,""),1)');
   assert(texts.includes('暂无记录'));assert(!texts.some(t=>String(t).includes('天选牛马')));
+};
+cases.leaveDetails=async()=>{
+  const h=harness();
+  h.ctx.fixture=yearly;
+  h.ctx.leaves=Array.from({length:30},(_,i)=>({date:'2026-01-'+String(i+1).padStart(2,'0'),kind:'年假'}));
+  assertFields('DayOverrideEntry',h.ctx.leaves[0],'src-tauri/src/cmds_core.rs');
+  h.run('curBillSpan="year";paintReport(fixture,leaves)');
+  const leaveRow=h.get('reportRows').children.find(row=>row.children[0].textContent==='休假');
+  assert.equal(leaveRow.children[1].textContent,'30 天','leave summary stays compact');
+  assert.equal(h.get('reportLeavesList').children.length,30);
+  assert.equal(h.get('reportLeavesDetails').open,false,'dates are collapsed initially');
+  assert.equal(h.get('reportLeavesDetails').classList.contains('hidden'),false);
+  assert.equal(h.get('reportLeavesList').children[0].textContent,'2026-01-01 · 年假');
+  h.get('reportLeavesDetails').open=true;
+  h.run('paintReport(fixture,[])');
+  assert.equal(h.get('reportLeavesList').children.length,0);
+  assert.equal(h.get('reportLeavesDetails').classList.contains('hidden'),true,'old dates are cleared');
+  h.ctx.milestone={...zeroMilestones,first_date:'2026-03-02'};
+  h.run('milestonesData=milestone;paintMilestones()');
+  assert(h.get('milestonesNote').textContent.includes('键鼠记录始于 2026-03-02'));
+  assert(h.get('milestonesNote').textContent.includes('当前保留'));
+  assert.equal(h.get('milestonesList').children.length,5,'achievement calculations unchanged');
+  h.ctx.milestone=zeroMilestones;h.run('milestonesData=milestone;paintMilestones()');
+  assert(!h.get('milestonesNote').textContent.includes('2026-03-02'),'empty milestones clear old start date');
 };
 (async()=>{
   const selected=process.argv[2]?[[process.argv[2],cases[process.argv[2]]]]:Object.entries(cases);

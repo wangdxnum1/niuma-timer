@@ -2,7 +2,7 @@
 
 > Track how much you've earned today, down to the second — plus what you actually did all day.
 > [Chinese docs](./README.zh-CN.md)
-> Current version **1.11.3** (2026-11-11) · [Changelog](./CHANGELOG.md)
+> Current version **1.11.4** (2026-11-11) · [Changelog](./CHANGELOG.md)
 
 A lightweight Windows system-tray tool for wage workers. It sits in your tray and shows, in real time:
 
@@ -70,6 +70,8 @@ Beyond wage tracking, it doubles as a **desktop-behavior dashboard**: overtime, 
 When editing overtime details, changing the departure time recalculates valid hours and overtime pay using the existing rates, break windows and overnight rules. Editing valid hours also updates automatic overtime pay; explicitly entered pay is preserved. Manual overrides remain available, and the meal allowance is preserved.
 
 Calculation and save progress is shown in the dialog. Duplicate saves are blocked, and failures allow retry. Escape dismisses a confirmation or overtime dialog before hiding the main window. Bill legends and empty-state text follow the selected week, month or year.
+
+Leave history supports month navigation and direct month selection, and saving an entry opens its month. Monthly and annual reports show leave counts with expandable dates. Milestones use retained data; companion days count dates with keyboard or mouse records.
 
 ```
 hourly rate = monthly salary

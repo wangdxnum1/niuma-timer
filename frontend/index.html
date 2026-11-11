@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=1fd97cc3" />
+    <link rel="stylesheet" href="styles.css?v=94705a90" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -309,6 +309,10 @@
             </div>
             <div class="report-income" id="reportIncome">¥0.00</div>
             <div class="report-rows" id="reportRows"></div>
+            <details id="reportLeavesDetails" class="report-leaves hidden">
+              <summary id="reportLeavesSummary">查看休假日期</summary>
+              <div id="reportLeavesList" class="report-leave-list"></div>
+            </details>
             <div class="report-quote" id="reportQuote"></div>
           </section>
           <div class="report-actions">
@@ -316,7 +320,8 @@
           </div>
         </div>
         <div id="milestonesBox" class="milestones hidden">
-          <div class="ms-title">里程碑 · 用这台应用以来</div>
+          <div class="ms-title">里程碑 · 当前保留记录</div>
+          <p id="milestonesNote" class="ms-note"></p>
           <div id="milestonesList"></div>
         </div>
       </div>
@@ -509,6 +514,12 @@
               <option value="调休">调休</option>
             </select>
             <button id="dayOffAdd" class="primary">标记</button>
+          </div>
+          <div class="dayoff-nav" role="group" aria-label="休假记录月份">
+            <button id="dayOffPrevMonth" class="pg-btn" type="button" aria-label="休假记录上个月">‹</button>
+            <input id="dayOffMonth" type="month" min="0001-01" max="9999-12" aria-label="查看休假记录月份" />
+            <button id="dayOffNextMonth" class="pg-btn" type="button" aria-label="休假记录下个月">›</button>
+            <button id="dayOffThisMonth" class="ghost" type="button">本月</button>
           </div>
           <div id="dayOffList" class="dayoff-list" aria-live="polite"></div>
         </div>
@@ -851,18 +862,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=1fd97cc3"></script>
-    <script src="js/tl_math.js?v=1fd97cc3"></script>
-    <script src="js/settings.js?v=1fd97cc3"></script>
-    <script src="js/settings_ui.js?v=1fd97cc3"></script>
-    <script src="js/hero.js?v=1fd97cc3"></script>
-    <script src="js/overtime.js?v=1fd97cc3"></script>
-    <script src="js/monitor.js?v=1fd97cc3"></script>
-    <script src="js/bill.js?v=1fd97cc3"></script>
-    <script src="js/insights.js?v=1fd97cc3"></script>
-    <script src="js/storage.js?v=1fd97cc3"></script>
-    <script src="js/update.js?v=1fd97cc3"></script>
-    <script src="js/boot.js?v=1fd97cc3"></script>
+    <script src="js/core.js?v=94705a90"></script>
+    <script src="js/tl_math.js?v=94705a90"></script>
+    <script src="js/settings.js?v=94705a90"></script>
+    <script src="js/settings_ui.js?v=94705a90"></script>
+    <script src="js/hero.js?v=94705a90"></script>
+    <script src="js/overtime.js?v=94705a90"></script>
+    <script src="js/monitor.js?v=94705a90"></script>
+    <script src="js/bill.js?v=94705a90"></script>
+    <script src="js/insights.js?v=94705a90"></script>
+    <script src="js/storage.js?v=94705a90"></script>
+    <script src="js/update.js?v=94705a90"></script>
+    <script src="js/boot.js?v=94705a90"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

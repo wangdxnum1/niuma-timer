@@ -1,31 +1,55 @@
 
 // ---- 休假记录（day_override）：个人休假标记，主界面快捷按钮与本编辑器共用口径 ----
 // 标记日按休息日计（不计应赚/出勤，自动模式月分母剔除）；kind 仅作展示。
-const DAYOFF_RANGE_DAYS = 90;
+let dayOffMonthView = "";
+let dayOffGeneration = 0;
+let dayOffWritePending = false;
 
 function fmtLocalDate(d) {
   const pad = (n) => String(n).padStart(2, "0");
-  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  return String(d.getFullYear()).padStart(4, "0") + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
 }
 
-async function loadDayOffs() {
+function dayOffMonthBounds(month) {
+  if (!/^(?!0000)\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) return null;
+  const start = new Date(month + "-01T12:00:00");
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  end.setDate(0);
+  return { start: month + "-01", end: fmtLocalDate(end) };
+}
+
+function shiftDayOffMonth(delta) {
+  const month = dayOffMonthView || fmtLocalDate(new Date()).slice(0, 7);
+  const date = new Date(month + "-01T12:00:00");
+  date.setMonth(date.getMonth() + delta);
+  return loadDayOffs(fmtLocalDate(date).slice(0, 7));
+}
+
+async function loadDayOffs(month) {
   const box = $("dayOffList");
   if (!box) return;
-  // 窗口：过去 90 天 ~ 未来 90 天——补标历史与预记未来休假都要在列
-  const end = new Date();
-  end.setDate(end.getDate() + DAYOFF_RANGE_DAYS);
-  const start = new Date();
-  start.setDate(start.getDate() - DAYOFF_RANGE_DAYS);
+  const selected = month || dayOffMonthView || fmtLocalDate(new Date()).slice(0, 7);
+  const bounds = dayOffMonthBounds(selected);
+  if (!bounds) {
+    $("dayOffMonth").value = dayOffMonthView;
+    return;
+  }
+  dayOffMonthView = selected;
+  $("dayOffMonth").value = selected;
+  $("dayOffPrevMonth").disabled = selected === "0001-01";
+  $("dayOffNextMonth").disabled = selected === "9999-12";
+  const generation = ++dayOffGeneration;
+  box.textContent = "正在加载休假记录…";
+  box.setAttribute("aria-busy", "true");
   try {
-    const list = await invoke("get_day_overrides", {
-      start: fmtLocalDate(start),
-      end: fmtLocalDate(end),
-    });
+    const list = await invoke("get_day_overrides", bounds);
+    if (generation !== dayOffGeneration) return;
     box.textContent = "";
     if (!list.length) {
       const p = document.createElement("p");
       p.className = "hint";
-      p.textContent = "近 90 天（含未来计划）没有休假标记";
+      p.textContent = "这个月没有休假标记，可选择日期补录或预记休假";
       box.appendChild(p);
       return;
     }
@@ -38,29 +62,58 @@ async function loadDayOffs() {
       del.className = "wl-rm";
       del.textContent = "×";
       del.title = "取消标记";
+      del.disabled = dayOffWritePending;
       del.addEventListener("click", () => removeDayOff(item.date));
       row.append(label, del);
       box.appendChild(row);
     }
   } catch (e) {
-    box.innerHTML = '<p class="hint">休假记录读取失败</p>';
+    if (generation !== dayOffGeneration) return;
+    flog("loadDayOffs ERR: " + e);
+    box.textContent = "";
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "休假记录读取失败";
+    const retry = document.createElement("button");
+    retry.className = "ghost";
+    retry.textContent = "重新加载";
+    retry.addEventListener("click", () => loadDayOffs());
+    box.append(hint, retry);
+  } finally {
+    if (generation === dayOffGeneration) box.setAttribute("aria-busy", "false");
   }
 }
 
+function paintDayOffWriteState() {
+  $("dayOffAdd").disabled = dayOffWritePending;
+  $("dayOffAdd").textContent = dayOffWritePending ? "保存中…" : "标记";
+  $("dayOffList").querySelectorAll("button").forEach(b => { b.disabled = dayOffWritePending; });
+}
+
 async function addDayOff() {
+  if (dayOffWritePending) return;
   const dateInput = $("dayOffDate");
   const date = dateInput.value || fmtLocalDate(new Date());
+  const kind = $("dayOffKind").value;
+  dayOffWritePending = true;
+  paintDayOffWriteState();
   try {
-    await invoke("set_day_override", { date, kind: $("dayOffKind").value });
-    showToast("已标记 " + date + "（" + $("dayOffKind").value + "）", "ok");
-    await loadDayOffs();
+    await invoke("set_day_override", { date, kind });
+    showToast("已标记 " + date + "（" + kind + "）", "ok");
+    await loadDayOffs(date.slice(0, 7));
     tick(); // 标的是今天时，主页徽章/工作日数立即跟随
   } catch (e) {
     showToast("休假标记失败：" + e, "err");
+  } finally {
+    dayOffWritePending = false;
+    paintDayOffWriteState();
   }
 }
 
 async function removeDayOff(date) {
+  if (dayOffWritePending) return;
+  dayOffWritePending = true;
+  paintDayOffWriteState();
   try {
     await invoke("set_day_override", { date, kind: null });
     showToast("已取消 " + date + " 的休假标记", "ok");
@@ -68,9 +121,16 @@ async function removeDayOff(date) {
     tick();
   } catch (e) {
     showToast("取消失败：" + e, "err");
+  } finally {
+    dayOffWritePending = false;
+    paintDayOffWriteState();
   }
 }
 $("dayOffAdd").addEventListener("click", addDayOff);
+$("dayOffPrevMonth").addEventListener("click", () => shiftDayOffMonth(-1));
+$("dayOffNextMonth").addEventListener("click", () => shiftDayOffMonth(1));
+$("dayOffThisMonth").addEventListener("click", () => loadDayOffs(fmtLocalDate(new Date()).slice(0, 7)));
+$("dayOffMonth").addEventListener("change", () => loadDayOffs($("dayOffMonth").value));
 
 async function load() {
   try {
