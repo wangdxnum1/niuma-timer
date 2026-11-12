@@ -47,7 +47,7 @@ if (m && sq) {
     spanQuipText("本周工资建议原路退回", span) + "@" + pct + "@" + (withMoney ? 1 : 0);
   const build = new Function(
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
-    m[0] + "\nreturn buildReportModel;"
+    billSrc.match(/function slackScope\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + billSrc.match(/function slackEmpty\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + m[0] + "\nreturn buildReportModel;"
   );
   const model = build(stubFmtDateRange, stubQuip, () => true, "week")({
     period_label: "第 37 周",
@@ -98,7 +98,7 @@ if (m && sq) {
     spanQuipText("本周工资建议原路退回", span) + "@" + pct + "@" + (withMoney ? 1 : 0);
   const mm = new Function(
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
-    m[0] + "\nreturn buildReportModel;"
+    billSrc.match(/function slackScope\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + billSrc.match(/function slackEmpty\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")({
     period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30",
     total_income: 1, slack_rate: 0.182, front_seconds: 1000, buckets: [],
@@ -109,7 +109,7 @@ if (m && sq) {
   eq("月跨度不传休假 → null", mm.leaveDays, null);
   const ml = new Function(
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
-    m[0] + "\nreturn buildReportModel;"
+    billSrc.match(/function slackScope\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + billSrc.match(/function slackEmpty\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")(
     { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, front_seconds: 1000, buckets: [] },
     3,
@@ -119,7 +119,7 @@ if (m && sq) {
   eq("不传换算 → 空串", mm.slackEquiv, "");
   const me = new Function(
     "fmtDateRange", "weekBillQuip", "moneyConfigured", "curBillSpan",
-    m[0] + "\nreturn buildReportModel;"
+    billSrc.match(/function slackScope\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + billSrc.match(/function slackEmpty\(bill\) \{[\s\S]*?\n\}/)[0] + "\n" + m[0] + "\nreturn buildReportModel;"
   )(stubFmtDateRange, stubQuip, () => true, "month")(
     { period_label: "2026 年 9 月", period_start: "2026-09-01", period_end: "2026-09-30", total_income: 1, slack_rate: 0.1, front_seconds: 1000, buckets: [] },
     3,

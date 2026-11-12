@@ -16,7 +16,7 @@
       #splash .splash-bar-fill{height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,#ffb74d,#ff8a65);animation:spbar 1.15s ease-in-out infinite;}
       @keyframes spbar{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
     </style>
-    <link rel="stylesheet" href="styles.css?v=ba91cea7" />
+    <link rel="stylesheet" href="styles.css?v=4e2c2441" />
   </head>
   <body>
     <!-- 启动页（静态画面）：Webview 初始化期间遮挡白屏，初始化完成后由 js/boot.js 淡出 -->
@@ -130,15 +130,16 @@
           </svg>
         </div>
         <div class="lp-cap spark-axis hidden" id="sparkAxis"><span>0 时</span><span>6 时</span><span>12 时</span><span>18 时</span><span>24 时</span></div>
-        <!-- 摸鱼烧钱行：摸鱼类时长 × 时薪，与上方赚钱大数字「一边赚一边烧」对照。
+        <!-- 摸鱼烧钱行：工作时段摸鱼类时长 × 时薪。
              数据复用 app usage 的 categories + 状态时薪，零新 IPC；休息日/无薪/无记录时整块隐藏 -->
         <div class="slack-burn hidden" id="slackBurn">
-          <div class="sb-main">
+          <div class="sb-main" id="sbMain">
             <span class="sb-label">🐟 摸掉</span>
             <b class="sb-amt" id="sbAmt">¥0.00</b>
             <span class="sb-rate" id="sbRate">摸鱼率 0%</span>
           </div>
           <span class="sb-quip" id="sbQuip"></span>
+              <span class="sb-scope" id="sbScope"></span>
         </div>
       </section>
 
@@ -360,6 +361,7 @@
             <div id="trendTip" class="trend-tip hidden"></div>
           </div>
           <div class="trend-xaxis" id="trendXAxis"></div>
+          <p class="hint" id="trendScope"></p>
         </section>
         <div id="trendEmpty" class="bill-empty hidden">
           <div class="bill-empty-ico" aria-hidden="true">&#xE8AF;</div>
@@ -772,9 +774,9 @@
         <span id="appuLoadText"></span><button id="appuRetry" class="ghost hidden" type="button">重新加载</button>
       </div>
       <section class="card">
-        <h2>应用分类构成 · 工作 vs 摸鱼</h2>
+        <h2>全天前台构成 · 应用分类</h2>
         <div id="catSummary"><span class="hint">读取中…</span></div>
-        <p class="hint">分类按应用名推断：点下方应用行的分类标签可改（如把浏览器标成摸鱼），历史数据即时重新归类</p>
+        <p class="hint">分类按应用名推断：点下方应用行的分类标签可改（如把浏览器标成摸鱼），历史数据即时重新归类。此处为全天时长；首页与账单仅统计工作时段，新版记录可按当前时段重算，旧版数据无法重算。</p>
       </section>
       <section class="card">
         <h2>逐小时使用分布</h2>
@@ -883,18 +885,18 @@
       </div>
     </div>
 
-    <script src="js/core.js?v=ba91cea7"></script>
-    <script src="js/tl_math.js?v=ba91cea7"></script>
-    <script src="js/settings.js?v=ba91cea7"></script>
-    <script src="js/settings_ui.js?v=ba91cea7"></script>
-    <script src="js/hero.js?v=ba91cea7"></script>
-    <script src="js/overtime.js?v=ba91cea7"></script>
-    <script src="js/monitor.js?v=ba91cea7"></script>
-    <script src="js/bill.js?v=ba91cea7"></script>
-    <script src="js/insights.js?v=ba91cea7"></script>
-    <script src="js/storage.js?v=ba91cea7"></script>
-    <script src="js/update.js?v=ba91cea7"></script>
-    <script src="js/boot.js?v=ba91cea7"></script>
+    <script src="js/core.js?v=4e2c2441"></script>
+    <script src="js/tl_math.js?v=4e2c2441"></script>
+    <script src="js/settings.js?v=4e2c2441"></script>
+    <script src="js/settings_ui.js?v=4e2c2441"></script>
+    <script src="js/hero.js?v=4e2c2441"></script>
+    <script src="js/overtime.js?v=4e2c2441"></script>
+    <script src="js/monitor.js?v=4e2c2441"></script>
+    <script src="js/bill.js?v=4e2c2441"></script>
+    <script src="js/insights.js?v=4e2c2441"></script>
+    <script src="js/storage.js?v=4e2c2441"></script>
+    <script src="js/update.js?v=4e2c2441"></script>
+    <script src="js/boot.js?v=4e2c2441"></script>
     <!-- 还原重启遮罩：还原成功后盖上，不可取消；后端 800ms 后自动 restart -->
     <div id="restoreMask" class="modal hidden">
       <div class="modal-backdrop"></div>

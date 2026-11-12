@@ -225,14 +225,16 @@ function exportWeekBillCsv() {
   rows.push(["总进账(元)", bill.total_income]);
   rows.push(["基本工资(元)", bill.base_salary]);
   rows.push(["加班费(元)", bill.ot_fee]);
-  rows.push(["摸鱼成本(元)", bill.slack_cost]);
+  rows.push(["摸鱼成本(元)", (bill.front_seconds || 0) > 0 ? bill.slack_cost : ""]);
+  rows.push(["摸鱼统计口径", slackScope(bill)]);
+  rows.push(["摸鱼统计状态", (bill.front_seconds || 0) > 0 ? "有工作时段记录" : slackEmpty(bill)]);
   rows.push(["出勤工时(小时)", bill.work_hours]);
   rows.push(["出勤天数", bill.work_days]);
   rows.push(["键鼠次数", bill.keys_total]);
   rows.push(["点击次数", bill.clicks_total]);
   rows.push([]);
   rows.push(["（分期明细）"]);
-  rows.push(["日期", "名称", "是否工作日", "有记录", "当日工资(元)", "摸鱼秒数"]);
+  rows.push(["日期", "名称", "是否工作日", "有记录", "当日工资(元)", "摸鱼秒数", "工作时段前台秒数", "旧版未纳入秒数"]);
   for (const d of bill.buckets) {
     rows.push([
       d.date || "",
@@ -240,7 +242,9 @@ function exportWeekBillCsv() {
       d.is_workday == null ? "" : d.is_workday ? "是" : "否",
       d.has_record ? "是" : "否",
       d.salary,
-      d.slack_seconds,
+      (d.front_seconds || 0) > 0 ? d.slack_seconds : "",
+      d.front_seconds || 0,
+      d.slack_legacy_seconds || 0,
     ]);
   }
   downloadCsv(

@@ -131,7 +131,7 @@ has("趋势渲染 paintWeekTrend", appSrc, "function paintWeekTrend()");
 has("身体渲染 paintBodyBill", appSrc, "function paintBodyBill()");
 has("手写 SVG 用 createElementNS（无外部库）", appSrc, 'createElementNS(SVG_NS, tag)');
 has("摸鱼率 null 断线不画 0", appSrc, "p.slack_rate == null");
-has("趋势空窗口判定", appSrc, "pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null)");
+has("趋势空窗口判定", appSrc, "pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null || (p.slack_legacy_seconds || 0) > 0)");
 has("万次缩写 fmtWan", appSrc, "function fmtWan(n)");
 has("96dpi 像素换米（core.js 单一 fmtDist）", appSrc, "function fmtDist(px)");
 has("热力星期按周一开始", appSrc, "WD_CN[(i + 1) % 7]");

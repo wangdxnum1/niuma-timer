@@ -9,7 +9,6 @@ use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::app_usage;
 use crate::calc;
 use crate::config::{self, Config};
 use crate::db;
@@ -37,8 +36,10 @@ pub struct DayBill {
     pub clicks: i64,
     /// 当日摸鱼率 0–1（摸鱼秒 ÷ 四类前台总秒），无前台秒为 0
     pub slack_rate: f64,
-    /// 当日四类前台总秒（app_usage 全应用求和；年桶 slack_rate 分母用）
+    /// 工作时段四类前台总秒（分钟记录精确裁剪；年桶分母用）
     pub front_seconds: i64,
+    /// 旧版记录秒数：无法按工作时段重算，不纳入摸鱼率和成本。
+    pub slack_legacy_seconds: i64,
     /// 有任意监控证据（act_events>0 或应用秒>0）
     pub has_record: bool,
 }
@@ -81,6 +82,8 @@ pub struct PeriodBill {
     pub clicks_total: i64,
     pub slack_rate: f64,
     pub front_seconds: i64,
+    /// 旧版记录秒数：无法按工作时段重算，不纳入摸鱼率和成本。
+    pub slack_legacy_seconds: i64,
     pub hardest: Option<HardestDay>,
     pub slackiest: Option<SlackiestDay>,
     pub buckets: Vec<BucketBill>,
@@ -319,29 +322,21 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
         }
     }
 
-    // ---- 应用前台秒：按天累计四类总秒与摸鱼秒（查询时归类，零迁移） ----
-    let mut app_map: HashMap<String, (i64, i64)> = HashMap::new();
+    // 全天应用秒只用于原有出勤证据；摸鱼统计统一取工作时段明细。
+    let mut app_map: HashMap<String, i64> = HashMap::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT date, app, SUM(seconds) \
-             FROM app_usage WHERE date >= ?1 AND date < ?2 GROUP BY date, app",
+            "SELECT date, SUM(seconds) FROM app_usage WHERE date >= ?1 AND date < ?2 GROUP BY date",
         )?;
         let rows = stmt.query_map(rusqlite::params![start_s, end_excl_s], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })?;
         for row in rows {
-            let (d, app, secs) = row?;
-            let e = app_map.entry(d).or_insert((0, 0));
-            e.0 += secs;
-            if app_usage::category_of(&app, input.cfg) == app_usage::CAT_SLACK {
-                e.1 += secs;
-            }
+            let (d, seconds) = row?;
+            app_map.insert(d, seconds);
         }
     }
+    let work_usage = crate::work_usage::range(conn, &start_s, &end_excl_s, input.cfg)?;
 
     // ---- 逐日组装 ----
     let mut days: Vec<DayBill> = Vec::new();
@@ -354,6 +349,7 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
     let mut slack_work = 0i64; // 周摸鱼率分子（仅工作日）
     let mut front_work = 0i64; // 周摸鱼率分母（仅工作日）
     let mut work_days = 0i64;
+    let mut slack_legacy_seconds = 0i64;
     let mut hardest: Option<HardestDay> = None;
     let mut slackiest: Option<SlackiestDay> = None;
 
@@ -378,8 +374,19 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
 
         let (ot_total, ot_hours) = ot_map.get(&key).map(|t| (t.0, t.1)).unwrap_or((0.0, 0.0));
         let (act_events, keys, clicks) = act_map.get(&key).copied().unwrap_or((0, 0, 0));
-        let (front, slack) = app_map.get(&key).copied().unwrap_or((0, 0));
-        let has_record = act_events > 0 || front > 0;
+        let raw_front = app_map.get(&key).copied().unwrap_or(0);
+        let has_record = act_events > 0 || raw_front > 0;
+        let usage = work_usage.get(&key).copied().unwrap_or_default();
+        let (front, slack, legacy) = if is_wd {
+            (
+                usage.front_seconds,
+                usage.slack_seconds,
+                usage.legacy_seconds,
+            )
+        } else {
+            (0, 0, 0)
+        };
+        slack_legacy_seconds += legacy;
 
         // 当日时薪 = 满勤 ÷ 当日工时（固定时薪；今天实时 earned 只影响 salary 字段）
         let day_rate = if daily_h > 0.0 {
@@ -440,6 +447,7 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
             clicks,
             slack_rate: rate,
             front_seconds: front,
+            slack_legacy_seconds: legacy,
             has_record,
         });
         d += Duration::days(1);
@@ -472,6 +480,7 @@ pub fn assemble(input: &PeriodInput, conn: &Connection) -> rusqlite::Result<Peri
         clicks_total,
         slack_rate: weekly_rate,
         front_seconds: front_work,
+        slack_legacy_seconds,
         hardest,
         slackiest,
         ot_hours: ot_hours_total,
@@ -558,6 +567,8 @@ pub struct BucketBill {
     pub clicks: i64,
     /// 天桶 = 当日比率；月桶 = Σ摸鱼秒 ÷ Σ(工作日且有记录的前台秒)（求和后再相除，非比率平均）
     pub slack_rate: f64,
+    pub front_seconds: i64,
+    pub slack_legacy_seconds: i64,
     pub has_record: bool,
 }
 
@@ -574,6 +585,8 @@ fn day_to_bucket(d: &DayBill) -> BucketBill {
         keys: d.keys,
         clicks: d.clicks,
         slack_rate: d.slack_rate,
+        front_seconds: d.front_seconds,
+        slack_legacy_seconds: d.slack_legacy_seconds,
         has_record: d.has_record,
     }
 }
@@ -592,6 +605,8 @@ fn month_bucket(label: String, ds: Vec<&DayBill>) -> BucketBill {
         keys: 0,
         clicks: 0,
         slack_rate: 0.0,
+        front_seconds: 0,
+        slack_legacy_seconds: 0,
         has_record: false,
     };
     let mut front = 0i64;
@@ -605,8 +620,10 @@ fn month_bucket(label: String, ds: Vec<&DayBill>) -> BucketBill {
         if d.is_workday && d.has_record {
             b.slack_seconds += d.slack_seconds;
             front += d.front_seconds;
+            b.slack_legacy_seconds += d.slack_legacy_seconds;
         }
     }
+    b.front_seconds = front;
     b.slack_rate = if front > 0 {
         b.slack_seconds as f64 / front as f64
     } else {
@@ -644,6 +661,7 @@ mod tests {
         conn.execute_batch(db::CREATE_OT_RECORDS).unwrap();
         conn.execute_batch(db::CREATE_ACT_HOURLY).unwrap();
         conn.execute_batch(db::CREATE_APP_USAGE).unwrap();
+        conn.execute_batch(db::CREATE_APP_USAGE_MINUTES).unwrap();
         conn.execute_batch(db::CREATE_DAY_OVERRIDE).unwrap();
         conn
     }
@@ -816,6 +834,13 @@ mod tests {
             [],
         )
         .unwrap();
+        for minute in (540..720).chain(780..810) {
+            conn.execute(
+                "INSERT INTO app_usage_minutes VALUES ('2026-09-08', ?1, '摸鱼网', 60)",
+                [minute],
+            )
+            .unwrap();
+        }
         let bill = assemble(
             &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
             &conn,
@@ -902,6 +927,20 @@ mod tests {
             [],
         )
         .unwrap();
+        for minute in 540..600 {
+            conn.execute(
+                "INSERT INTO app_usage_minutes VALUES ('2026-09-08', ?1, 'VS Code', 60)",
+                [minute],
+            )
+            .unwrap();
+        }
+        for minute in 600..620 {
+            conn.execute(
+                "INSERT INTO app_usage_minutes VALUES ('2026-09-08', ?1, '网易云音乐', 60)",
+                [minute],
+            )
+            .unwrap();
+        }
         let bill = assemble(
             &input(&c, &hol(), NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
             &conn,
@@ -919,6 +958,87 @@ mod tests {
         assert_eq!(s.weekday, "周二");
         // 周摸鱼率分子分母只含工作日（该周仅此一天有记录）
         assert_eq!(bill.front_seconds, 4800);
+    }
+
+    #[test]
+    fn legacy_and_mixed_data_preserve_attendance_without_estimation() {
+        let c = Config {
+            hourly_wage: 30.0,
+            salary_mode: "hourly".into(),
+            ..Default::default()
+        };
+        let conn = mem_conn();
+        conn.execute(
+            "INSERT INTO app_usage VALUES ('2026-09-08', '网易云音乐', 3600)",
+            [],
+        )
+        .unwrap();
+        let holidays = hol();
+        let inp = input(&c, &holidays, NaiveDate::from_ymd_opt(2026, 9, 7).unwrap());
+        let legacy = assemble(&inp, &conn).unwrap();
+        assert_eq!(legacy.front_seconds, 0);
+        assert_eq!(legacy.slack_legacy_seconds, 3600);
+        assert_eq!(legacy.slack_cost, 0.0);
+        assert!(legacy.slackiest.is_none());
+        assert_eq!(legacy.work_days, Some(1));
+        assert!(legacy.buckets[1].has_record);
+        conn.execute("UPDATE app_usage SET seconds=3720", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO app_usage_minutes VALUES ('2026-09-08', 570, '网易云音乐', 60)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_usage_minutes VALUES ('2026-09-08', 750, '网易云音乐', 60)",
+            [],
+        )
+        .unwrap();
+        let mixed = assemble(&inp, &conn).unwrap();
+        assert_eq!(mixed.front_seconds, 60);
+        assert_eq!(mixed.slack_legacy_seconds, 3600);
+        assert_eq!(mixed.slack_rate, 1.0);
+        assert_eq!(f(mixed.slack_cost), 0.5);
+        assert_eq!(mixed.base_salary, legacy.base_salary);
+        assert_eq!(mixed.work_days, legacy.work_days);
+        assert_eq!(mixed.buckets[1].front_seconds, 60);
+    }
+
+    #[test]
+    fn precise_slack_excludes_leave_holidays_and_weekends() {
+        let c = Config::default();
+        let conn = mem_conn();
+        let mut holidays = hol();
+        holidays
+            .days
+            .insert(NaiveDate::from_ymd_opt(2026, 9, 9).unwrap(), 3);
+        conn.execute("INSERT INTO day_override VALUES ('2026-09-07', '年假')", [])
+            .unwrap();
+        for date in ["2026-09-07", "2026-09-09", "2026-09-12"] {
+            conn.execute(
+                "INSERT INTO app_usage VALUES (?1, '网易云音乐', 60)",
+                [date],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO app_usage_minutes VALUES (?1, 570, '网易云音乐', 60)",
+                [date],
+            )
+            .unwrap();
+        }
+        let bill = assemble(
+            &input(&c, &holidays, NaiveDate::from_ymd_opt(2026, 9, 7).unwrap()),
+            &conn,
+        )
+        .unwrap();
+        assert_eq!(bill.front_seconds, 0);
+        assert_eq!(bill.slack_cost, 0.0);
+        assert!(bill.slackiest.is_none());
+        for i in [0, 2, 5] {
+            assert!(bill.buckets[i].has_record);
+            assert_eq!(bill.buckets[i].slack_seconds, 0);
+            assert_eq!(bill.buckets[i].front_seconds, 0);
+        }
     }
 
     #[test]
@@ -1174,6 +1294,7 @@ mod tests {
                 0.0
             },
             front_seconds: front,
+            slack_legacy_seconds: 0,
             has_record,
         }
     }

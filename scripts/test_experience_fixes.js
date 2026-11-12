@@ -26,10 +26,10 @@ function element() {
 }
 const monthly={period_label:'2026 年 9 月',period_start:'2026-09-01',period_end:'2026-09-30',
   total_income:9000,base_salary:8800,ot_fee:200,ot_hours:8,slack_cost:90,slack_rate:0.1,
-  front_seconds:1000,work_days:20,work_hours:160,keys_total:100,clicks_total:30,
+  front_seconds:1000,slack_legacy_seconds:0,work_days:20,work_hours:160,keys_total:100,clicks_total:30,
   is_current_period:false,prev_total:0,delta_pct:null,hardest:null,slackiest:null,
   buckets:[{date:'2026-09-01',label:'01',salary:440,is_workday:true,has_record:true,
-    slack_seconds:100,ot_total:0,act_events:130,keys:100,clicks:30,slack_rate:0.1}]};
+    slack_seconds:100,front_seconds:1000,slack_legacy_seconds:0,ot_total:0,act_events:130,keys:100,clicks:30,slack_rate:0.1}]};
 const yearly={...monthly,period_label:'2026 年',period_start:'2026-01-01',period_end:'2026-12-31',
   total_income:90000,is_current_period:true,buckets:[{...monthly.buckets[0],date:null,label:'9 月',salary:9000,is_workday:null,ot_total:200}]};
 const zeroMilestones={ot_hours:0,ot_fee:0,keystrokes:0,distance_px:0,focus_minutes:0,active_days:0,first_date:null};
@@ -112,7 +112,7 @@ cases.empty=async()=>{
     await h.run('loadMonthlyReport()');
     assert.equal(h.get('reportBody').classList.contains('hidden'),false,'overtime/leave evidence must remain visible');
     const slackRow=h.get('reportRows').children.find(row=>row.children[0].textContent==='摸鱼率');
-    assert.equal(slackRow.children[1].textContent,'暂无记录');
+    assert.equal(slackRow.children[1].textContent,'暂无工作时段记录');
     assert.equal(h.get('reportQuote').classList.contains('hidden'),true);
     await h.run('saveReportImage()');
     assert.equal(h.exports[0].model.slackPct,null,'unknown rate must survive the export boundary');
@@ -194,7 +194,7 @@ cases.chart=async()=>{
     measureText:t=>({width:String(t).length*10}),createLinearGradient:()=>({addColorStop(){}})})});
   vm.runInContext(fn('drawReport'),h.ctx);h.ctx.fixture={...emptyBill,ot_hours:2,ot_fee:40,total_income:40};
   h.run('drawReport(buildReportModel(fixture,0,""),1)');
-  assert(texts.includes('暂无记录'));assert(!texts.some(t=>String(t).includes('天选牛马')));
+  assert(texts.includes('暂无工作时段记录'));assert(!texts.some(t=>String(t).includes('天选牛马')));
 };
 cases.leaveDetails=async()=>{
   const h=harness();

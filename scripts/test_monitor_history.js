@@ -7,7 +7,7 @@ const {rsRead}=require('./lib/rs_sources');
 function fields(file,name){const body=rsRead(file).match(new RegExp('pub struct '+name+'\\s*\\{([\\s\\S]*?)\\n\\}'))[1];return [...body.matchAll(/pub (\w+):/g)].map(m=>m[1]).sort();}
 const bucket=Object.fromEntries(fields('activity.rs','HourBucket').map(k=>[k,0]));
 const fixtures={act:{date:'2026-11-11',hourly:[],totals:bucket,top_keys:[],active_hours:0,hook_ok:true},
-  appu:{date:'2026-11-11',apps:[],categories:[],hourly:[],watch_ok:true},
+  appu:{date:'2026-11-11',apps:[],categories:[],hourly:[],watch_ok:true,work_usage:{front_seconds:0,slack_seconds:0,legacy_seconds:0}},
   audio:{date:'2026-11-11',apps:[],hourly:[],watch_ok:true}};
 for(const [key,file,name] of [['act','activity.rs','ActivitySummary'],['appu','app_usage.rs','AppUsageSummary'],['audio','audio_usage.rs','AudioUsageSummary']])assert.deepEqual(Object.keys(fixtures[key]).sort(),fields(file,name));
 function element(){const classes=new Set(),events={},attrs={};return {value:'',disabled:false,textContent:'',innerHTML:'',style:{},children:[],

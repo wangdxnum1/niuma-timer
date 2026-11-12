@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS app_usage_hourly (
 );
 "#;
 
+pub(crate) const CREATE_APP_USAGE_MINUTES: &str = r#"
+CREATE TABLE IF NOT EXISTS app_usage_minutes (
+    date    TEXT NOT NULL,
+    minute  INTEGER NOT NULL CHECK (minute BETWEEN 0 AND 1439),
+    app     TEXT NOT NULL,
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, minute, app)
+);
+"#;
+
 pub(crate) const CREATE_AUDIO_USAGE: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_usage (
     date    TEXT NOT NULL,
@@ -143,6 +153,7 @@ pub(crate) const BUSINESS_TABLES: &[&str] = &[
     "act_keys",
     "app_usage",
     "app_usage_hourly",
+    "app_usage_minutes",
     "audio_usage",
     "audio_usage_hourly",
     "focus_sessions",
@@ -159,6 +170,7 @@ pub(crate) const TABLE_SINCE: &[(&str, &str)] = &[
     ("act_keys", "1.0.0"),
     ("app_usage", "1.0.0"),
     ("app_usage_hourly", "1.0.0"),
+    ("app_usage_minutes", "1.11.6"),
     ("audio_usage", "1.0.0"),
     ("audio_usage_hourly", "1.0.0"),
     ("focus_sessions", "1.7.0"),
@@ -175,6 +187,7 @@ const TABLE_DDL: &[&str] = &[
     CREATE_ACT_KEYS,
     CREATE_APP_USAGE,
     CREATE_APP_USAGE_HOURLY,
+    CREATE_APP_USAGE_MINUTES,
     CREATE_AUDIO_USAGE,
     CREATE_AUDIO_USAGE_HOURLY,
     CREATE_FOCUS_SESSIONS,

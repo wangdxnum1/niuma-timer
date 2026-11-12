@@ -42,6 +42,7 @@ mod tray;
 mod update;
 mod weekbill;
 mod win;
+mod work_usage;
 
 use chrono::{Datelike, Local, TimeZone};
 use tauri::Manager;

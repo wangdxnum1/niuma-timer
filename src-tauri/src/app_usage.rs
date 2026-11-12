@@ -11,8 +11,8 @@
 //! - 结算：**切换驱动，而非 tick 驱动**。前台一切换先把上一段时长结给「切走前」的
 //!   应用，常驻线程的 10 秒 tick 只负责切段兜底。若只在 tick 时按时间差累加，
 //!   两次 tick 之间切走的那一整段会被错记给切换后的应用（微信看 8 秒再切走 →
-//!   Chrome 白得 10 秒）。最终写入 SQLite 两张表（app_usage 天级汇总 +
-//!   app_usage_hourly 小时分布）。
+//!   Chrome 白得 10 秒）。最终同事务写入 SQLite 三张表（app_usage 天级汇总、
+//!   app_usage_hourly 小时分布、app_usage_minutes 精确分钟分布）。
 //!
 //! 统计生效范围：程序运行期间（App 常驻托盘即持续统计），跳过自身进程。
 
@@ -705,16 +705,18 @@ fn settle(now_mono: u64, with_icon: bool) {
     let end_wall = now_ms();
     let start_wall = end_wall.saturating_sub(secs.saturating_mul(1000));
     let parts = split_by_hour(start_wall, end_wall, secs);
-    if crate::db::with_db(|g| write_usage_parts(g, &cur.display, &parts)).is_err() {
+    let minutes = split_by_minute(start_wall, end_wall, secs);
+    if crate::db::with_db(|g| write_usage_parts(g, &cur.display, &parts, &minutes)).is_err() {
         sync::lock(&CUR, "app_usage::CUR").since_ms = old_since;
     }
 }
 
-/// 日表 + 小时表同一事务：任一条失败整体回滚，避免「日累计已加、小时桶没有」。
+/// 日表、小时表和分钟表同一事务：任一条失败整体回滚。
 fn write_usage_parts(
     g: &mut rusqlite::Connection,
     display: &str,
     parts: &[(String, i64, i64)],
+    minutes: &[(String, i64, i64)],
 ) -> rusqlite::Result<()> {
     let tx = g.transaction()?;
     for (date, hour, s) in parts {
@@ -727,6 +729,13 @@ fn write_usage_parts(
             "INSERT INTO app_usage_hourly (date, hour, app, seconds) VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(date, hour, app) DO UPDATE SET seconds = seconds + ?4",
             params![date, hour, display, s],
+        )?;
+    }
+    for (date, minute, s) in minutes {
+        tx.execute(
+            "INSERT INTO app_usage_minutes (date, minute, app, seconds) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(date, minute, app) DO UPDATE SET seconds = seconds + ?4",
+            params![date, minute, display, s],
         )?;
     }
     tx.commit()
@@ -744,6 +753,16 @@ fn write_usage_parts(
 /// 注意这里必须写 `chrono::Duration` 全路径——本文件已导入 `std::time::Duration`，
 /// 两者同名，直接写 `Duration` 会拿到 std 的版本而编译失败。
 fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64)> {
+    split_interval(start_ms, end_ms, secs, false)
+}
+
+fn split_by_minute(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64)> {
+    split_interval(start_ms, end_ms, secs, true)
+}
+
+// A collected segment is capped at 60 seconds, so splitting at minutes preserves
+// the existing hour/day allocation as well as the total integer-second count.
+fn split_interval(start_ms: u64, end_ms: u64, secs: u64, minutes: bool) -> Vec<(String, i64, i64)> {
     let mut out: Vec<(String, i64, i64)> = Vec::new();
     if secs == 0 || end_ms <= start_ms {
         return out;
@@ -756,8 +775,12 @@ fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64
             None => break, // 时间戳越界：放弃切分，走下面的保底分支
         };
         // 本子段所属小时桶的结束时刻（下一个整点）；chrono 自动处理跨天
-        let next_ms = (dt + chrono::Duration::hours(1))
-            .with_minute(0)
+        let next = if minutes {
+            Some(dt + chrono::Duration::minutes(1))
+        } else {
+            (dt + chrono::Duration::hours(1)).with_minute(0)
+        };
+        let next_ms = next
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_nanosecond(0))
             .map(|d| d.timestamp_millis().max(0) as u64)
@@ -770,7 +793,11 @@ fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64
         if sub_secs > 0 {
             out.push((
                 dt.date_naive().format("%Y-%m-%d").to_string(),
-                dt.hour().min(23) as i64,
+                if minutes {
+                    (dt.hour() * 60 + dt.minute()) as i64
+                } else {
+                    dt.hour().min(23) as i64
+                },
                 sub_secs as i64,
             ));
             remaining -= sub_secs;
@@ -789,7 +816,11 @@ fn split_by_hour(start_ms: u64, end_ms: u64, secs: u64) -> Vec<(String, i64, i64
                 .unwrap_or_else(Local::now);
             out.push((
                 dt.date_naive().format("%Y-%m-%d").to_string(),
-                dt.hour().min(23) as i64,
+                if minutes {
+                    (dt.hour() * 60 + dt.minute()) as i64
+                } else {
+                    dt.hour().min(23) as i64
+                },
                 secs as i64,
             ));
         }
@@ -945,6 +976,8 @@ pub struct AppUsageSummary {
     pub hourly: Vec<i64>,
     /// 前台监控是否生效
     pub watch_ok: bool,
+    /// None means the precise working-window query was unavailable.
+    pub work_usage: Option<crate::work_usage::WorkUsage>,
 }
 
 /// 应用使用汇总（默认今天，`date` 可指定任意历史日期）。
@@ -962,6 +995,16 @@ pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppU
         None => Local::now().date_naive().format("%Y-%m-%d").to_string(),
     };
     let watch_ok = WATCH_OK.load(Ordering::SeqCst);
+    let work_usage = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.succ_opt())
+        .and_then(|end| {
+            crate::db::with_db(|g| {
+                crate::work_usage::range(g, &date, &end.to_string(), cfg)
+                    .map(|mut rows| rows.remove(&date).unwrap_or_default())
+            })
+            .ok()
+        });
     // 查询失败时降级为空汇总（前端显示「暂无数据」），具体错误经 ？ 传播给 with_db
     // 统一记入 debug.log。内层此前用 if let Ok 双层吞错：with_db 只看得到外层 Ok，
     // 表损坏/磁盘满时这里静默变「今日 0 数据」，与「监控暂停」不可区分、零线索。
@@ -1031,6 +1074,7 @@ pub fn summary(known_icons: &[String], date: Option<&str>, cfg: &Config) -> AppU
         categories,
         hourly,
         watch_ok,
+        work_usage,
     }
 }
 
@@ -1359,11 +1403,85 @@ mod tests {
         let mut c = rusqlite::Connection::open_in_memory().unwrap();
         c.execute_batch(crate::db::CREATE_APP_USAGE).unwrap();
         let parts = vec![("2026-09-11".into(), 10i64, 5i64)];
-        assert!(write_usage_parts(&mut c, "微信", &parts).is_err());
+        assert!(write_usage_parts(&mut c, "微信", &parts, &parts).is_err());
         let n: i64 = c
             .query_row("SELECT COUNT(*) FROM app_usage", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0, "事务回滚后日表应为空");
+    }
+
+    #[test]
+    fn minute_capture_conserves_raw_totals_at_boundaries() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE).unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE_HOURLY)
+            .unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE_MINUTES)
+            .unwrap();
+        for (hour, minute, second, millis, secs) in [
+            (9, 29, 55, 0, 10),
+            (11, 59, 55, 900, 10),
+            (23, 59, 55, 0, 10),
+            (23, 59, 59, 900, 60),
+        ] {
+            let start = Local
+                .with_ymd_and_hms(2026, 11, 12, hour, minute, second)
+                .unwrap()
+                .timestamp_millis() as u64
+                + millis;
+            let hours = split_by_hour(start, start + secs * 1000, secs);
+            let minutes = split_by_minute(start, start + secs * 1000, secs);
+            assert_eq!(minutes.iter().map(|p| p.2).sum::<i64>(), secs as i64);
+            let mut folded: HashMap<(String, i64), i64> = HashMap::new();
+            for (date, minute, seconds) in &minutes {
+                *folded.entry((date.clone(), minute / 60)).or_default() += seconds;
+            }
+            assert_eq!(
+                folded,
+                hours
+                    .iter()
+                    .map(|(d, h, s)| ((d.clone(), *h), *s))
+                    .collect()
+            );
+            write_usage_parts(&mut conn, "网易云音乐", &hours, &minutes).unwrap();
+        }
+        let raw: i64 = conn
+            .query_row("SELECT SUM(seconds) FROM app_usage", [], |r| r.get(0))
+            .unwrap();
+        let hourly: i64 = conn
+            .query_row("SELECT SUM(seconds) FROM app_usage_hourly", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let precise: i64 = conn
+            .query_row("SELECT SUM(seconds) FROM app_usage_minutes", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!((raw, hourly, precise), (90, 90, 90));
+        let rows = crate::work_usage::range(&conn, "2026-11-12", "2026-11-14", &Config::default())
+            .unwrap();
+        assert!(rows.values().all(|u| u.legacy_seconds == 0));
+        assert_eq!(rows["2026-11-12"].front_seconds, 14);
+    }
+
+    #[test]
+    fn minute_write_failure_rolls_back_daily_and_hourly_updates() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE).unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE_HOURLY)
+            .unwrap();
+        conn.execute_batch(crate::db::CREATE_APP_USAGE_MINUTES)
+            .unwrap();
+        let hours = vec![("2026-11-12".into(), 9, 5)];
+        let minutes = vec![("2026-11-12".into(), 1440, 5)];
+        assert!(write_usage_parts(&mut conn, "Chrome", &hours, &minutes).is_err());
+        for table in ["app_usage", "app_usage_hourly", "app_usage_minutes"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0);
+        }
     }
 
     // ---- 图标捐赠者：马甲进程向上层目录找主程序 exe 借图标 ----

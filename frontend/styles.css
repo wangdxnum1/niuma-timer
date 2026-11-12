@@ -702,6 +702,7 @@ button:active {
    顶部分隔细线压出边界；金额用摸鱼红（同 cat-c-slack） */
 .slack-burn {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
@@ -2349,7 +2350,10 @@ button:active {
   padding: 6px 9px;
   font-size: 11px;
   color: #e8e8ea;
-  white-space: nowrap;
+  width: 280px;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.6;
   pointer-events: none;
   transform: translate(-50%, -110%);
   z-index: 5;
@@ -2586,3 +2590,5 @@ button:active {
   cursor: pointer;
   white-space: nowrap;
 }
+
+.sb-scope { flex-basis: 100%; font-size: 11px; color: #a0a0aa; line-height: 1.6; }

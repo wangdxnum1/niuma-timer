@@ -75,7 +75,7 @@ sandbox.downloadCsv = function (filename, csv) {
 };
 
 // 抽取除 downloadCsv 外的四个函数（downloadCsv 由上面的桩提供），放进同一作用域
-const fns = ["csvCell", "csvRows", "exportOvertimeCsv", "exportWeekBillCsv"]
+const fns = ["csvCell", "csvRows", "slackScope", "slackEmpty", "exportOvertimeCsv", "exportWeekBillCsv"]
   .map((n) => extractFn(appSrc, n))
   .join("\n");
 const runner = new Function(
@@ -175,6 +175,8 @@ sandbox._setBillData({
       has_record: true,
       salary: 900,
       slack_seconds: 120,
+      front_seconds: 1000,
+      slack_legacy_seconds: 0,
     },
     {
       date: "2026-09-08",
@@ -183,6 +185,8 @@ sandbox._setBillData({
       has_record: true,
       salary: 850,
       slack_seconds: 300,
+      front_seconds: 2000,
+      slack_legacy_seconds: 0,
     },
   ],
 });

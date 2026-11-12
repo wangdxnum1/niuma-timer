@@ -185,6 +185,15 @@ function offDay(text) {
   return t;
 }
 
+// 与首页统一：数值只来自新版工作时段，旧版秒数仅用于说明覆盖范围。
+function slackScope(bill) {
+  return "仅统计工作时段" + ((bill.slack_legacy_seconds || 0) > 0
+    ? " · 旧版数据未纳入，无法重算" : "");
+}
+function slackEmpty(bill) {
+  return (bill.slack_legacy_seconds || 0) > 0 ? "旧版数据无法重算" : "暂无工作时段记录";
+}
+
 function paintReceipt(bill) {
   $("rcpNo").textContent = "NO." + String(bill.period_start || "").replace(/-/g, "");
   $("rcpAmount").textContent = fmtMoney(bill.total_income);
@@ -206,13 +215,15 @@ function paintReceipt(bill) {
   if (moneyConfigured()) lines.append(billLine("应赚工资", fmtMoney(bill.base_salary)));
   lines.append(billLine("加班费", fmtMoney(bill.ot_fee)));
   if (moneyConfigured() && $("monitor_app_usage").checked)
-    lines.append(billLine("摸鱼成本", fmtMoney(bill.slack_cost)));
+    lines.append(billLine("摸鱼成本", front > 0 ? fmtMoney(bill.slack_cost) : slackEmpty(bill)));
   lines.append(
     billLine(
       "出勤工时",
       bill.work_days == null ? "—" : "在岗约 " + (bill.work_hours || 0).toFixed(1) + "h"
     )
   );
+
+  if ($("monitor_app_usage").checked) lines.append(billLine("统计口径", slackScope(bill)));
 
   // 7 日金条：满勤日画金条（按周内最大工资归一，保底 8%），休息/未来/未到特殊态
   const box = $("rcpDays");
@@ -265,7 +276,7 @@ function paintDash(bill) {
   $("miniSalary").textContent = moneyConfigured() ? fmtMoney(bill.base_salary) : "—";
   $("miniOt").textContent = fmtMoney(bill.ot_fee);
   $("miniSlack").textContent =
-    moneyConfigured() && $("monitor_app_usage").checked ? fmtMoney(bill.slack_cost) : "—";
+    moneyConfigured() && $("monitor_app_usage").checked && (bill.front_seconds || 0) > 0 ? fmtMoney(bill.slack_cost) : "—";
   $("miniHours").textContent =
     bill.work_days == null ? "—" : (bill.work_hours || 0).toFixed(1) + "h";
 
@@ -276,6 +287,7 @@ function paintDash(bill) {
     ext.push(
       "最摸 " + bill.slackiest.weekday + " 摸鱼率 " + Math.round((bill.slackiest.rate || 0) * 100) + "%"
     );
+  if ($("monitor_app_usage").checked) ext.push(slackScope(bill));
   $("dashExtreme").textContent = ext.join(" · ");
 
   // 每日双柱：入账(金)/摸鱼(红)各按自身最大值归一（保底 3%），休息/未来留空
@@ -296,7 +308,8 @@ function paintDash(bill) {
       const slack = document.createElement("div");
       slack.className = "bar bar-slack";
       slack.style.height = Math.max(3, ((d.slack_seconds || 0) / maxSlack) * 100) + "%";
-      pair.append(earn, slack);
+      pair.append(earn);
+      if ((d.front_seconds || 0) > 0) pair.append(slack);
     }
     const wd = document.createElement("div");
     wd.className = "bar-wd";
@@ -336,6 +349,8 @@ function buildReportModel(bill, leaveDays, slackEquiv) {
     otHours: bill.ot_hours || 0,
     slackCost: hasFront && moneyConfigured() ? bill.slack_cost || 0 : null,
     slackPct: ratePct,
+    slackScope: slackScope(bill),
+    slackEmpty: slackEmpty(bill),
     workDays: bill.work_days,
     workHours: bill.work_hours || 0,
     leaveDays: leaveDays == null ? null : leaveDays,
@@ -390,7 +405,7 @@ function drawReport(model, scale) {
     ["基础工资", fmtMoney(model.base)],
     ["加班费", model.ot > 0 ? fmtMoney(model.ot) + "（" + model.otHours.toFixed(1) + "h）" : "—"],
     ["摸鱼成本", model.slackCost == null ? "—" : fmtMoney(model.slackCost)],
-    ["摸鱼率", model.slackPct == null ? "暂无记录" : model.slackPct.toFixed(1) + "%" + (model.slackEquiv ? " " + model.slackEquiv : "")],
+    ["摸鱼率", model.slackPct == null ? model.slackEmpty : model.slackPct.toFixed(1) + "%" + (model.slackEquiv ? " " + model.slackEquiv : "")],
   ];
   if (model.span !== "week" && model.leaveDays != null) {
     rows.splice(3, 0, ["休假", model.leaveDays + " 天"]);
@@ -473,6 +488,7 @@ function drawReport(model, scale) {
   ctx.fillText(model.quip, 55, 930);
   ctx.fillStyle = "rgba(242,242,244,0.35)";
   ctx.font = '400 14px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText(model.slackScope || "仅统计工作时段", 55, 982);
   ctx.fillText("由牛马计时器生成", 55, 1010);
   return canvas;
 }
@@ -626,7 +642,8 @@ function paintReport(bill, leaves) {
   rows.push(["加班", (bill.ot_hours || 0) > 0 ? (bill.ot_hours || 0).toFixed(1) + "h · " + fmtMoney(bill.ot_fee) : "—"]);
   const front = bill.front_seconds || 0;
   const equiv = moneyConfigured() ? currentSlackEquiv(bill.slack_cost || 0) : "";
-  rows.push(["摸鱼率", front > 0 ? ((bill.slack_rate || 0) * 100).toFixed(1) + "%" + (equiv ? " " + equiv : "") : "暂无记录"]);
+  rows.push(["摸鱼率", front > 0 ? ((bill.slack_rate || 0) * 100).toFixed(1) + "%" + (equiv ? " " + equiv : "") : slackEmpty(bill)]);
+  rows.push(["统计口径", slackScope(bill)]);
   if (bill.hardest) {
     rows.push(["最拼一天", md(bill.hardest.date) + " " + bill.hardest.weekday + " · 加班 " + (bill.hardest.ot_hours || 0).toFixed(1) + "h"]);
   }

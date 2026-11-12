@@ -189,6 +189,11 @@ function svgEl(tag, attrs) {
   return el;
 }
 
+function trendSlackText(p) {
+  const rate = p.slack_rate == null ? slackEmpty(p) : Math.round(p.slack_rate * 100) + "%";
+  return "摸鱼率 " + rate + " · " + slackScope(p);
+}
+
 function paintWeekTrend() {
   const trend = trendData;
   if (!trend || curView !== "viewBill") return;
@@ -196,7 +201,8 @@ function paintWeekTrend() {
   const last = pts[pts.length - 1];
   if (last) paintBillNav(last.period_start, last.period_end);
   // 空窗口：八周全零收入且无前台记录（slack_rate 全 null）→ 不画一条趴地的 0 线
-  const hasData = pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null);
+  const hasData = pts.some((p) => (p.income || 0) > 0 || p.slack_rate != null || (p.slack_legacy_seconds || 0) > 0);
+  $("trendScope").textContent = slackScope({slack_legacy_seconds: pts.some(p => (p.slack_legacy_seconds || 0) > 0) ? 1 : 0});
   $("trendSvg").closest("section").classList.toggle("hidden", !hasData);
   $("trendEmpty").classList.toggle("hidden", hasData);
   if (!hasData) return;
@@ -298,11 +304,11 @@ function paintWeekTrend() {
     });
     z.addEventListener("mouseenter", () => {
       const range = fmtDateRange(p.period_start, p.period_end);
-      const rate = p.slack_rate == null ? "—" : Math.round(p.slack_rate * 100) + "%";
-      tip.textContent = range + " · 入账 " + fmtMoney(p.income) + " · 摸鱼率 " + rate;
+      tip.textContent = range + " · 入账 " + fmtMoney(p.income) + " · " + trendSlackText(p);
+      const halfTip = Math.min(140, wrap.clientWidth / 2);
       const px = Math.max(
-        70,
-        Math.min(wrap.clientWidth - 70, (xAt(i) / 640) * wrap.clientWidth)
+        halfTip,
+        Math.min(wrap.clientWidth - halfTip, (xAt(i) / 640) * wrap.clientWidth)
       );
       const py = (yIncome(p.income) / 220) * wrap.clientHeight;
       tip.style.left = px.toFixed(0) + "px";

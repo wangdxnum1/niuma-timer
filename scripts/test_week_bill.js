@@ -50,8 +50,8 @@ has("未来周封顶 offset.max(0)", rsBill, "offset.max(0)");
 has("加班费区间求和", rsBill, "FROM ot_records WHERE date >= ?1 AND date < ?2");
 has("键鼠事件聚合", rsBill, "FROM act_hourly WHERE date >= ?1 AND date < ?2");
 has("点击口径化简式（(left−2×dbl)+dbl 合并）", rsBill, "SUM(`left`)-SUM(dbl)+SUM(`right`)");
-has("应用秒数按天按应用聚合", rsBill, "FROM app_usage WHERE date >= ?1 AND date < ?2 GROUP BY date, app");
-has("摸鱼分类复用 category_of", rsBill, "app_usage::category_of(&app, input.cfg)");
+has("全天应用秒只用于出勤", rsBill, "FROM app_usage WHERE date >= ?1 AND date < ?2 GROUP BY date");
+has("摸鱼复用工作时段聚合", rsBill, "crate::work_usage::range(conn, &start_s, &end_excl_s, input.cfg)?");
 // 单测覆盖
 has("单测：周一对齐", rsBill, "fn week_start_alignment");
 has("单测：跨月周工资分母", rsBill, "fn cross_month_full_salary");

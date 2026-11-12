@@ -72,7 +72,7 @@ has("tick() 触发烧钱行", appSrc, "renderSlackBurn();");
 // 3.3 计算口径：成本 = 摸鱼秒 ÷3600 × 时薪；摸鱼率分母四类求和
 has("成本公式（秒÷3600×时薪）", appSrc, "(slackSec / 3600) * st.hourly_rate");
 has("摸鱼率公式（摸鱼/总时长）", appSrc, "(slackSec / total) * 100");
-has("总时长为四类求和", appSrc, "cats.reduce((a, c) => a + (c.seconds || 0), 0)");
+has("首页读取工作时段记录", appSrc, "const usage = appu.work_usage;");
 has("取 slack 切片", appSrc, 'c.key === "slack"');
 
 // 3.4 三条显示守卫：工作日 / 时薪>0 / 总时长>0，不满足整块隐藏
@@ -83,10 +83,8 @@ has("守卫失败整块隐藏", appSrc, 'box.classList.add("hidden")');
 has("只取今日 appu（历史日期不进 hero）", appSrc, "isToday(appu.date)");
 has("停用时同步隐藏", appSrc, "renderSlackBurn(); // 停用时 hero 烧钱行一并隐藏");
 
-// 3.5 明细构成金额化
-has("构成金额行 class", appSrc, "cat-money");
-has("摸鱼类金额高亮按 key 拼接", appSrc, "cat-money cat-money-");
-has("构成金额同口径公式（fmtMoney 单一金额口径）", appSrc, "fmtMoney((c.seconds / 3600) * rate)");
+// 全天构成保留时间，不再折算成与工作时段混淆的金额。
+eq("全天构成不折算成本", appSrc.includes("fmtMoney((c.seconds / 3600) * rate)"), false);
 
 // 3.6 styles.css 样式
 has("CSS：烧钱行容器", css, ".slack-burn {");

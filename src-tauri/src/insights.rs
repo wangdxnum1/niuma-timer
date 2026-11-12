@@ -203,6 +203,8 @@ pub struct TrendPoint {
     pub income: f64,
     /// 周期摸鱼率 = Σslack_seconds ÷ front_seconds；front=0 → None（前端断线不画）
     pub slack_rate: Option<f64>,
+    /// 旧版记录无法重算；趋势提示明确混合/未知覆盖范围。
+    pub slack_legacy_seconds: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,6 +234,7 @@ pub fn period_trend(
             period_start: pb.period_start,
             period_end: pb.period_end,
             income: pb.total_income,
+            slack_legacy_seconds: pb.slack_legacy_seconds,
             slack_rate: slack_rate_of(
                 pb.front_seconds,
                 pb.buckets.iter().map(|b| b.slack_seconds).sum(),

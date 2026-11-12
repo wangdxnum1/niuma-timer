@@ -382,7 +382,7 @@ function paintAppUsage() {
       if (apps.length && (w || sl)) {
         home.insertAdjacentHTML(
           "afterbegin",
-          '<div class="mon-slack"><span class="cat-dot cat-c-work"></span>工作 ' +
+          '<div class="mon-slack">全天 · <span class="cat-dot cat-c-work"></span>工作 ' +
             fmtDurCN(w ? w.seconds : 0) +
             '<span class="cat-dot cat-c-slack"></span>摸鱼 ' +
             fmtDurCN(sl ? sl.seconds : 0) +
@@ -417,26 +417,30 @@ function slackQuip(pct) {
   return SLACK_QUIPS[SLACK_QUIPS.length - 1][1];
 }
 
-// hero 卡烧钱行：摸鱼类时长 × 时薪。数据源 = 今日 app usage 的 categories +
-// 最近一次状态（时薪/工作日），零新 IPC。休息日、无薪、无任何应用记录时整块隐藏；
-// 摸鱼为 0 时显示 ¥0.00 不隐藏（正向激励）。由 tick() 与 paintAppUsage() 共同触发
+// 首页仅用今日工作时段明细；无法重算的旧数据不回退到全天统计。
 function renderSlackBurn() {
   const box = $("slackBurn");
   if (!box) return;
   const st = lastStatus;
   const appu = viewData.appu;
-  const cats = appu && appu.date && isToday(appu.date) ? appu.categories || [] : [];
-  const total = cats.reduce((a, c) => a + (c.seconds || 0), 0);
-  if (!st || !st.is_workday || !(st.hourly_rate > 0) || total <= 0) {
+  if (!st || !st.is_workday || !(st.hourly_rate > 0) || !appu || !isToday(appu.date)) {
     box.classList.add("hidden");
     return;
   }
-  const slackSec = (cats.find((c) => c.key === "slack") || {}).seconds || 0;
+  const usage = appu.work_usage;
+  const total = usage ? usage.front_seconds || 0 : 0;
+  const legacy = usage ? usage.legacy_seconds || 0 : 0;
+  box.classList.remove("hidden");
+  $("sbMain").classList.toggle("hidden", total <= 0);
+  $("sbQuip").textContent = "";
+  $("sbScope").textContent = !usage ? "工作时段统计暂不可用" : total <= 0
+    ? (legacy > 0 ? "旧版数据无法按工作时段重算" : "暂无工作时段应用记录")
+    : "仅统计工作时段" + (legacy > 0 ? " · 旧版数据未纳入，无法重算" : "");
+  if (total <= 0) return;
+  const slackSec = usage.slack_seconds || 0;
   const cost = (slackSec / 3600) * st.hourly_rate;
   const pct = (slackSec / total) * 100;
-  box.classList.remove("hidden");
-      $("sbAmt").textContent = fmtMoney(cost);
-  // 摸鱼换算（core.js fmtSlackEquiv 单一口径）：单位在设置 → 外观可选，off 时不追加
+  $("sbAmt").textContent = fmtMoney(cost);
   const equiv = fmtSlackEquiv(
     cost,
     ($("slack_equiv_unit") || {}).value || "milktea",
@@ -471,27 +475,14 @@ function renderCategories(s) {
           : ""
     )
     .join("");
-  // 构成金额化：工作日有时薪时，每格时长下方补该类折算金额；摸鱼类红色加粗，
-  // 其余灰色小字（与 hero 烧钱行同口径：秒 ÷ 3600 × 时薪）
-  const rate = lastStatus && lastStatus.is_workday ? lastStatus.hourly_rate : 0;
   const cells = cats
     .map((c) => {
-      const key = catKey(c.label);
-      const money =
-        rate > 0
-          ? '<span class="cat-money cat-money-' +
-            key +
-            '">¥' +
-            fmtMoney((c.seconds / 3600) * rate) +
-            "</span>"
-          : "";
       return (
         '<div class="cat-cell"><span class="k">' +
         c.label +
         '</span><span class="v">' +
         fmtDurCN(c.seconds) +
         "</span>" +
-        money +
         "</div>"
       );
     })
